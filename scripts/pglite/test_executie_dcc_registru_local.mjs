@@ -13,6 +13,7 @@ import { FIX_BAZA } from './dcc_registru/fixtura.mjs'
 import { BLOCURI_T2 } from './dcc_registru/blocuri_t2.mjs'
 import { BLOCURI_T3 } from './dcc_registru/blocuri_t3.mjs'
 import { BLOCURI_T4 } from './dcc_registru/blocuri_t4.mjs'
+import { BLOCURI_T5 } from './dcc_registru/blocuri_t5.mjs'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 
@@ -32,7 +33,7 @@ for (const m of MIG.matchAll(/^-- ─── ([0-9])([a-d])?\. /gm)) {
   SECTIUNI.add(s); SECTIUNI.add(m[1])
 }
 
-const BLOCURI = [...BLOCURI_T2, ...BLOCURI_T3, ...BLOCURI_T4]
+const BLOCURI = [...BLOCURI_T2, ...BLOCURI_T3, ...BLOCURI_T4, ...BLOCURI_T5]
 // registrul ÎNCHIS al blocurilor de stare intermediară: {bloc: succesori cumulativi}
 const INTERMEDIARE = { t2_select_inainte_de_politici: ['t3_grant', 't3_rls_fixtura'] }
 // succesorii pot lipsi din lista blocurilor DOAR cât commit-ul nu are încă secțiunea care face blocul sărit (la Task 2 nu există t3_*)

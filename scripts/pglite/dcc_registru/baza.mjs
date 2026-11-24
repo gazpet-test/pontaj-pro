@@ -121,12 +121,12 @@ export async function caRunner(db, nume, text, { plafon = PLAFON_LIVRARE, marcaj
 }
 
 // o instrucțiune ca rolul dat, cu JWT-ul contului (COMMIT la succes, ca un apel PostgREST). sesiune = 'authenticator' simulează calea API.
+// sesiune = 'authenticator' simulează calea API (session_user = authenticator). PGlite NU revine singur din SET [LOCAL] SESSION AUTHORIZATION
+// (nici la COMMIT, nici la RESET): după apel sesiunea se readuce EXPLICIT la postgres (verificat de p_d5_identitati la fiecare pas).
 export async function ca(db, rol, uid, sql, { sesiune = null, params = [] } = {}) {
-  const pre = []
-  if (sesiune) pre.push(`SET SESSION AUTHORIZATION ${sesiune}`)
   await db.exec('BEGIN')
   try {
-    for (const p of pre) await db.exec(p)
+    if (sesiune) await db.exec(`SET LOCAL SESSION AUTHORIZATION ${sesiune}`)
     if (rol) await db.exec(`SET LOCAL ROLE ${rol}`)
     if (uid) await db.exec(`SELECT set_config('request.jwt.claim.sub', '${uid}', true)`)
     const r = await db.query(sql, params)
@@ -136,7 +136,7 @@ export async function ca(db, rol, uid, sql, { sesiune = null, params = [] } = {}
     await db.exec('ROLLBACK')
     return { code: e.code, message: e.message, constraint: e.constraint }
   } finally {
-    if (sesiune) await db.exec('RESET SESSION AUTHORIZATION')
+    if (sesiune) await db.exec('SET SESSION AUTHORIZATION postgres')
   }
 }
 

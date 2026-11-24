@@ -1359,4 +1359,643 @@ REVOKE ALL ON FUNCTION public.fn_dcc_ghid_garda(), public.fn_dcc_ghid_intervale_
   public.fn_dcc_mesaje_garda(), public.fn_dcc_legaturi_garda(), public.fn_dcc_fara_stergere(), public.fn_dcc_fara_golire()
   FROM PUBLIC, anon, authenticated, service_role;
 
+-- ─── 5. RPC-urile. Ordinea în FIECARE RPC de scriere (L01 / L04 / L05 / L06): (1) auth.uid() nenul sau calea serverului unde e permisă ([D5]);
+-- (2) normalizarea parametrilor și validarea formei, fără citiri de date; (3) hash-ul pe parametrii NORMALIZAȚI; (4) reluarea unei chei deja
+-- comise, ÎNAINTEA dreptului (un retry după timeout află rezultatul chiar dacă dreptul s-a schimbat; rezultatul e doar al autorului cheii; nimic
+-- nou scris); (5) dreptul; (6) claim-ul; (7) lock-urile, în ordinea globală; (8) REVERIFICAREA dreptului și a stării după lock; (9) scrierile;
+-- (10) rezultatul în intenție; (11) RETURN. O excepție după (6) anulează tot, inclusiv claim-ul (o singură tranzacție).
+
+-- ─── 5a. RPC-urile de configurare (owner sau calea serverului)
+
+-- ajutătoare interne (fără EXECUTE): identitatea apelului de configurare și valorile ghidului
+CREATE FUNCTION public.fn_dcc_config_permisa_intern() RETURNS void
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
+BEGIN
+  IF auth.uid() IS NULL AND NOT public.fn_dcc_server() THEN
+    RAISE EXCEPTION 'DCC_NEAUTENTIFICAT: autentificare necesara' USING ERRCODE = '42501';
+  END IF;
+  IF auth.uid() IS NOT NULL AND NOT public.fn_dcc_e_owner() THEN
+    RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501';
+  END IF;
+END $f$;
+
+-- tematica / tipul trebuie să fie valori ACTIVE ale ghidului; tipul fără tematică (minutele) cere tematica NULL și invers
+CREATE FUNCTION public.fn_dcc_valori_ghid_intern(p_ghid bigint, p_tematica text, p_tip text) RETURNS void
+LANGUAGE plpgsql STABLE SET search_path = public, pg_temp AS $f$
+DECLARE v_fara boolean;
+BEGIN
+  SELECT v.fara_tematica INTO v_fara FROM public.dcc_ghid_valori v WHERE v.ghid_id = p_ghid AND v.categorie = 'tip' AND v.cod = p_tip AND v.activ;
+  IF NOT FOUND THEN RAISE EXCEPTION 'DCC_VALOARE_GHID: tipul nu e o valoare activa a ghidului' USING ERRCODE = '22023'; END IF;
+  IF v_fara IS TRUE AND p_tematica IS NOT NULL THEN
+    RAISE EXCEPTION 'DCC_VALOARE_GHID: tipul se emite fara tematica' USING ERRCODE = '22023';
+  END IF;
+  IF v_fara IS NOT TRUE AND (p_tematica IS NULL OR NOT EXISTS (SELECT 1 FROM public.dcc_ghid_valori v WHERE v.ghid_id = p_ghid AND v.categorie = 'tematica'
+                                                                  AND v.cod = p_tematica AND v.activ)) THEN
+    RAISE EXCEPTION 'DCC_VALOARE_GHID: tematica nu e o valoare activa a ghidului' USING ERRCODE = '22023';
+  END IF;
+END $f$;
+
+-- codul și rădăcina numelui de fișier ale unei revizii, cu formatele ghidului dat: [cod_text, nume_fisier_baza]
+CREATE FUNCTION public.fn_dcc_coduri_intern(p_ghid bigint, p_cod_contract text, p_emitent text, p_tematica text, p_tip text, p_secventa integer,
+                                            p_fila integer, p_anexa integer, p_revizie integer, p_limba text) RETURNS text[]
+LANGUAGE plpgsql STABLE SET search_path = public, pg_temp AS $f$
+DECLARE g public.dcc_ghiduri;
+BEGIN
+  SELECT * INTO g FROM public.dcc_ghiduri x WHERE x.id = p_ghid;
+  RETURN ARRAY[public.fn_dcc_cod_text(g.format_cod, p_cod_contract, p_emitent, p_tematica, p_tip, p_secventa, p_fila, p_anexa, p_revizie, p_limba),
+               public.fn_dcc_cod_text(g.format_fisier, p_cod_contract, p_emitent, p_tematica, p_tip, p_secventa, p_fila, p_anexa, p_revizie, p_limba)];
+END $f$;
+
+-- ghidul nou (versionat): cod, versiune, sursa, formatele, valorile, intervalele — totul într-o tranzacție (L02). Chei necunoscute la orice
+-- nivel = refuz; liste nevide, fără dubluri pe identitate (refuz, nu deduplicare); intervalele prin forma canonică.
+CREATE FUNCTION public.fn_dcc_ghid_creeaza(p_ghid jsonb, p_cheie uuid) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v_uid uuid := auth.uid(); v_cod text; v_vers integer; v_sursa text; v_valori jsonb; v_intervale jsonb; v_p jsonb; v_hash text; v_r jsonb;
+  v_id bigint; e jsonb; v_n integer;
+BEGIN
+  PERFORM public.fn_dcc_config_permisa_intern();
+  IF p_cheie IS NULL THEN RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: cheia de intentie lipseste' USING ERRCODE = '22023'; END IF;
+  IF jsonb_typeof(p_ghid) IS DISTINCT FROM 'object' THEN RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: ghidul trebuie sa fie un obiect' USING ERRCODE = '22023'; END IF;
+  IF EXISTS (SELECT 1 FROM jsonb_object_keys(p_ghid) k WHERE k NOT IN ('cod', 'versiune', 'sursa', 'format_cod', 'format_fisier', 'valori', 'intervale')) THEN
+    RAISE EXCEPTION 'DCC_CHEI_NECUNOSCUTE: ghidul are chei necunoscute' USING ERRCODE = '22023';
+  END IF;
+  IF jsonb_typeof(p_ghid -> 'cod') IS DISTINCT FROM 'string' OR jsonb_typeof(p_ghid -> 'versiune') IS DISTINCT FROM 'number'
+     OR jsonb_typeof(p_ghid -> 'sursa') IS DISTINCT FROM 'string' OR jsonb_typeof(p_ghid -> 'valori') IS DISTINCT FROM 'array'
+     OR jsonb_typeof(p_ghid -> 'intervale') IS DISTINCT FROM 'array' THEN
+    RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: cod / versiune / sursa / valori / intervale lipsesc sau au alt tip' USING ERRCODE = '22023';
+  END IF;
+  v_cod := upper(btrim(p_ghid ->> 'cod'));
+  IF (p_ghid ->> 'versiune')::numeric <> trunc((p_ghid ->> 'versiune')::numeric) OR (p_ghid ->> 'versiune')::numeric < 1 THEN
+    RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: versiunea e un intreg >= 1' USING ERRCODE = '22023';
+  END IF;
+  v_vers := (p_ghid ->> 'versiune')::integer;
+  v_sursa := nullif(btrim(p_ghid ->> 'sursa'), '');
+  IF v_sursa IS NULL THEN RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: sursa ghidului lipseste' USING ERRCODE = '22023'; END IF;
+  IF public.fn_dcc_format_valid(p_ghid -> 'format_cod') IS NOT TRUE OR public.fn_dcc_format_valid(p_ghid -> 'format_fisier') IS NOT TRUE
+     OR NOT ((p_ghid -> 'format_cod') @> '[{"camp": "limba"}]'::jsonb OR (p_ghid -> 'format_fisier') @> '[{"camp": "limba"}]'::jsonb) THEN
+    RAISE EXCEPTION 'DCC_FORMAT_INVALID: formatele ghidului nu sunt valide' USING ERRCODE = '22023';
+  END IF;
+  IF jsonb_array_length(p_ghid -> 'valori') = 0 OR jsonb_array_length(p_ghid -> 'intervale') = 0 THEN
+    RAISE EXCEPTION 'DCC_LISTA_GOALA: valorile si intervalele ghidului sunt obligatorii' USING ERRCODE = '22023';
+  END IF;
+  FOR e IN SELECT x FROM jsonb_array_elements(p_ghid -> 'valori') x LOOP
+    IF jsonb_typeof(e) IS DISTINCT FROM 'object' THEN RAISE EXCEPTION 'DCC_LISTA_INVALIDA: valoare invalida' USING ERRCODE = '22023'; END IF;
+    IF EXISTS (SELECT 1 FROM jsonb_object_keys(e) k WHERE k NOT IN ('categorie', 'cod', 'descriere', 'fara_tematica')) THEN
+      RAISE EXCEPTION 'DCC_CHEI_NECUNOSCUTE: o valoare are chei necunoscute' USING ERRCODE = '22023';
+    END IF;
+    IF jsonb_typeof(e -> 'categorie') IS DISTINCT FROM 'string' OR jsonb_typeof(e -> 'cod') IS DISTINCT FROM 'string'
+       OR coalesce(jsonb_typeof(e -> 'descriere'), 'null') NOT IN ('string', 'null') OR coalesce(jsonb_typeof(e -> 'fara_tematica'), 'boolean') <> 'boolean' THEN
+      RAISE EXCEPTION 'DCC_LISTA_INVALIDA: valoare cu campuri de alt tip' USING ERRCODE = '22023';
+    END IF;
+  END LOOP;
+  FOR e IN SELECT x FROM jsonb_array_elements(p_ghid -> 'intervale') x LOOP
+    IF jsonb_typeof(e) IS DISTINCT FROM 'object' THEN RAISE EXCEPTION 'DCC_LISTA_INVALIDA: interval invalid' USING ERRCODE = '22023'; END IF;
+    IF EXISTS (SELECT 1 FROM jsonb_object_keys(e) k WHERE k NOT IN ('interval', 'limita_inf', 'limita_sup')) THEN
+      RAISE EXCEPTION 'DCC_CHEI_NECUNOSCUTE: un interval are chei necunoscute' USING ERRCODE = '22023';
+    END IF;
+    IF jsonb_typeof(e -> 'interval') IS DISTINCT FROM 'string' OR jsonb_typeof(e -> 'limita_inf') IS DISTINCT FROM 'number'
+       OR jsonb_typeof(e -> 'limita_sup') IS DISTINCT FROM 'number'
+       OR (e ->> 'limita_inf')::numeric <> trunc((e ->> 'limita_inf')::numeric) OR (e ->> 'limita_sup')::numeric <> trunc((e ->> 'limita_sup')::numeric) THEN
+      RAISE EXCEPTION 'DCC_LISTA_INVALIDA: interval cu campuri de alt tip' USING ERRCODE = '22023';
+    END IF;
+    IF public.fn_dcc_interval_canonic(e ->> 'interval') IS NULL THEN
+      RAISE EXCEPTION 'DCC_INTERVAL_INVALID: interval gol' USING ERRCODE = '22023';
+    END IF;
+  END LOOP;
+  -- forma normalizată (sortată după identitate): codurile cu majuscule, textele tăiate, intervalele canonice
+  SELECT jsonb_agg(jsonb_build_object('categorie', c, 'cod', k, 'descriere', d, 'fara_tematica', f) ORDER BY c, k), count(*) - count(DISTINCT (c, k))
+    INTO v_valori, v_n
+    FROM (SELECT lower(btrim(x ->> 'categorie')) AS c, upper(btrim(x ->> 'cod')) AS k, nullif(btrim(x ->> 'descriere'), '') AS d,
+                 coalesce((x ->> 'fara_tematica')::boolean, false) AS f
+            FROM jsonb_array_elements(p_ghid -> 'valori') x) z;
+  IF v_n > 0 THEN RAISE EXCEPTION 'DCC_LISTA_DUBLURI: valori dublate in ghid' USING ERRCODE = '22023'; END IF;
+  SELECT jsonb_agg(jsonb_build_object('interval', i, 'limita_inf', a, 'limita_sup', b) ORDER BY i), count(*) - count(DISTINCT i)
+    INTO v_intervale, v_n
+    FROM (SELECT public.fn_dcc_interval_canonic(x ->> 'interval') AS i, (x ->> 'limita_inf')::integer AS a, (x ->> 'limita_sup')::integer AS b
+            FROM jsonb_array_elements(p_ghid -> 'intervale') x) z;
+  IF v_n > 0 THEN RAISE EXCEPTION 'DCC_LISTA_DUBLURI: intervale dublate in ghid' USING ERRCODE = '22023'; END IF;
+  v_p := jsonb_build_object('cod', v_cod, 'versiune', v_vers, 'sursa', v_sursa, 'format_cod', p_ghid -> 'format_cod', 'format_fisier', p_ghid -> 'format_fisier',
+                            'valori', v_valori, 'intervale', v_intervale);
+  v_hash := public.fn_dcc_hash_parametri('ghid_creeaza', v_p);
+  v_r := public.fn_dcc_intentie_reia(p_cheie, 'ghid_creeaza', v_hash);
+  IF v_r IS NOT NULL THEN RETURN v_r; END IF;
+  v_r := public.fn_dcc_intentie_revendica(p_cheie, 'ghid_creeaza', v_hash);
+  IF v_r IS NOT NULL THEN RETURN v_r; END IF;
+  INSERT INTO public.dcc_ghiduri (cod, versiune, sursa, format_cod, format_fisier, creat_de)
+  VALUES (v_cod, v_vers, v_sursa, p_ghid -> 'format_cod', p_ghid -> 'format_fisier', v_uid) RETURNING id INTO v_id;
+  INSERT INTO public.dcc_ghid_valori (ghid_id, categorie, cod, descriere, fara_tematica)
+    SELECT v_id, x ->> 'categorie', x ->> 'cod', x ->> 'descriere', (x ->> 'fara_tematica')::boolean FROM jsonb_array_elements(v_valori) x;
+  -- intervalele câte unul (triggerul de disjuncție vede intervalele deja inserate ale ghidului)
+  FOR e IN SELECT x FROM jsonb_array_elements(v_intervale) x LOOP
+    INSERT INTO public.dcc_ghid_intervale (ghid_id, interval, limita_inf, limita_sup) VALUES (v_id, e ->> 'interval', (e ->> 'limita_inf')::integer, (e ->> 'limita_sup')::integer);
+  END LOOP;
+  v_r := jsonb_build_object('ghid_id', v_id, 'cod', v_cod, 'versiune', v_vers, 'valori', jsonb_array_length(v_valori), 'intervale', jsonb_array_length(v_intervale));
+  PERFORM public.fn_dcc_intentie_incheie(p_cheie, v_r);
+  RETURN v_r || '{"reluat": false}'::jsonb;
+END $f$;
+
+-- contractul (domeniul numerotării): beneficiar, cod, mod de alocare FIXAT la creare ([D2])
+CREATE FUNCTION public.fn_dcc_contract_creeaza(p_beneficiar text, p_cod_contract text, p_mod_alocare text, p_descriere text, p_cheie uuid) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v_uid uuid := auth.uid(); v_ben text := nullif(upper(btrim(p_beneficiar)), ''); v_cod text := nullif(btrim(p_cod_contract), '');
+  v_mod text := nullif(lower(btrim(p_mod_alocare)), ''); v_desc text := nullif(btrim(p_descriere), ''); v_hash text; v_r jsonb; v_id bigint;
+BEGIN
+  PERFORM public.fn_dcc_config_permisa_intern();
+  IF p_cheie IS NULL THEN RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: cheia de intentie lipseste' USING ERRCODE = '22023'; END IF;
+  IF v_ben IS NULL OR v_ben !~ '^[A-Z]{2,6}$' OR v_cod IS NULL OR v_cod !~ '^[0-9]{2}$' OR v_mod IS NULL OR v_mod NOT IN ('automat', 'manual') THEN
+    RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: beneficiar (2-6 litere), cod (2 cifre), mod (automat / manual)' USING ERRCODE = '22023';
+  END IF;
+  v_hash := public.fn_dcc_hash_parametri('contract_creeaza', jsonb_build_object('beneficiar', v_ben, 'cod_contract', v_cod, 'mod_alocare', v_mod, 'descriere', v_desc));
+  v_r := public.fn_dcc_intentie_reia(p_cheie, 'contract_creeaza', v_hash);
+  IF v_r IS NOT NULL THEN RETURN v_r; END IF;
+  v_r := public.fn_dcc_intentie_revendica(p_cheie, 'contract_creeaza', v_hash);
+  IF v_r IS NOT NULL THEN RETURN v_r; END IF;
+  INSERT INTO public.dcc_contracte (beneficiar, cod_contract, mod_alocare, descriere, creat_de, creat_prin)
+  VALUES (v_ben, v_cod, v_mod, v_desc, v_uid, CASE WHEN v_uid IS NULL THEN 'server' ELSE 'om' END) RETURNING id INTO v_id;
+  v_r := jsonb_build_object('contract_id', v_id, 'beneficiar', v_ben, 'cod_contract', v_cod, 'mod_alocare', v_mod);
+  PERFORM public.fn_dcc_intentie_incheie(p_cheie, v_r);
+  RETURN v_r || '{"reluat": false}'::jsonb;
+END $f$;
+
+-- proiectul DCC: creare (p_versiune NULL) sau UPDATE CAS pe versiune (0 rânduri = DCC_CONFLICT_VERSIUNE). Lock-urile: pasul 2 (advisory EXCLUSIV pe
+-- contract, ÎNAINTEA verificării compatibilității ghidului — triggerul) -> pasul 3 (rândul proiectului FOR UPDATE). Nu atinge căsuța / trimiterea.
+CREATE FUNCTION public.fn_dcc_proiect_seteaza(p_executie_proiect bigint, p_contract bigint, p_ghid bigint, p_emitent text, p_limba_implicita text,
+                                              p_adresa_dcc text, p_cc text[], p_cc_implicit jsonb, p_antet_financiar text, p_plafon_mb integer,
+                                              p_versiune integer, p_cheie uuid) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v_uid uuid := auth.uid(); v_em text := nullif(upper(btrim(p_emitent)), ''); v_limba text := nullif(upper(btrim(p_limba_implicita)), '');
+  v_adr text := nullif(lower(btrim(p_adresa_dcc)), ''); v_cc text[]; v_cci jsonb := coalesce(p_cc_implicit, '{}'::jsonb);
+  v_antet text := nullif(btrim(p_antet_financiar), ''); v_plafon integer := coalesce(p_plafon_mb, 15); v_n integer; v_rele integer; v_hash text; v_r jsonb;
+  v_id bigint; v_vers integer;
+BEGIN
+  PERFORM public.fn_dcc_config_permisa_intern();
+  IF p_cheie IS NULL OR p_executie_proiect IS NULL OR p_contract IS NULL OR p_ghid IS NULL OR v_em IS NULL THEN
+    RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: proiectul Executie, contractul, ghidul, emitentul si cheia sunt obligatorii' USING ERRCODE = '22023';
+  END IF;
+  IF v_limba IS NOT NULL AND v_limba NOT IN ('RO', 'EN', 'BI') OR v_adr IS NOT NULL AND v_adr !~ '^[^@[:space:]]+@[^@[:space:]]+$'
+     OR jsonb_typeof(v_cci) IS DISTINCT FROM 'object' OR v_plafon NOT BETWEEN 1 AND 25 THEN
+    RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: limba / adresa DCC / CC implicit / plafon' USING ERRCODE = '22023';
+  END IF;
+  SELECT array_agg(c ORDER BY c), count(*) - count(DISTINCT c), count(*) FILTER (WHERE c IS NULL OR c !~ '^[^@[:space:]]+@[^@[:space:]]+$')
+    INTO v_cc, v_n, v_rele
+    FROM (SELECT nullif(lower(btrim(x)), '') AS c FROM unnest(coalesce(p_cc, '{}'::text[])) x) z;
+  IF v_rele > 0 THEN RAISE EXCEPTION 'DCC_LISTA_INVALIDA: adresa CC invalida' USING ERRCODE = '22023'; END IF;
+  IF v_n > 0 THEN RAISE EXCEPTION 'DCC_LISTA_DUBLURI: adrese CC dublate' USING ERRCODE = '22023'; END IF;
+  v_cc := coalesce(v_cc, '{}'::text[]);
+  v_hash := public.fn_dcc_hash_parametri('proiect_seteaza', jsonb_build_object('executie_proiect', p_executie_proiect, 'contract', p_contract, 'ghid', p_ghid,
+    'emitent', v_em, 'limba_implicita', v_limba, 'adresa_dcc', v_adr, 'cc', to_jsonb(v_cc), 'cc_implicit', v_cci, 'antet_financiar', v_antet,
+    'plafon_mb', v_plafon, 'versiune', p_versiune));
+  v_r := public.fn_dcc_intentie_reia(p_cheie, 'proiect_seteaza', v_hash);
+  IF v_r IS NOT NULL THEN RETURN v_r; END IF;
+  v_r := public.fn_dcc_intentie_revendica(p_cheie, 'proiect_seteaza', v_hash);
+  IF v_r IS NOT NULL THEN RETURN v_r; END IF;
+  PERFORM public.fn_dcc_lock_contract(p_contract, true);
+  IF p_versiune IS NULL THEN
+    INSERT INTO public.dcc_proiecte (contract_id, executie_proiect_id, ghid_id, emitent, limba_implicita, adresa_dcc, cc_lista, cc_implicit, antet_financiar,
+                                     plafon_atasamente_mb, creat_de)
+    VALUES (p_contract, p_executie_proiect, p_ghid, v_em, v_limba, v_adr, v_cc, v_cci, v_antet, v_plafon, v_uid) RETURNING id, versiune INTO v_id, v_vers;
+    v_r := jsonb_build_object('proiect_dcc_id', v_id, 'versiune', v_vers, 'creat', true);
+  ELSE
+    SELECT d.id INTO v_id FROM public.dcc_proiecte d WHERE d.executie_proiect_id = p_executie_proiect AND d.contract_id = p_contract FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: proiectul DCC nu exista' USING ERRCODE = '22023'; END IF;
+    UPDATE public.dcc_proiecte d SET ghid_id = p_ghid, emitent = v_em, limba_implicita = v_limba, adresa_dcc = v_adr, cc_lista = v_cc, cc_implicit = v_cci,
+                                     antet_financiar = v_antet, plafon_atasamente_mb = v_plafon, actualizat_de = v_uid
+     WHERE d.id = v_id AND d.versiune = p_versiune
+    RETURNING d.versiune INTO v_vers;
+    IF v_vers IS NULL THEN
+      RAISE EXCEPTION 'DCC_CONFLICT_VERSIUNE: proiectul DCC a fost schimbat intre timp; reincarca' USING ERRCODE = '40001';
+    END IF;
+    v_r := jsonb_build_object('proiect_dcc_id', v_id, 'versiune', v_vers, 'creat', false);
+  END IF;
+  PERFORM public.fn_dcc_intentie_incheie(p_cheie, v_r);
+  RETURN v_r || '{"reluat": false}'::jsonb;
+END $f$;
+
+-- ─── 5b. RPC-urile registrului + citirea seriilor
+
+-- inițializarea unei serii (admin pe proiect sau calea serverului): pragul = ultimul număr ocupat confirmat de om. Lock-urile: pasul 2 (advisory
+-- PARTAJAT pe contract) -> pasul 3 (proiectul FOR SHARE) -> pasul 4 (advisory pe cheia seriei FĂRĂ interval); disjuncția față de TOATE seriile
+-- cheii verificată după lock (codul RPC-ului DCC_INTERVALE_SUPRAPUSE; plasa e triggerul); limitele copiate din ghidul proiectului; pragul >= orice
+-- document existent pe cheie în interval (tot contractul) și, fără accept explicit, >= maximul istoric.
+CREATE FUNCTION public.fn_dcc_initializeaza_serie(p_proiect_dcc bigint, p_emitent text, p_tematica text, p_tip text, p_interval text, p_prag integer,
+                                                  p_motiv text, p_accept_sub_istoric boolean, p_cheie uuid) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v_uid uuid := auth.uid(); v_srv boolean := public.fn_dcc_server(); v_em text := nullif(upper(btrim(p_emitent)), '');
+  v_tem text := nullif(upper(btrim(p_tematica)), ''); v_tip text := nullif(upper(btrim(p_tip)), ''); v_int text; v_motiv text := nullif(btrim(p_motiv), '');
+  v_acc boolean := coalesce(p_accept_sub_istoric, false); v_hash text; v_r jsonb; v_contract bigint; p public.dcc_proiecte; c public.dcc_contracte;
+  gi public.dcc_ghid_intervale; v_max_doc integer; v_max_ist integer; v_id bigint;
+BEGIN
+  IF v_uid IS NULL AND NOT v_srv THEN RAISE EXCEPTION 'DCC_NEAUTENTIFICAT: autentificare necesara' USING ERRCODE = '42501'; END IF;
+  v_int := public.fn_dcc_interval_canonic(p_interval);
+  IF p_cheie IS NULL OR p_proiect_dcc IS NULL OR v_em IS NULL OR v_tip IS NULL OR p_prag IS NULL THEN
+    RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: proiect, emitent, tip, prag si cheie obligatorii' USING ERRCODE = '22023';
+  END IF;
+  IF v_int IS NULL THEN RAISE EXCEPTION 'DCC_INTERVAL_INVALID: intervalul lipseste' USING ERRCODE = '22023'; END IF;
+  IF v_motiv IS NULL OR length(v_motiv) > 500 THEN RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: motivul pragului e obligatoriu (max 500)' USING ERRCODE = '22023'; END IF;
+  v_hash := public.fn_dcc_hash_parametri('initializeaza_serie', jsonb_build_object('proiect', p_proiect_dcc, 'emitent', v_em, 'tematica', v_tem, 'tip', v_tip,
+    'interval', v_int, 'prag', p_prag, 'motiv', v_motiv, 'accept_sub_istoric', v_acc));
+  v_r := public.fn_dcc_intentie_reia(p_cheie, 'initializeaza_serie', v_hash);
+  IF v_r IS NOT NULL THEN RETURN v_r; END IF;
+  IF NOT v_srv AND NOT public.fn_dcc_drept(p_proiect_dcc, 'admin') THEN RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501'; END IF;
+  v_r := public.fn_dcc_intentie_revendica(p_cheie, 'initializeaza_serie', v_hash);
+  IF v_r IS NOT NULL THEN RETURN v_r; END IF;
+  -- lock-urile: 2 (partajat, contractul) -> 3 (proiectul) -> 4 (cheia seriei fără interval)
+  SELECT d.contract_id INTO v_contract FROM public.dcc_proiecte d WHERE d.id = p_proiect_dcc;
+  PERFORM public.fn_dcc_lock_contract(v_contract, false);
+  SELECT * INTO p FROM public.dcc_proiecte d WHERE d.id = p_proiect_dcc FOR SHARE;
+  IF p.contract_id IS DISTINCT FROM v_contract THEN RAISE EXCEPTION 'DCC_CONFLICT_VERSIUNE: proiectul s-a schimbat; reincearca' USING ERRCODE = '40001'; END IF;
+  PERFORM public.fn_dcc_lock_cheie_serie(v_contract, v_em, v_tem, v_tip, v_int);
+  -- reverificarea după lock
+  IF NOT v_srv AND NOT public.fn_dcc_drept(p_proiect_dcc, 'admin') THEN RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501'; END IF;
+  SELECT * INTO c FROM public.dcc_contracte x WHERE x.id = v_contract;
+  IF c.mod_alocare <> 'automat' THEN RAISE EXCEPTION 'DCC_MOD_MANUAL: contractul aloca manual (fara serii)' USING ERRCODE = 'P0001'; END IF;
+  IF v_em IS DISTINCT FROM p.emitent THEN RAISE EXCEPTION 'DCC_EMITENT_STRAIN: emitentul nu e al proiectului' USING ERRCODE = '22023'; END IF;
+  PERFORM public.fn_dcc_valori_ghid_intern(p.ghid_id, v_tem, v_tip);
+  SELECT * INTO gi FROM public.dcc_ghid_intervale x WHERE x.ghid_id = p.ghid_id AND x.interval = v_int;
+  IF NOT FOUND THEN RAISE EXCEPTION 'DCC_INTERVAL_NECUNOSCUT: intervalul % nu e in ghidul proiectului', v_int USING ERRCODE = 'P0001'; END IF;
+  IF EXISTS (SELECT 1 FROM public.dcc_serii s WHERE s.contract_id = v_contract AND s.emitent = v_em AND s.tematica IS NOT DISTINCT FROM v_tem
+                AND s.tip = v_tip AND s.interval = v_int) THEN
+    RAISE EXCEPTION 'DCC_SERIE_EXISTA: seria % e deja initializata', v_int USING ERRCODE = '23505';
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.dcc_serii s WHERE s.contract_id = v_contract AND s.emitent = v_em AND s.tematica IS NOT DISTINCT FROM v_tem
+                AND s.tip = v_tip AND s.limita_inf <= gi.limita_sup AND gi.limita_inf <= s.limita_sup) THEN
+    RAISE EXCEPTION 'DCC_INTERVALE_SUPRAPUSE: intervalul % se suprapune cu o serie existenta a aceleiasi chei', v_int USING ERRCODE = '23P01';
+  END IF;
+  IF p_prag < gi.limita_inf - 1 OR p_prag > gi.limita_sup THEN
+    RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: pragul % e in afara intervalului % (% - %)', p_prag, v_int, gi.limita_inf, gi.limita_sup USING ERRCODE = '22023';
+  END IF;
+  SELECT max(d.secventa) INTO v_max_doc FROM public.dcc_documente d
+   WHERE d.contract_id = v_contract AND d.emitent = v_em AND d.tematica IS NOT DISTINCT FROM v_tem AND d.tip = v_tip
+     AND d.secventa BETWEEN gi.limita_inf AND gi.limita_sup;
+  IF v_max_doc IS NOT NULL AND p_prag < v_max_doc THEN
+    RAISE EXCEPTION 'DCC_PRAG_SUB_DOCUMENTE: pragul % e sub un numar deja alocat (%)', p_prag, v_max_doc USING ERRCODE = 'P0001';
+  END IF;
+  SELECT max(h.secventa) INTO v_max_ist FROM public.dcc_istoric_aparitii h
+   WHERE h.contract_id = v_contract AND h.emitent IS NOT DISTINCT FROM v_em AND h.tematica IS NOT DISTINCT FROM v_tem AND h.tip IS NOT DISTINCT FROM v_tip
+     AND h.secventa BETWEEN gi.limita_inf AND gi.limita_sup;
+  IF v_max_ist IS NOT NULL AND p_prag < v_max_ist AND NOT v_acc THEN
+    RAISE EXCEPTION 'DCC_PRAG_SUB_ISTORIC: pragul % e sub maximul istoric (%); confirmarea explicita e obligatorie', p_prag, v_max_ist USING ERRCODE = 'P0001';
+  END IF;
+  INSERT INTO public.dcc_serii (contract_id, emitent, tematica, tip, interval, ghid_id, limita_inf, limita_sup, prag_initial, ultimul_ocupat, motiv_prag,
+                                max_istoric_la_init, initializata_de, initializata_prin)
+  VALUES (v_contract, v_em, v_tem, v_tip, v_int, p.ghid_id, gi.limita_inf, gi.limita_sup, p_prag, p_prag, v_motiv, v_max_ist, v_uid,
+          CASE WHEN v_uid IS NULL THEN 'server' ELSE 'om' END)
+  RETURNING id INTO v_id;
+  v_r := jsonb_build_object('serie_id', v_id, 'interval', v_int, 'limita_inf', gi.limita_inf, 'limita_sup', gi.limita_sup, 'prag', p_prag,
+                            'urmatorul', p_prag + 1, 'max_istoric', v_max_ist);
+  PERFORM public.fn_dcc_intentie_incheie(p_cheie, v_r);
+  RETURN v_r || '{"reluat": false}'::jsonb;
+END $f$;
+
+-- alocarea automată: documentul + Rev0 (sau filele 1..N cu Rev0 fiecare, [D3]) + contorul, într-o tranzacție (L02). Lock-urile: pasul 3 (proiectul
+-- FOR SHARE) -> pasul 5 (rândul seriei FOR UPDATE: contorul, L01). Ordinea FIXĂ după lock (determinismul probei de concurență): citirea seriei ->
+-- următorul = ultimul_ocupat + 1 -> UPDATE dcc_serii -> INSERT document + revizii. Nu ia pașii 2 și 4.
+CREATE FUNCTION public.fn_dcc_aloca(p_proiect_dcc bigint, p_emitent text, p_tematica text, p_tip text, p_interval text, p_titlu text, p_limba text,
+                                    p_nr_file integer, p_cheie uuid) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v_uid uuid := auth.uid(); v_em text := nullif(upper(btrim(p_emitent)), ''); v_tem text := nullif(upper(btrim(p_tematica)), '');
+  v_tip text := nullif(upper(btrim(p_tip)), ''); v_int text; v_titlu text := nullif(btrim(p_titlu), ''); v_limba text := nullif(upper(btrim(p_limba)), '');
+  v_hash text; v_r jsonb; p public.dcc_proiecte; c public.dcc_contracte; s public.dcc_serii; gi public.dcc_ghid_intervale; v_urmator integer;
+  v_doc bigint; v_fila bigint; v_rev bigint; v_coduri text[]; v_revizii jsonb := '[]'::jsonb; i integer;
+BEGIN
+  IF v_uid IS NULL THEN RAISE EXCEPTION 'DCC_NEAUTENTIFICAT: autentificare necesara' USING ERRCODE = '42501'; END IF;
+  v_int := public.fn_dcc_interval_canonic(p_interval);
+  IF p_cheie IS NULL OR p_proiect_dcc IS NULL OR v_em IS NULL OR v_tip IS NULL THEN
+    RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: proiect, emitent, tip si cheie obligatorii' USING ERRCODE = '22023';
+  END IF;
+  IF v_int IS NULL THEN RAISE EXCEPTION 'DCC_INTERVAL_INVALID: intervalul lipseste' USING ERRCODE = '22023'; END IF;
+  IF v_titlu IS NULL OR length(v_titlu) > 300 THEN RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: titlul e obligatoriu (max 300)' USING ERRCODE = '22023'; END IF;
+  IF p_nr_file IS NOT NULL AND p_nr_file NOT BETWEEN 1 AND 999 THEN RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: numarul de file e 1..999' USING ERRCODE = '22023'; END IF;
+  v_hash := public.fn_dcc_hash_parametri('aloca', jsonb_build_object('proiect', p_proiect_dcc, 'emitent', v_em, 'tematica', v_tem, 'tip', v_tip, 'interval', v_int,
+    'titlu', v_titlu, 'limba', v_limba, 'nr_file', p_nr_file));
+  v_r := public.fn_dcc_intentie_reia(p_cheie, 'aloca', v_hash);
+  IF v_r IS NOT NULL THEN RETURN v_r; END IF;
+  IF NOT public.fn_dcc_drept(p_proiect_dcc, 'scriere') THEN RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501'; END IF;
+  v_r := public.fn_dcc_intentie_revendica(p_cheie, 'aloca', v_hash);
+  IF v_r IS NOT NULL THEN RETURN v_r; END IF;
+  -- lock-urile: 3 (proiectul) -> 5 (seria)
+  SELECT * INTO p FROM public.dcc_proiecte d WHERE d.id = p_proiect_dcc FOR SHARE;
+  SELECT * INTO s FROM public.dcc_serii x WHERE x.contract_id = p.contract_id AND x.emitent = v_em AND x.tematica IS NOT DISTINCT FROM v_tem AND x.tip = v_tip
+     AND x.interval = v_int FOR UPDATE;
+  -- reverificarea după lock (dreptul cu un instantaneu nou: o retragere comisă cât am așteptat se vede aici)
+  IF NOT public.fn_dcc_drept(p_proiect_dcc, 'scriere') THEN RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501'; END IF;
+  SELECT * INTO c FROM public.dcc_contracte x WHERE x.id = p.contract_id;
+  IF c.mod_alocare <> 'automat' THEN RAISE EXCEPTION 'DCC_MOD_MANUAL: contractul aloca manual' USING ERRCODE = 'P0001'; END IF;
+  IF v_em IS DISTINCT FROM p.emitent THEN RAISE EXCEPTION 'DCC_EMITENT_STRAIN: emitentul nu e al proiectului' USING ERRCODE = '22023'; END IF;
+  PERFORM public.fn_dcc_valori_ghid_intern(p.ghid_id, v_tem, v_tip);
+  IF s.id IS NULL THEN RAISE EXCEPTION 'DCC_SERIE_ABSENTA: seria nu e initializata (nu porneste singura de la 00001)' USING ERRCODE = 'P0001'; END IF;
+  -- regula 3: ghidul CURENT al proiectului are intervalul seriei cu aceleași limite
+  SELECT * INTO gi FROM public.dcc_ghid_intervale x WHERE x.ghid_id = p.ghid_id AND x.interval = s.interval;
+  IF NOT FOUND THEN RAISE EXCEPTION 'DCC_INTERVAL_NECUNOSCUT: intervalul % nu e in ghidul proiectului', s.interval USING ERRCODE = 'P0001'; END IF;
+  IF gi.limita_inf <> s.limita_inf OR gi.limita_sup <> s.limita_sup THEN
+    RAISE EXCEPTION 'DCC_GHID_INCOMPATIBIL: intervalul % al ghidului are alte limite decat seria', s.interval USING ERRCODE = 'P0001';
+  END IF;
+  v_urmator := s.ultimul_ocupat + 1;
+  IF v_urmator > s.limita_sup THEN RAISE EXCEPTION 'DCC_INTERVAL_EPUIZAT: intervalul % e epuizat', s.interval USING ERRCODE = 'P0001'; END IF;
+  v_limba := coalesce(v_limba, p.limba_implicita);
+  UPDATE public.dcc_serii x SET ultimul_ocupat = v_urmator WHERE x.id = s.id;
+  BEGIN
+    INSERT INTO public.dcc_documente (contract_id, proiect_dcc_id, emitent, tematica, tip, secventa, interval, serie_id, mod, titlu, are_file, creat_de)
+    VALUES (p.contract_id, p.id, v_em, v_tem, v_tip, v_urmator, s.interval, s.id, 'automat', v_titlu, p_nr_file IS NOT NULL, v_uid) RETURNING id INTO v_doc;
+    IF p_nr_file IS NULL THEN
+      v_coduri := public.fn_dcc_coduri_intern(p.ghid_id, c.cod_contract, v_em, v_tem, v_tip, v_urmator, NULL, NULL, 0, v_limba);
+      INSERT INTO public.dcc_revizii (contract_id, document_id, revizie, limba, titlu, ghid_id, cod_text, nume_fisier_baza, creat_de)
+      VALUES (p.contract_id, v_doc, 0, v_limba, v_titlu, p.ghid_id, v_coduri[1], v_coduri[2], v_uid) RETURNING id INTO v_rev;
+      v_revizii := v_revizii || jsonb_build_object('revizie_id', v_rev, 'fila', NULL, 'revizie', 0, 'limba', v_limba, 'cod_text', v_coduri[1], 'nume_fisier_baza', v_coduri[2]);
+    ELSE
+      FOR i IN 1 .. p_nr_file LOOP
+        INSERT INTO public.dcc_file (document_id, fila, creat_de) VALUES (v_doc, i, v_uid) RETURNING id INTO v_fila;
+        v_coduri := public.fn_dcc_coduri_intern(p.ghid_id, c.cod_contract, v_em, v_tem, v_tip, v_urmator, i, NULL, 0, v_limba);
+        INSERT INTO public.dcc_revizii (contract_id, document_id, fila_id, revizie, limba, titlu, ghid_id, cod_text, nume_fisier_baza, creat_de)
+        VALUES (p.contract_id, v_doc, v_fila, 0, v_limba, v_titlu, p.ghid_id, v_coduri[1], v_coduri[2], v_uid) RETURNING id INTO v_rev;
+        v_revizii := v_revizii || jsonb_build_object('revizie_id', v_rev, 'fila', i, 'revizie', 0, 'limba', v_limba, 'cod_text', v_coduri[1], 'nume_fisier_baza', v_coduri[2]);
+      END LOOP;
+    END IF;
+  EXCEPTION WHEN unique_violation THEN
+    RAISE EXCEPTION 'DCC_COD_OCUPAT: codul e deja folosit pe contract' USING ERRCODE = '23505';
+  END;
+  v_r := jsonb_build_object('document_id', v_doc, 'secventa', v_urmator, 'interval', s.interval, 'revizii', v_revizii);
+  PERFORM public.fn_dcc_intentie_incheie(p_cheie, v_r);
+  RETURN v_r || '{"reluat": false}'::jsonb;
+END $f$;
+
+-- alocarea manuală (contract manual, ex. Lot 4): omul scrie secvența primită; BD verifică unicitatea pe contract. Lock-urile: pasul 2 (advisory
+-- PARTAJAT pe contract) -> 3 (proiectul FOR SHARE) -> 4 (cheia seriei fără interval: o inițializare concurentă pe cheie se serializează).
+CREATE FUNCTION public.fn_dcc_aloca_manual(p_proiect_dcc bigint, p_emitent text, p_tematica text, p_tip text, p_secventa integer, p_titlu text,
+                                           p_limba text, p_nr_file integer, p_cheie uuid) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v_uid uuid := auth.uid(); v_em text := nullif(upper(btrim(p_emitent)), ''); v_tem text := nullif(upper(btrim(p_tematica)), '');
+  v_tip text := nullif(upper(btrim(p_tip)), ''); v_titlu text := nullif(btrim(p_titlu), ''); v_limba text := nullif(upper(btrim(p_limba)), '');
+  v_hash text; v_r jsonb; v_contract bigint; p public.dcc_proiecte; c public.dcc_contracte; v_doc bigint; v_fila bigint; v_rev bigint; v_coduri text[];
+  v_revizii jsonb := '[]'::jsonb; i integer;
+BEGIN
+  IF v_uid IS NULL THEN RAISE EXCEPTION 'DCC_NEAUTENTIFICAT: autentificare necesara' USING ERRCODE = '42501'; END IF;
+  IF p_cheie IS NULL OR p_proiect_dcc IS NULL OR v_em IS NULL OR v_tip IS NULL OR p_secventa IS NULL OR p_secventa NOT BETWEEN 1 AND 99999 THEN
+    RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: proiect, emitent, tip, secventa (1..99999) si cheie obligatorii' USING ERRCODE = '22023';
+  END IF;
+  IF v_titlu IS NULL OR length(v_titlu) > 300 THEN RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: titlul e obligatoriu (max 300)' USING ERRCODE = '22023'; END IF;
+  IF p_nr_file IS NOT NULL AND p_nr_file NOT BETWEEN 1 AND 999 THEN RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: numarul de file e 1..999' USING ERRCODE = '22023'; END IF;
+  v_hash := public.fn_dcc_hash_parametri('aloca_manual', jsonb_build_object('proiect', p_proiect_dcc, 'emitent', v_em, 'tematica', v_tem, 'tip', v_tip,
+    'secventa', p_secventa, 'titlu', v_titlu, 'limba', v_limba, 'nr_file', p_nr_file));
+  v_r := public.fn_dcc_intentie_reia(p_cheie, 'aloca_manual', v_hash);
+  IF v_r IS NOT NULL THEN RETURN v_r; END IF;
+  IF NOT public.fn_dcc_drept(p_proiect_dcc, 'scriere') THEN RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501'; END IF;
+  v_r := public.fn_dcc_intentie_revendica(p_cheie, 'aloca_manual', v_hash);
+  IF v_r IS NOT NULL THEN RETURN v_r; END IF;
+  -- lock-urile: 2 (partajat) -> 3 -> 4
+  SELECT d.contract_id INTO v_contract FROM public.dcc_proiecte d WHERE d.id = p_proiect_dcc;
+  PERFORM public.fn_dcc_lock_contract(v_contract, false);
+  SELECT * INTO p FROM public.dcc_proiecte d WHERE d.id = p_proiect_dcc FOR SHARE;
+  IF p.contract_id IS DISTINCT FROM v_contract THEN RAISE EXCEPTION 'DCC_CONFLICT_VERSIUNE: proiectul s-a schimbat; reincearca' USING ERRCODE = '40001'; END IF;
+  PERFORM public.fn_dcc_lock_cheie_serie(v_contract, v_em, v_tem, v_tip, NULL);
+  -- reverificarea după lock
+  IF NOT public.fn_dcc_drept(p_proiect_dcc, 'scriere') THEN RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501'; END IF;
+  SELECT * INTO c FROM public.dcc_contracte x WHERE x.id = v_contract;
+  IF c.mod_alocare <> 'manual' THEN RAISE EXCEPTION 'DCC_MOD_AUTOMAT: contractul aloca automat (din serie)' USING ERRCODE = 'P0001'; END IF;
+  IF v_em IS DISTINCT FROM p.emitent THEN RAISE EXCEPTION 'DCC_EMITENT_STRAIN: emitentul nu e al proiectului' USING ERRCODE = '22023'; END IF;
+  PERFORM public.fn_dcc_valori_ghid_intern(p.ghid_id, v_tem, v_tip);
+  IF EXISTS (SELECT 1 FROM public.dcc_serii s WHERE s.contract_id = v_contract AND s.emitent = v_em AND s.tematica IS NOT DISTINCT FROM v_tem AND s.tip = v_tip) THEN
+    RAISE EXCEPTION 'DCC_SERIE_AUTOMATA: cheia are o serie initializata (alocare automata)' USING ERRCODE = 'P0001';
+  END IF;
+  v_limba := coalesce(v_limba, p.limba_implicita);
+  BEGIN
+    INSERT INTO public.dcc_documente (contract_id, proiect_dcc_id, emitent, tematica, tip, secventa, interval, serie_id, mod, titlu, are_file, creat_de)
+    VALUES (v_contract, p.id, v_em, v_tem, v_tip, p_secventa, NULL, NULL, 'manual', v_titlu, p_nr_file IS NOT NULL, v_uid) RETURNING id INTO v_doc;
+    IF p_nr_file IS NULL THEN
+      v_coduri := public.fn_dcc_coduri_intern(p.ghid_id, c.cod_contract, v_em, v_tem, v_tip, p_secventa, NULL, NULL, 0, v_limba);
+      INSERT INTO public.dcc_revizii (contract_id, document_id, revizie, limba, titlu, ghid_id, cod_text, nume_fisier_baza, creat_de)
+      VALUES (v_contract, v_doc, 0, v_limba, v_titlu, p.ghid_id, v_coduri[1], v_coduri[2], v_uid) RETURNING id INTO v_rev;
+      v_revizii := v_revizii || jsonb_build_object('revizie_id', v_rev, 'fila', NULL, 'revizie', 0, 'limba', v_limba, 'cod_text', v_coduri[1], 'nume_fisier_baza', v_coduri[2]);
+    ELSE
+      FOR i IN 1 .. p_nr_file LOOP
+        INSERT INTO public.dcc_file (document_id, fila, creat_de) VALUES (v_doc, i, v_uid) RETURNING id INTO v_fila;
+        v_coduri := public.fn_dcc_coduri_intern(p.ghid_id, c.cod_contract, v_em, v_tem, v_tip, p_secventa, i, NULL, 0, v_limba);
+        INSERT INTO public.dcc_revizii (contract_id, document_id, fila_id, revizie, limba, titlu, ghid_id, cod_text, nume_fisier_baza, creat_de)
+        VALUES (v_contract, v_doc, v_fila, 0, v_limba, v_titlu, p.ghid_id, v_coduri[1], v_coduri[2], v_uid) RETURNING id INTO v_rev;
+        v_revizii := v_revizii || jsonb_build_object('revizie_id', v_rev, 'fila', i, 'revizie', 0, 'limba', v_limba, 'cod_text', v_coduri[1], 'nume_fisier_baza', v_coduri[2]);
+      END LOOP;
+    END IF;
+  EXCEPTION WHEN unique_violation THEN
+    -- fără detalii despre ocupant (id, titlu, proiect): mesajul e același pentru orice coliziune
+    RAISE EXCEPTION 'DCC_COD_OCUPAT: codul e deja folosit pe contract' USING ERRCODE = '23505';
+  END;
+  v_r := jsonb_build_object('document_id', v_doc, 'secventa', p_secventa, 'interval', NULL, 'revizii', v_revizii);
+  PERFORM public.fn_dcc_intentie_incheie(p_cheie, v_r);
+  RETURN v_r || '{"reluat": false}'::jsonb;
+END $f$;
+
+-- revizia nouă pe document / filă / anexă: revizia = max(revizie) pe țintă (toate limbile, inclusiv anulate) + 1, sub lock-ul documentului.
+-- Lock-urile: pasul 3 (proiectul FOR SHARE) -> pasul 6 (documentul FOR UPDATE). Codul cu formatele ghidului CURENT; textul vechi rămâne.
+CREATE FUNCTION public.fn_dcc_revizie_noua(p_document bigint, p_fila bigint, p_anexa bigint, p_titlu text, p_limba text, p_cheie uuid) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v_uid uuid := auth.uid(); v_titlu text := nullif(btrim(p_titlu), ''); v_limba text := nullif(upper(btrim(p_limba)), ''); v_hash text; v_r jsonb;
+  v_proiect bigint; p public.dcc_proiecte; d public.dcc_documente; c public.dcc_contracte; u public.dcc_revizii; v_nr_fila integer; v_nr_anexa integer;
+  v_rev integer; v_id bigint; v_coduri text[];
+BEGIN
+  IF v_uid IS NULL THEN RAISE EXCEPTION 'DCC_NEAUTENTIFICAT: autentificare necesara' USING ERRCODE = '42501'; END IF;
+  IF p_cheie IS NULL OR p_document IS NULL THEN RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: documentul si cheia sunt obligatorii' USING ERRCODE = '22023'; END IF;
+  IF p_fila IS NOT NULL AND p_anexa IS NOT NULL THEN RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: cel mult una din fila / anexa' USING ERRCODE = '22023'; END IF;
+  IF v_titlu IS NOT NULL AND length(v_titlu) > 300 THEN RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: titlul are max 300 de caractere' USING ERRCODE = '22023'; END IF;
+  v_hash := public.fn_dcc_hash_parametri('revizie_noua', jsonb_build_object('document', p_document, 'fila', p_fila, 'anexa', p_anexa, 'titlu', v_titlu, 'limba', v_limba));
+  v_r := public.fn_dcc_intentie_reia(p_cheie, 'revizie_noua', v_hash);
+  IF v_r IS NOT NULL THEN RETURN v_r; END IF;
+  SELECT x.proiect_dcc_id INTO v_proiect FROM public.dcc_documente x WHERE x.id = p_document;
+  IF v_proiect IS NULL OR NOT public.fn_dcc_drept(v_proiect, 'scriere') THEN RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501'; END IF;
+  v_r := public.fn_dcc_intentie_revendica(p_cheie, 'revizie_noua', v_hash);
+  IF v_r IS NOT NULL THEN RETURN v_r; END IF;
+  -- lock-urile: 3 (proiectul) -> 6 (documentul)
+  SELECT * INTO p FROM public.dcc_proiecte x WHERE x.id = v_proiect FOR SHARE;
+  SELECT * INTO d FROM public.dcc_documente x WHERE x.id = p_document FOR UPDATE;
+  -- reverificarea după lock: dreptul, starea documentului, ținta
+  IF NOT public.fn_dcc_drept(v_proiect, 'scriere') THEN RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501'; END IF;
+  IF d.stare = 'anulat' THEN RAISE EXCEPTION 'DCC_DOCUMENT_ANULAT: documentul e anulat' USING ERRCODE = 'P0001'; END IF;
+  IF p_fila IS NOT NULL THEN
+    SELECT f.fila INTO v_nr_fila FROM public.dcc_file f WHERE f.id = p_fila AND f.document_id = d.id;
+    IF NOT FOUND THEN RAISE EXCEPTION 'DCC_TINTA_STRAINA: fila nu e a documentului' USING ERRCODE = '22023'; END IF;
+  END IF;
+  IF p_anexa IS NOT NULL THEN
+    SELECT a.numar INTO v_nr_anexa FROM public.dcc_anexe a WHERE a.id = p_anexa AND a.document_id = d.id;
+    IF NOT FOUND THEN RAISE EXCEPTION 'DCC_TINTA_STRAINA: anexa nu e a documentului' USING ERRCODE = '22023'; END IF;
+  END IF;
+  IF (d.are_file AND p_fila IS NULL AND p_anexa IS NULL) OR (NOT d.are_file AND p_fila IS NOT NULL) THEN
+    RAISE EXCEPTION 'DCC_TINTA_NEPOTRIVITA: pe un document cu file revizia e pe o fila sau anexa; fara file, nu are fila' USING ERRCODE = '22023';
+  END IF;
+  SELECT * INTO u FROM public.dcc_revizii r WHERE r.document_id = d.id AND r.fila_id IS NOT DISTINCT FROM p_fila AND r.anexa_id IS NOT DISTINCT FROM p_anexa
+   ORDER BY r.revizie DESC, r.id DESC LIMIT 1;
+  v_rev := coalesce(u.revizie, -1) + 1;
+  v_limba := coalesce(v_limba, u.limba, p.limba_implicita);
+  SELECT * INTO c FROM public.dcc_contracte x WHERE x.id = d.contract_id;
+  v_coduri := public.fn_dcc_coduri_intern(p.ghid_id, c.cod_contract, d.emitent, d.tematica, d.tip, d.secventa, v_nr_fila, v_nr_anexa, v_rev, v_limba);
+  BEGIN
+    INSERT INTO public.dcc_revizii (contract_id, document_id, fila_id, anexa_id, revizie, limba, titlu, ghid_id, cod_text, nume_fisier_baza, creat_de)
+    VALUES (d.contract_id, d.id, p_fila, p_anexa, v_rev, v_limba, v_titlu, p.ghid_id, v_coduri[1], v_coduri[2], v_uid) RETURNING id INTO v_id;
+  EXCEPTION WHEN unique_violation THEN
+    RAISE EXCEPTION 'DCC_COD_OCUPAT: codul e deja folosit pe contract' USING ERRCODE = '23505';
+  END;
+  v_r := jsonb_build_object('document_id', d.id, 'revizie_id', v_id,
+           'tinta', jsonb_build_object('tip', CASE WHEN p_fila IS NOT NULL THEN 'fila' WHEN p_anexa IS NOT NULL THEN 'anexa' ELSE 'document' END,
+                                       'fila', v_nr_fila, 'anexa', v_nr_anexa),
+           'revizie', v_rev, 'limba', v_limba, 'cod_text', v_coduri[1], 'nume_fisier_baza', v_coduri[2],
+           'ultima_netrimisa', coalesce(u.stare_transport IN ('rezervata', 'pregatita', 'copiata_pentru_gmail'), false));
+  PERFORM public.fn_dcc_intentie_incheie(p_cheie, v_r);
+  RETURN v_r || '{"reluat": false}'::jsonb;
+END $f$;
+
+-- fila nouă (doar pe un document declarat cu file): fila + Rev0. Lock-urile: 3 -> 6.
+CREATE FUNCTION public.fn_dcc_fila_noua(p_document bigint, p_fila integer, p_titlu text, p_limba text, p_cheie uuid) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v_uid uuid := auth.uid(); v_titlu text := nullif(btrim(p_titlu), ''); v_limba text := nullif(upper(btrim(p_limba)), ''); v_hash text; v_r jsonb;
+  v_proiect bigint; p public.dcc_proiecte; d public.dcc_documente; c public.dcc_contracte; v_fila bigint; v_id bigint; v_coduri text[];
+BEGIN
+  IF v_uid IS NULL THEN RAISE EXCEPTION 'DCC_NEAUTENTIFICAT: autentificare necesara' USING ERRCODE = '42501'; END IF;
+  IF p_cheie IS NULL OR p_document IS NULL OR p_fila IS NULL OR p_fila NOT BETWEEN 1 AND 999 THEN
+    RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: documentul, fila (1..999) si cheia sunt obligatorii' USING ERRCODE = '22023';
+  END IF;
+  IF v_titlu IS NOT NULL AND length(v_titlu) > 300 THEN RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: titlul are max 300 de caractere' USING ERRCODE = '22023'; END IF;
+  v_hash := public.fn_dcc_hash_parametri('fila_noua', jsonb_build_object('document', p_document, 'fila', p_fila, 'titlu', v_titlu, 'limba', v_limba));
+  v_r := public.fn_dcc_intentie_reia(p_cheie, 'fila_noua', v_hash);
+  IF v_r IS NOT NULL THEN RETURN v_r; END IF;
+  SELECT x.proiect_dcc_id INTO v_proiect FROM public.dcc_documente x WHERE x.id = p_document;
+  IF v_proiect IS NULL OR NOT public.fn_dcc_drept(v_proiect, 'scriere') THEN RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501'; END IF;
+  v_r := public.fn_dcc_intentie_revendica(p_cheie, 'fila_noua', v_hash);
+  IF v_r IS NOT NULL THEN RETURN v_r; END IF;
+  SELECT * INTO p FROM public.dcc_proiecte x WHERE x.id = v_proiect FOR SHARE;
+  SELECT * INTO d FROM public.dcc_documente x WHERE x.id = p_document FOR UPDATE;
+  IF NOT public.fn_dcc_drept(v_proiect, 'scriere') THEN RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501'; END IF;
+  IF d.stare = 'anulat' THEN RAISE EXCEPTION 'DCC_DOCUMENT_ANULAT: documentul e anulat' USING ERRCODE = 'P0001'; END IF;
+  IF NOT d.are_file THEN RAISE EXCEPTION 'DCC_FARA_FILE: documentul nu a fost declarat cu file' USING ERRCODE = '22023'; END IF;
+  IF EXISTS (SELECT 1 FROM public.dcc_file f WHERE f.document_id = d.id AND f.fila = p_fila) THEN
+    RAISE EXCEPTION 'DCC_FILA_EXISTA: fila exista deja pe document' USING ERRCODE = '23505';
+  END IF;
+  v_limba := coalesce(v_limba, p.limba_implicita);
+  SELECT * INTO c FROM public.dcc_contracte x WHERE x.id = d.contract_id;
+  v_coduri := public.fn_dcc_coduri_intern(p.ghid_id, c.cod_contract, d.emitent, d.tematica, d.tip, d.secventa, p_fila, NULL, 0, v_limba);
+  BEGIN
+    INSERT INTO public.dcc_file (document_id, fila, titlu, creat_de) VALUES (d.id, p_fila, v_titlu, v_uid) RETURNING id INTO v_fila;
+    INSERT INTO public.dcc_revizii (contract_id, document_id, fila_id, revizie, limba, titlu, ghid_id, cod_text, nume_fisier_baza, creat_de)
+    VALUES (d.contract_id, d.id, v_fila, 0, v_limba, v_titlu, p.ghid_id, v_coduri[1], v_coduri[2], v_uid) RETURNING id INTO v_id;
+  EXCEPTION WHEN unique_violation THEN
+    RAISE EXCEPTION 'DCC_COD_OCUPAT: codul e deja folosit pe contract' USING ERRCODE = '23505';
+  END;
+  v_r := jsonb_build_object('document_id', d.id, 'fila_id', v_fila, 'fila', p_fila, 'revizie_id', v_id, 'cod_text', v_coduri[1], 'nume_fisier_baza', v_coduri[2]);
+  PERFORM public.fn_dcc_intentie_incheie(p_cheie, v_r);
+  RETURN v_r || '{"reluat": false}'::jsonb;
+END $f$;
+
+-- anexa nouă: numărul = max + 1 sub lock-ul documentului; anexa + Rev0. Lock-urile: 3 -> 6.
+CREATE FUNCTION public.fn_dcc_anexa_noua(p_document bigint, p_titlu text, p_limba text, p_cheie uuid) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v_uid uuid := auth.uid(); v_titlu text := nullif(btrim(p_titlu), ''); v_limba text := nullif(upper(btrim(p_limba)), ''); v_hash text; v_r jsonb;
+  v_proiect bigint; p public.dcc_proiecte; d public.dcc_documente; c public.dcc_contracte; v_nr integer; v_anexa bigint; v_id bigint; v_coduri text[];
+BEGIN
+  IF v_uid IS NULL THEN RAISE EXCEPTION 'DCC_NEAUTENTIFICAT: autentificare necesara' USING ERRCODE = '42501'; END IF;
+  IF p_cheie IS NULL OR p_document IS NULL THEN RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: documentul si cheia sunt obligatorii' USING ERRCODE = '22023'; END IF;
+  IF v_titlu IS NULL OR length(v_titlu) > 300 THEN RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: titlul anexei e obligatoriu (max 300)' USING ERRCODE = '22023'; END IF;
+  v_hash := public.fn_dcc_hash_parametri('anexa_noua', jsonb_build_object('document', p_document, 'titlu', v_titlu, 'limba', v_limba));
+  v_r := public.fn_dcc_intentie_reia(p_cheie, 'anexa_noua', v_hash);
+  IF v_r IS NOT NULL THEN RETURN v_r; END IF;
+  SELECT x.proiect_dcc_id INTO v_proiect FROM public.dcc_documente x WHERE x.id = p_document;
+  IF v_proiect IS NULL OR NOT public.fn_dcc_drept(v_proiect, 'scriere') THEN RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501'; END IF;
+  v_r := public.fn_dcc_intentie_revendica(p_cheie, 'anexa_noua', v_hash);
+  IF v_r IS NOT NULL THEN RETURN v_r; END IF;
+  SELECT * INTO p FROM public.dcc_proiecte x WHERE x.id = v_proiect FOR SHARE;
+  SELECT * INTO d FROM public.dcc_documente x WHERE x.id = p_document FOR UPDATE;
+  IF NOT public.fn_dcc_drept(v_proiect, 'scriere') THEN RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501'; END IF;
+  IF d.stare = 'anulat' THEN RAISE EXCEPTION 'DCC_DOCUMENT_ANULAT: documentul e anulat' USING ERRCODE = 'P0001'; END IF;
+  SELECT coalesce(max(a.numar), 0) + 1 INTO v_nr FROM public.dcc_anexe a WHERE a.document_id = d.id;
+  v_limba := coalesce(v_limba, p.limba_implicita);
+  SELECT * INTO c FROM public.dcc_contracte x WHERE x.id = d.contract_id;
+  v_coduri := public.fn_dcc_coduri_intern(p.ghid_id, c.cod_contract, d.emitent, d.tematica, d.tip, d.secventa, NULL, v_nr, 0, v_limba);
+  BEGIN
+    INSERT INTO public.dcc_anexe (document_id, numar, titlu, creat_de) VALUES (d.id, v_nr, v_titlu, v_uid) RETURNING id INTO v_anexa;
+    INSERT INTO public.dcc_revizii (contract_id, document_id, anexa_id, revizie, limba, titlu, ghid_id, cod_text, nume_fisier_baza, creat_de)
+    VALUES (d.contract_id, d.id, v_anexa, 0, v_limba, v_titlu, p.ghid_id, v_coduri[1], v_coduri[2], v_uid) RETURNING id INTO v_id;
+  EXCEPTION WHEN unique_violation THEN
+    RAISE EXCEPTION 'DCC_COD_OCUPAT: codul e deja folosit pe contract' USING ERRCODE = '23505';
+  END;
+  v_r := jsonb_build_object('document_id', d.id, 'anexa_id', v_anexa, 'anexa', v_nr, 'revizie_id', v_id, 'cod_text', v_coduri[1], 'nume_fisier_baza', v_coduri[2]);
+  PERFORM public.fn_dcc_intentie_incheie(p_cheie, v_r);
+  RETURN v_r || '{"reluat": false}'::jsonb;
+END $f$;
+
+-- anularea ([D7], admin): exact unul din document / revizie; motivul obligatoriu, păstrat pe document ȘI pe fiecare revizie anulată. Documentul:
+-- reviziile netrimise -> anulata (prin 'document', același motiv); cele trimise rămân (istoric); seria NU scade. Revizia: doar din rezervata /
+-- pregatita / copiata. Lock-urile: 3 -> 6.
+CREATE FUNCTION public.fn_dcc_anuleaza(p_document bigint, p_revizie bigint, p_motiv text, p_cheie uuid) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v_uid uuid := auth.uid(); v_motiv text := nullif(btrim(p_motiv), ''); v_hash text; v_r jsonb; v_doc bigint; v_proiect bigint;
+  d public.dcc_documente; rv public.dcc_revizii; v_anulate jsonb; v_pastrate jsonb;
+BEGIN
+  IF v_uid IS NULL THEN RAISE EXCEPTION 'DCC_NEAUTENTIFICAT: autentificare necesara' USING ERRCODE = '42501'; END IF;
+  IF p_cheie IS NULL OR num_nonnulls(p_document, p_revizie) <> 1 THEN
+    RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: exact unul din document / revizie, plus cheia' USING ERRCODE = '22023';
+  END IF;
+  IF v_motiv IS NULL OR length(v_motiv) > 500 THEN RAISE EXCEPTION 'DCC_MOTIV_LIPSA: motivul anularii e obligatoriu (max 500)' USING ERRCODE = '22023'; END IF;
+  v_hash := public.fn_dcc_hash_parametri('anuleaza', jsonb_build_object('document', p_document, 'revizie', p_revizie, 'motiv', v_motiv));
+  v_r := public.fn_dcc_intentie_reia(p_cheie, 'anuleaza', v_hash);
+  IF v_r IS NOT NULL THEN RETURN v_r; END IF;
+  IF p_document IS NOT NULL THEN v_doc := p_document;
+  ELSE SELECT r.document_id INTO v_doc FROM public.dcc_revizii r WHERE r.id = p_revizie; END IF;
+  SELECT x.proiect_dcc_id INTO v_proiect FROM public.dcc_documente x WHERE x.id = v_doc;
+  IF v_proiect IS NULL OR NOT public.fn_dcc_drept(v_proiect, 'admin') THEN RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501'; END IF;
+  v_r := public.fn_dcc_intentie_revendica(p_cheie, 'anuleaza', v_hash);
+  IF v_r IS NOT NULL THEN RETURN v_r; END IF;
+  PERFORM 1 FROM public.dcc_proiecte x WHERE x.id = v_proiect FOR SHARE;
+  SELECT * INTO d FROM public.dcc_documente x WHERE x.id = v_doc FOR UPDATE;
+  IF NOT public.fn_dcc_drept(v_proiect, 'admin') THEN RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501'; END IF;
+  IF d.stare = 'anulat' THEN RAISE EXCEPTION 'DCC_DOCUMENT_ANULAT: documentul e deja anulat' USING ERRCODE = 'P0001'; END IF;
+  IF p_document IS NOT NULL THEN
+    UPDATE public.dcc_documente x SET stare = 'anulat', anulat_de = v_uid, anulat_la = now(), motiv_anulare = v_motiv WHERE x.id = d.id;
+    WITH a AS (
+      UPDATE public.dcc_revizii r SET stare_transport = 'anulata', anulata_de = v_uid, anulata_la = now(), anulata_prin = 'document', motiv_anulare = v_motiv
+       WHERE r.document_id = d.id AND r.stare_transport IN ('rezervata', 'pregatita', 'copiata_pentru_gmail')
+      RETURNING r.id)
+    SELECT coalesce(jsonb_agg(a.id ORDER BY a.id), '[]'::jsonb) INTO v_anulate FROM a;
+    SELECT coalesce(jsonb_agg(jsonb_build_object('revizie_id', r.id, 'stare_transport', r.stare_transport) ORDER BY r.id), '[]'::jsonb) INTO v_pastrate
+      FROM public.dcc_revizii r WHERE r.document_id = d.id AND r.stare_transport NOT IN ('rezervata', 'pregatita', 'copiata_pentru_gmail', 'anulata');
+    v_r := jsonb_build_object('tinta', 'document', 'document_id', d.id, 'revizie_id', NULL, 'revizii_anulate', v_anulate, 'revizii_pastrate', v_pastrate);
+  ELSE
+    SELECT * INTO rv FROM public.dcc_revizii r WHERE r.id = p_revizie;
+    IF rv.stare_transport NOT IN ('rezervata', 'pregatita', 'copiata_pentru_gmail') THEN
+      RAISE EXCEPTION 'DCC_TRANZITIE_NEPERMISA: revizia % nu se mai poate anula', rv.stare_transport USING ERRCODE = 'P0001';
+    END IF;
+    UPDATE public.dcc_revizii r SET stare_transport = 'anulata', anulata_de = v_uid, anulata_la = now(), anulata_prin = 'revizie', motiv_anulare = v_motiv
+     WHERE r.id = rv.id;
+    v_r := jsonb_build_object('tinta', 'revizie', 'document_id', d.id, 'revizie_id', rv.id, 'revizii_anulate', jsonb_build_array(rv.id), 'revizii_pastrate', '[]'::jsonb);
+  END IF;
+  PERFORM public.fn_dcc_intentie_incheie(p_cheie, v_r);
+  RETURN v_r || '{"reluat": false}'::jsonb;
+END $f$;
+
+-- citirea seriilor ([D1]): DOAR seriile contractului proiectului, pe emitentul proiectului; nicio coloană a altui proiect (seria nu are proiect)
+CREATE FUNCTION public.fn_dcc_serii_proiect(p_proiect_dcc bigint)
+  RETURNS TABLE (serie_id bigint, emitent text, tematica text, tip text, "interval" text, limita_inf integer, limita_sup integer, prag_initial integer,
+                 ultimul_ocupat integer, urmatorul integer, epuizata boolean, initializata_la timestamptz, initializata_prin text, motiv_prag text)
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+BEGIN
+  IF NOT public.fn_dcc_drept(p_proiect_dcc, 'citire') THEN RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501'; END IF;
+  RETURN QUERY
+    SELECT s.id, s.emitent, s.tematica, s.tip, s.interval, s.limita_inf, s.limita_sup, s.prag_initial, s.ultimul_ocupat, s.ultimul_ocupat + 1,
+           s.ultimul_ocupat >= s.limita_sup, s.initializata_la, s.initializata_prin, s.motiv_prag
+      FROM public.dcc_serii s JOIN public.dcc_proiecte d ON d.contract_id = s.contract_id AND d.emitent = s.emitent
+     WHERE d.id = p_proiect_dcc
+     ORDER BY s.tematica NULLS FIRST, s.tip, s.interval, s.id;
+END $f$;
+
+REVOKE ALL ON FUNCTION public.fn_dcc_config_permisa_intern(), public.fn_dcc_valori_ghid_intern(bigint, text, text),
+  public.fn_dcc_coduri_intern(bigint, text, text, text, text, integer, integer, integer, integer, text),
+  public.fn_dcc_ghid_creeaza(jsonb, uuid), public.fn_dcc_contract_creeaza(text, text, text, text, uuid),
+  public.fn_dcc_proiect_seteaza(bigint, bigint, bigint, text, text, text, text[], jsonb, text, integer, integer, uuid),
+  public.fn_dcc_initializeaza_serie(bigint, text, text, text, text, integer, text, boolean, uuid),
+  public.fn_dcc_aloca(bigint, text, text, text, text, text, text, integer, uuid), public.fn_dcc_aloca_manual(bigint, text, text, text, integer, text, text, integer, uuid),
+  public.fn_dcc_revizie_noua(bigint, bigint, bigint, text, text, uuid), public.fn_dcc_fila_noua(bigint, integer, text, text, uuid),
+  public.fn_dcc_anexa_noua(bigint, text, text, uuid), public.fn_dcc_anuleaza(bigint, bigint, text, uuid), public.fn_dcc_serii_proiect(bigint)
+  FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_dcc_ghid_creeaza(jsonb, uuid), public.fn_dcc_contract_creeaza(text, text, text, text, uuid),
+  public.fn_dcc_proiect_seteaza(bigint, bigint, bigint, text, text, text, text[], jsonb, text, integer, integer, uuid),
+  public.fn_dcc_initializeaza_serie(bigint, text, text, text, text, integer, text, boolean, uuid),
+  public.fn_dcc_aloca(bigint, text, text, text, text, text, text, integer, uuid), public.fn_dcc_aloca_manual(bigint, text, text, text, integer, text, text, integer, uuid),
+  public.fn_dcc_revizie_noua(bigint, bigint, bigint, text, text, uuid), public.fn_dcc_fila_noua(bigint, integer, text, text, uuid),
+  public.fn_dcc_anexa_noua(bigint, text, text, uuid), public.fn_dcc_anuleaza(bigint, bigint, text, uuid), public.fn_dcc_serii_proiect(bigint) TO authenticated;
+
 DROP FUNCTION pg_temp.lant_20270108a(text);
