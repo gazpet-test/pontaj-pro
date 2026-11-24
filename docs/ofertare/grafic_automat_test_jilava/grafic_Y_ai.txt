@@ -28,37 +28,37 @@ WBS | rezumat | jalon | denumire | executant | durata_zile_lucratoare | sursa_du
 1.8.2 | nu | nu | Trasare, pichetare culoar de lucru 16 m, marcare traseu conductă cu borne TRANSGAZ (topograf; verificare P+B) | Gazpet | 2 | PRESUPUS | 2026-11-06 | 2026-11-09 | 1.3 FS; 1.2 FS+3z
 1.8.3 | nu | nu | Sondaje manuale de identificare a utilităților subterane, cu deținătorii rețelelor | Gazpet | 2 | PRESUPUS | 2026-11-10 | 2026-11-11 | 1.8.2 FS
 1.8.4 | nu | da | PV predare instalație / permis de lucru cu foc deschis emis de TRANSGAZ (precondiție tăiere și sudare) | beneficiar + TRANSGAZ | 0 | jalon | 2026-11-13 | 2026-11-13 | 1.5 FS; 1.8.2 FS
-2 | da | nu | Ob.1 (0001) Terasamente drum principal | ELCAS SRL (subcontractant – PRESUPUS) | 48 | calculat (rezumat) | 2026-11-11 | 2027-01-15 | -
-2.1 | da | nu | Deviz 166101 Pregătire culoar de lucru | ELCAS SRL (PRESUPUS) | 2 | calculat (rezumat) | 2026-11-11 | 2026-11-12 | -
-2.1.1 | nu | nu | TSH01A1 Degajarea terenului de corpuri străine (851 mp) | ELCAS SRL (PRESUPUS) | 1 | PRESUPUS | 2026-11-11 | 2026-11-11 | 1.8.1 FS; 1.8.2 FS
-2.1.2 | nu | nu | TSC19B1 + TSC22D1 Săpătură cu buldozerul și împingerea pământului (194 mc) – numai în afara zonei de protecție de 6 m | ELCAS SRL (PRESUPUS) | 1 | PRESUPUS | 2026-11-12 | 2026-11-12 | 2.1.1 FS
-2.2 | da | nu | Deviz 166102 Săpături șanț | ELCAS SRL (PRESUPUS) | 10 | calculat (rezumat) | 2026-11-13 | 2026-11-26 | -
-2.2.1 | nu | nu | TSA04E1 Săpătură manuală șanț, gropi de poziție și sub conductă, adâncime 1,51–3 m (207 mc) | ELCAS SRL (PRESUPUS) | 8 | PRESUPUS | 2026-11-13 | 2026-11-24 | 2.1.2 FS; 1.8.3 FS
-2.2.2 | nu | nu | TSF01B1 Sprijiniri maluri cu dulapi (162 mp), pe măsura avansării săpăturii | ELCAS SRL (PRESUPUS) | 8 | PRESUPUS | 2026-11-16 | 2026-11-25 | 2.2.1 SS+1z
-2.2.3 | nu | nu | TSE01C1 Nivelare și rectificare manuală fund șanț | ELCAS SRL (PRESUPUS) | 1 | PRESUPUS | 2026-11-26 | 2026-11-26 | 2.2.1 FS; 2.2.2 FS
+2 | da | nu | Ob.1 (0001) Terasamente drum principal | SUBCONTRACTANT_A (subcontractant – PRESUPUS) | 48 | calculat (rezumat) | 2026-11-11 | 2027-01-15 | -
+2.1 | da | nu | Deviz 166101 Pregătire culoar de lucru | SUBCONTRACTANT_A (PRESUPUS) | 2 | calculat (rezumat) | 2026-11-11 | 2026-11-12 | -
+2.1.1 | nu | nu | TSH01A1 Degajarea terenului de corpuri străine (851 mp) | SUBCONTRACTANT_A (PRESUPUS) | 1 | PRESUPUS | 2026-11-11 | 2026-11-11 | 1.8.1 FS; 1.8.2 FS
+2.1.2 | nu | nu | TSC19B1 + TSC22D1 Săpătură cu buldozerul și împingerea pământului (194 mc) – numai în afara zonei de protecție de 6 m | SUBCONTRACTANT_A (PRESUPUS) | 1 | PRESUPUS | 2026-11-12 | 2026-11-12 | 2.1.1 FS
+2.2 | da | nu | Deviz 166102 Săpături șanț | SUBCONTRACTANT_A (PRESUPUS) | 10 | calculat (rezumat) | 2026-11-13 | 2026-11-26 | -
+2.2.1 | nu | nu | TSA04E1 Săpătură manuală șanț, gropi de poziție și sub conductă, adâncime 1,51–3 m (207 mc) | SUBCONTRACTANT_A (PRESUPUS) | 8 | PRESUPUS | 2026-11-13 | 2026-11-24 | 2.1.2 FS; 1.8.3 FS
+2.2.2 | nu | nu | TSF01B1 Sprijiniri maluri cu dulapi (162 mp), pe măsura avansării săpăturii | SUBCONTRACTANT_A (PRESUPUS) | 8 | PRESUPUS | 2026-11-16 | 2026-11-25 | 2.2.1 SS+1z
+2.2.3 | nu | nu | TSE01C1 Nivelare și rectificare manuală fund șanț | SUBCONTRACTANT_A (PRESUPUS) | 1 | PRESUPUS | 2026-11-26 | 2026-11-26 | 2.2.1 FS; 2.2.2 FS
 2.2.4 | nu | da | Verificare șanț (PCC 4.1) + PV recepție calitativă teren (geotehnician + proiectant) | beneficiar + proiectant + Gazpet | 0 | jalon | 2026-11-26 | 2026-11-26 | 2.2.3 FS; 1.7.2 FS+7z
-2.3 | da | nu | Deviz 166103 Umplere șanț și gropi de poziție | ELCAS SRL (PRESUPUS) | 5 | calculat (rezumat) | 2027-01-07 | 2027-01-13 | -
-2.3.1 | nu | nu | TSD01D1 + CG32A# Umplutură manuală în straturi de 10–15 cm până la 30 cm peste generatoare, apoi 20–30 cm (207 mc) | ELCAS SRL (PRESUPUS) | 4 | PRESUPUS | 2027-01-07 | 2027-01-12 | 4.6.2 FS
-2.3.2 | nu | nu | TSD06A1 Compactare cu placa vibrantă 0,7 t, grad 97–98% (207 mc) | ELCAS SRL (PRESUPUS) | 4 | PRESUPUS | 2027-01-08 | 2027-01-13 | 2.3.1 SS+1z; 2.3.1 FF
-2.4 | da | nu | Deviz 166104 Refacere amplasament | ELCAS SRL (PRESUPUS) | 2 | calculat (rezumat) | 2027-01-14 | 2027-01-15 | -
-2.4.1 | nu | nu | TSD01D1 + TSC22D1 Împrăștiere pământ afânat și împingere cu buldozerul (194 mc) | ELCAS SRL (PRESUPUS) | 1 | PRESUPUS | 2027-01-14 | 2027-01-14 | 2.3.2 FS
-2.4.2 | nu | nu | TSE04B1 Nivelare teren cu buldozerul (851 mp) și refacere strat vegetal | ELCAS SRL (PRESUPUS) | 1 | PRESUPUS | 2027-01-15 | 2027-01-15 | 2.4.1 FS
+2.3 | da | nu | Deviz 166103 Umplere șanț și gropi de poziție | SUBCONTRACTANT_A (PRESUPUS) | 5 | calculat (rezumat) | 2027-01-07 | 2027-01-13 | -
+2.3.1 | nu | nu | TSD01D1 + CG32A# Umplutură manuală în straturi de 10–15 cm până la 30 cm peste generatoare, apoi 20–30 cm (207 mc) | SUBCONTRACTANT_A (PRESUPUS) | 4 | PRESUPUS | 2027-01-07 | 2027-01-12 | 4.6.2 FS
+2.3.2 | nu | nu | TSD06A1 Compactare cu placa vibrantă 0,7 t, grad 97–98% (207 mc) | SUBCONTRACTANT_A (PRESUPUS) | 4 | PRESUPUS | 2027-01-08 | 2027-01-13 | 2.3.1 SS+1z; 2.3.1 FF
+2.4 | da | nu | Deviz 166104 Refacere amplasament | SUBCONTRACTANT_A (PRESUPUS) | 2 | calculat (rezumat) | 2027-01-14 | 2027-01-15 | -
+2.4.1 | nu | nu | TSD01D1 + TSC22D1 Împrăștiere pământ afânat și împingere cu buldozerul (194 mc) | SUBCONTRACTANT_A (PRESUPUS) | 1 | PRESUPUS | 2027-01-14 | 2027-01-14 | 2.3.2 FS
+2.4.2 | nu | nu | TSE04B1 Nivelare teren cu buldozerul (851 mp) și refacere strat vegetal | SUBCONTRACTANT_A (PRESUPUS) | 1 | PRESUPUS | 2027-01-15 | 2027-01-15 | 2.4.1 FS
 2.4.3 | nu | da | Verificare astupare și aducere teren la condițiile inițiale (PCC 4.15) – drum principal | beneficiar + Gazpet | 0 | jalon | 2027-01-15 | 2027-01-15 | 2.4.2 FS; 1.7.6 FS+7z
-3 | da | nu | Ob.2 (0002) Terasamente bretea | ELCAS SRL (subcontractant – PRESUPUS) | 48 | calculat (rezumat) | 2026-11-12 | 2027-01-18 | -
-3.1 | da | nu | Deviz 166201 Pregătire culoar de lucru | ELCAS SRL (PRESUPUS) | 2 | calculat (rezumat) | 2026-11-12 | 2026-11-13 | -
-3.1.1 | nu | nu | TSH01A1 Degajarea terenului de corpuri străine (420 mp) | ELCAS SRL (PRESUPUS) | 1 | PRESUPUS | 2026-11-12 | 2026-11-12 | 2.1.1 FS
-3.1.2 | nu | nu | TSC19B1 + TSC22D1 Săpătură cu buldozerul și împingerea pământului (96 mc) – în afara zonei de 6 m | ELCAS SRL (PRESUPUS) | 1 | PRESUPUS | 2026-11-13 | 2026-11-13 | 3.1.1 FS; 2.1.2 FS
-3.2 | da | nu | Deviz 166202 Săpături șanț | ELCAS SRL (PRESUPUS) | 6 | calculat (rezumat) | 2026-11-25 | 2026-12-02 | -
-3.2.1 | nu | nu | TSA04E1 Săpătură manuală șanț, gropi de poziție și sub conductă (102 mc) | ELCAS SRL (PRESUPUS) | 4 | PRESUPUS | 2026-11-25 | 2026-11-30 | 3.1.2 FS; 2.2.1 FS
-3.2.2 | nu | nu | TSF01B1 Sprijiniri maluri cu dulapi (80 mp) | ELCAS SRL (PRESUPUS) | 4 | PRESUPUS | 2026-11-26 | 2026-12-01 | 3.2.1 SS+1z
-3.2.3 | nu | nu | TSE01C1 Nivelare și rectificare manuală fund șanț | ELCAS SRL (PRESUPUS) | 1 | PRESUPUS | 2026-12-02 | 2026-12-02 | 3.2.1 FS; 3.2.2 FS
+3 | da | nu | Ob.2 (0002) Terasamente bretea | SUBCONTRACTANT_A (subcontractant – PRESUPUS) | 48 | calculat (rezumat) | 2026-11-12 | 2027-01-18 | -
+3.1 | da | nu | Deviz 166201 Pregătire culoar de lucru | SUBCONTRACTANT_A (PRESUPUS) | 2 | calculat (rezumat) | 2026-11-12 | 2026-11-13 | -
+3.1.1 | nu | nu | TSH01A1 Degajarea terenului de corpuri străine (420 mp) | SUBCONTRACTANT_A (PRESUPUS) | 1 | PRESUPUS | 2026-11-12 | 2026-11-12 | 2.1.1 FS
+3.1.2 | nu | nu | TSC19B1 + TSC22D1 Săpătură cu buldozerul și împingerea pământului (96 mc) – în afara zonei de 6 m | SUBCONTRACTANT_A (PRESUPUS) | 1 | PRESUPUS | 2026-11-13 | 2026-11-13 | 3.1.1 FS; 2.1.2 FS
+3.2 | da | nu | Deviz 166202 Săpături șanț | SUBCONTRACTANT_A (PRESUPUS) | 6 | calculat (rezumat) | 2026-11-25 | 2026-12-02 | -
+3.2.1 | nu | nu | TSA04E1 Săpătură manuală șanț, gropi de poziție și sub conductă (102 mc) | SUBCONTRACTANT_A (PRESUPUS) | 4 | PRESUPUS | 2026-11-25 | 2026-11-30 | 3.1.2 FS; 2.2.1 FS
+3.2.2 | nu | nu | TSF01B1 Sprijiniri maluri cu dulapi (80 mp) | SUBCONTRACTANT_A (PRESUPUS) | 4 | PRESUPUS | 2026-11-26 | 2026-12-01 | 3.2.1 SS+1z
+3.2.3 | nu | nu | TSE01C1 Nivelare și rectificare manuală fund șanț | SUBCONTRACTANT_A (PRESUPUS) | 1 | PRESUPUS | 2026-12-02 | 2026-12-02 | 3.2.1 FS; 3.2.2 FS
 3.2.4 | nu | da | Verificare șanț bretea (PCC 4.1) + PV recepție calitativă teren | beneficiar + proiectant + Gazpet | 0 | jalon | 2026-12-02 | 2026-12-02 | 3.2.3 FS; 1.7.2 FS+7z
-3.3 | da | nu | Deviz 166203 Umplere șanț și gropi de poziție | ELCAS SRL (PRESUPUS) | 3 | calculat (rezumat) | 2027-01-08 | 2027-01-12 | -
-3.3.1 | nu | nu | TSD01D1 + CG32A# Umplutură manuală în straturi compactate (102 mc) | ELCAS SRL (PRESUPUS) | 2 | PRESUPUS | 2027-01-08 | 2027-01-11 | 5.6.2 FS
-3.3.2 | nu | nu | TSD06A1 Compactare cu placa vibrantă, grad 97–98% (102 mc) | ELCAS SRL (PRESUPUS) | 2 | PRESUPUS | 2027-01-11 | 2027-01-12 | 3.3.1 SS+1z; 3.3.1 FF
-3.4 | da | nu | Deviz 166204 Refacere amplasament | ELCAS SRL (PRESUPUS) | 2 | calculat (rezumat) | 2027-01-15 | 2027-01-18 | -
-3.4.1 | nu | nu | TSD01D1 + TSC22D1 Împrăștiere pământ afânat și împingere cu buldozerul (96 mc) | ELCAS SRL (PRESUPUS) | 1 | PRESUPUS | 2027-01-15 | 2027-01-15 | 3.3.2 FS; 2.4.1 FS
-3.4.2 | nu | nu | TSE04B1 Nivelare teren cu buldozerul (420 mp) și refacere strat vegetal | ELCAS SRL (PRESUPUS) | 1 | PRESUPUS | 2027-01-18 | 2027-01-18 | 3.4.1 FS; 2.4.2 FS
+3.3 | da | nu | Deviz 166203 Umplere șanț și gropi de poziție | SUBCONTRACTANT_A (PRESUPUS) | 3 | calculat (rezumat) | 2027-01-08 | 2027-01-12 | -
+3.3.1 | nu | nu | TSD01D1 + CG32A# Umplutură manuală în straturi compactate (102 mc) | SUBCONTRACTANT_A (PRESUPUS) | 2 | PRESUPUS | 2027-01-08 | 2027-01-11 | 5.6.2 FS
+3.3.2 | nu | nu | TSD06A1 Compactare cu placa vibrantă, grad 97–98% (102 mc) | SUBCONTRACTANT_A (PRESUPUS) | 2 | PRESUPUS | 2027-01-11 | 2027-01-12 | 3.3.1 SS+1z; 3.3.1 FF
+3.4 | da | nu | Deviz 166204 Refacere amplasament | SUBCONTRACTANT_A (PRESUPUS) | 2 | calculat (rezumat) | 2027-01-15 | 2027-01-18 | -
+3.4.1 | nu | nu | TSD01D1 + TSC22D1 Împrăștiere pământ afânat și împingere cu buldozerul (96 mc) | SUBCONTRACTANT_A (PRESUPUS) | 1 | PRESUPUS | 2027-01-15 | 2027-01-15 | 3.3.2 FS; 2.4.1 FS
+3.4.2 | nu | nu | TSE04B1 Nivelare teren cu buldozerul (420 mp) și refacere strat vegetal | SUBCONTRACTANT_A (PRESUPUS) | 1 | PRESUPUS | 2027-01-18 | 2027-01-18 | 3.4.1 FS; 2.4.2 FS
 3.4.3 | nu | da | Verificare astupare și aducere teren la condițiile inițiale (PCC 4.15) – bretea | beneficiar + Gazpet | 0 | jalon | 2027-01-18 | 2027-01-18 | 3.4.2 FS; 1.7.6 FS+7z
 4 | da | nu | Ob.3 (0003) Montare tub de protecție drum principal (L1 = 36,5 m) | Gazpet | 42 | calculat (rezumat) | 2026-11-11 | 2027-01-07 | -
 4.1 | da | nu | Deviz 166301 Pregătirea conductei (etapa 4 PT) | Gazpet | 13 | calculat (rezumat) | 2026-11-23 | 2026-12-09 | -

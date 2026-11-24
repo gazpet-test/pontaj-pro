@@ -13,7 +13,7 @@ Unul dintre cele trei motive a fost graficul Gantt/PERT. Comisia (solicitarea 40
 - astuparea șanțului înaintea izolării și verificării tubului (drum principal);
 - verificarea izolației înaintea izolării (bretea);
 - instalația de aerisire montată înaintea săpăturii (bretea);
-- subcontractantul ELCAS nu era evidențiat;
+- subcontractantul SUBCONTRACTANT_A nu era evidențiat;
 - PERT-ul nu avea LS/LF.
 
 Răspunsul nostru la clarificări a adus un grafic nou, ceea ce poate fi văzut ca o completare a ofertei. Graficul se face azi de mână în MS Project, de un singur om, fără nicio verificare independentă înainte de depunere.
@@ -273,7 +273,7 @@ Dacă o verificare pică, cererea se întoarce la Etapa 1 cu lista problemelor (
 ## 10. Criterii de acceptare
 
 1. **Reluarea Jilava (lic. 93)**:
-   - pornit pe licitația 93, sistemul se oprește întâi cu întrebări. Cel puțin: termen livrare țeavă Ø914, norme sudură/sablare/izolare/săpătură manuală, echipe, articolele ELCAS, regim de iarnă;
+   - pornit pe licitația 93, sistemul se oprește întâi cu întrebări. Cel puțin: termen livrare țeavă Ø914, norme sudură/sablare/izolare/săpătură manuală, echipe, articolele SUBCONTRACTANT_A, regim de iarnă;
    - după răspunsuri, ajunge la GO în ≤3 verificări Paw;
    - termenul ține cu sărbătorile incluse sau sistemul spune clar că nu se poate.
 2. **Regresia verificatorului**: graficul depus la Jilava (`grafic_X.txt` din dovezi) trece prin Etapa 3 și primește NO-GO cu cele 5 constatări ale comisiei găsite. E test fix, rulat la orice schimbare de brief.
