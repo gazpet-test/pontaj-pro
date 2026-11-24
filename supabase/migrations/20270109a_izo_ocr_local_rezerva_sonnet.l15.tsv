@@ -1,0 +1,6 @@
+# L15 v2 - manifestul diferentelor pentru 20270109a_izo_ocr_local_rezerva_sonnet (AMPRENTA_GLOBALA v2); familie TAB eticheta TAB operatie TAB amprenta
+# generat pe clona cu scripts/livrare_l15_manifest.sh (ROLLBACK, nimic comis); migrarea sha256 f982e3a622cad052173a25fb0a0031c84fae0b15cd3317c1c6b8933c050b7c1e
+# clona: server_version_num 170006, rol postgres
+# clona: GLOBAL inainte b6fa8e2247a34cad5780e099497b5231 (27302 randuri), dupa b1780a93fb36d023459dee8d77475223 (27302 randuri); 2 obiecte
+coloana	coloana public.ocr_local_config.rezerva_usd	schimbat	91e7b1d9fd0579b5d827a310c73934ec
+constrangere	constrangere tabel public.ocr_local_config.ocr_local_config_rezerva_usd_check	schimbat	21349e2b8cbf0368f0c2133ac8325d3b

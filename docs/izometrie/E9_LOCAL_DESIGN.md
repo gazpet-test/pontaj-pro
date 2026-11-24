@@ -1,5 +1,13 @@
 # E9 — citirea avizelor E3 cu OCR local (LightOn + MinerU) și Haiku doar pe dezacorduri — DESIGN r3
 
+> **Actualizare 24.11.2026 (decizia Răzvan):** Haiku iese complet din citirea avizelor. Fallback-ul după eșecul local și arbitrajul
+> celulelor (edge `izo-e3-ocr-local`) citesc cu **Sonnet 5.5** (`MODEL_LOCAL_E3`), intrarea plafonată la 46.000 de tokeni, rezerva
+> 0,20 USD (migrarea `20270109a`, `ocr_local_config.rezerva_usd`); edge-ul refuză fără apel dacă suma rezervată nu acoperă costul
+> maxim (0,196). Unde textul de mai jos spune „Haiku” pe ramura plătită, citește „Sonnet”. Eticheta `ocr_local_cereri.ramura = 'haiku'`
+> rămâne neschimbată în BD: înseamnă „ramura plătită”, modelul efectiv e în `rezultat.model`.
+> **Runda 2 (PR #1183):** termenul apelului plătit se recalculează DUPĂ confirmarea fazei `trimis`; dacă nu mai ajunge (sub prag sau buget
+> expirat), apelul nu pleacă, iar faza se închide fără cost (`raspuns` marcat „apel netrimis” → `decontat` 0, rezerva eliberată integral).
+
 Stare: **design r3, fără cod** (laborator OCR, 23.10.2026), pe PR #855.
 - **Review r2:** Jakarinos, NO-GO, fără P0. P1-3 (grila) și P1-6 (identități) sunt închise.
 - **Ce schimbă r3**, marcat **[r3-n]** în text:

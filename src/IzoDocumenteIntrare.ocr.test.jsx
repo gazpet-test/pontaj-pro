@@ -87,11 +87,13 @@ describe.skipIf(!rtl)(`E9 B4 — componentă montată${rtl ? '' : ` (infrastruct
   it('expirata → exact un fallback local și zero pilot direct; sursă și cost vizibile', async () => {
     mock.invoke.mockResolvedValueOnce(ok({ success:true, cerere_id:'id', termen_local:new Date(Date.now() + 90000).toISOString() }))
       .mockResolvedValueOnce(ok({ success:true, stare:'expirata' }))
-      .mockResolvedValueOnce(ok({ ...propunere, sursa:{ ramura:'haiku' }, cost_usd:0.0123 }))
+      .mockResolvedValueOnce(ok({ ...propunere, model:'claude-sonnet-5-5', sursa:{ ramura:'fallback' }, cost_usd:0.0123 }))
     rtl.fireEvent.click(await monteaza()); await avanseaza(1500)
     expect(ops()).toEqual(['cere', 'stare', 'fallback'])
-    expect(rtl.screen.getByText(/Haiku \(fallback local\)/)).toBeTruthy()
-    expect(rtl.screen.getByText(/0,0123 USD/)).toBeTruthy()
+    // 24.11.2026: fallback-ul local citește cu Sonnet („Sonnet automat dacă serviciul local nu poate citi” devine adevărat)
+    expect(rtl.screen.getByText(/Sonnet \(fallback local\)/)).toBeTruthy()
+    expect(rtl.screen.getByText(/Cost \(Sonnet, fallback local\): 0,0123 USD/)).toBeTruthy()
+    expect(rtl.screen.queryByText(/Haiku/)).toBeNull()
     expect(mock.rpc.mock.calls.every(([nume]) => nume === 'fn_izo_proiecte_protejate')).toBe(true)
   })
 
