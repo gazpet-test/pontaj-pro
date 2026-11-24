@@ -1,0 +1,41 @@
+# Cereri de date – generator grafic AI (Jilava, protejare DN700 în tub Ø914,4)
+
+Regula ERP: fără aceste date generatorul se oprește și nu emite graficul. Pentru test, graficul a fost totuși generat, cu 138 din 161 de durate marcate `PRESUPUS` și cu atribuirea SUBCONTRACTANT_A marcată `PRESUPUS`. Ordinea de mai jos e după impactul asupra drumului critic și asupra conformității ofertei.
+
+## A. Blocante (fără ele graficul nu poate fi emis)
+
+| # | Ce lipsește | De ce e necesar | Activități afectate |
+|---|---|---|---|
+| 1 | **Termenul de livrare pentru tubul Ø914,4x7,1 L245N** (SR EN ISO 3183, certificat 3.1, 52,5 m), furnizorul și sursa (cerința 29). Trebuie confirmat și dacă se poate comanda la semnarea contractului, înainte de OI (OI vine la max. 15 zile după GBE). | Este primul element de pe drumul critic: 20 de zile presupuse. Fiecare zi în plus întârzie finalul cu o zi, iar rezerva este doar de 3 zile. | 1.6.1, 1.6.6, apoi tot lanțul 4.3.x → 8.8 |
+| 2 | **Norme de productivitate validate** pentru lucrările de oțel și terasamente. În ERP toate sunt „propus”: sudare semi-tuburi (m/zi/sudor, 7,1 mm, pe poziție în șanț), tăiere longitudinală, sablare și izolare C50 (mp/zi/echipă), săpătură manuală cu sprijiniri (mc/om-zi, adâncime 1,5–3 m), umplutură compactată în straturi, montaj PC. | Toate duratele sunt PRESUPUS. Fără norme validate, durata nu se poate deduce din cantitățile F3. | toate articolele din 166101–166602 |
+| 3 | **Componența și numărul echipelor**: câți sudori și echipe de izolatori, o macara-lansator sau două, câte echipe de terasamente. | Graficul presupune o echipă pe fiecare meserie, cu legături de resursă drum principal → bretea (de ex. 4.3.9 → 5.3.9, 4.1.7 → 5.1.7). Cu echipe paralele, bretea iese de pe drumul critic. | 3.x, 5.x, 7.x (legăturile de resursă) |
+| 4 | **Ce execută SUBCONTRACTANT_A**: ce articole de deviz și ce obiecte. | Fișa de date IV.4.1 pct. 2 cere ca activitățile subcontractantului să fie „evidențiate distinct” în Gantt, iar formularul IV.4.2 cere centralizatorul (cerința 60). În grafic, terasamentele Ob.1 și Ob.2 sunt atribuite SUBCONTRACTANT_A ca PRESUPUS. | 2.x, 3.x (sau altele, după răspuns) |
+| 5 | **Calendarul de lucru**: sărbătorile legale (30.11, 1.12, 25.12, 1.01, 6–7.01 cad în zile lucrătoare) și regimul de iarnă: nu se toarnă beton la temperaturi negative (CS II.2.2), sudarea sub +5°C se face doar cu procedură calificată (CS I.2.6), izolarea doar la +3°C peste punctul de rouă (CS). | Cu sărbătorile incluse, finalul calculat se mută la **2027-02-04, după termenul din 2027-02-01**. Lucrările se fac între noiembrie și ianuarie. | toate. Critice: 4.3.9, 4.3.16–4.3.17, 4.5.2, 6.1.3, 7.1.3 |
+| 6 | **Durate de răspuns de la beneficiar și TRANSGAZ** pentru: acceptarea WPS/WPQR și a procedurilor (cerințele 149, 366), emiterea PV-ului sau permisului de lucru cu foc deschis (cerințele 115, 144, 254), documentul de concordanță proiect–execuție PC (precondiție pentru PIF, CS II.2.2) și convocarea comisiei de recepție (HG 343/2017). | În grafic sunt presupuse cu 5 zile, 0 zile, 0 zile și respectiv 0 zile de decalaj. | 1.5, 1.8.4, 6.2.1, 7.2.1, 8.7 |
+| 7 | **Ce înseamnă „încadrarea în durată”**: termenul de 3 luni se încheie la comunicarea finalizării lucrărilor sau la PV-ul de recepție la terminarea lucrărilor? | Contează dacă recepția (8.7) poate cădea după 2027-02-01. | 8.6, 8.7, 8.8 |
+
+## B. Necesare pentru o secvențiere corectă (contradicții între documente)
+
+| # | Ce trebuie clarificat | De ce | Activități |
+|---|---|---|---|
+| 8 | **Ce metodă NDT se folosește la sudurile tubului**: F3 are gamagrafiere + pulberi magnetice (M1L05L1, M1L29A1), iar memoriul, CS și cerințele 142/150 cer UT 100% + VT 100%. Mai trebuie stabilit dacă laboratorul este propriu sau terț și în cât timp emite buletinele. | Durata NDT și zona de excludere la gamagrafiere diferă. Laboratorul propriu de sudură și de PC este cerut de memoriu, cap. h. | 4.1.3, 4.3.11–4.3.13, 5.1.3, 5.3.11–5.3.13 |
+| 9 | **Când se face DCVG-ul**: CS II.2.1.2 spune „la trei luni de la astuparea conductei”, iar PCC 5, memoriul și cerințele 114/156 spun „înainte de recepția la terminarea lucrărilor” și din nou la recepția finală. | Trei luni după astupare ar depăși termenul contractului. În grafic DCVG #1 este pus înainte de recepție, iar DCVG #2 la recepția finală, în afara contractului. | 8.1.1, 8.1.2 |
+| 10 | **Durata remedierilor** pentru defectele de coroziune și sudurile existente neconforme, în „program aprobat de TRANSGAZ” (cerința 369). | Sunt modelate ca jaloane de 0 zile (4.1.4, 5.1.4). Orice remediere reală intră direct pe drumul critic al conductei. | 4.1.4, 5.1.4, 4.3.13, 5.3.13 |
+| 11 | **Cum se aplică notificarea de 10 zile (NOTĂ PCC)**: sunt zile calendaristice sau lucrătoare, se aplică și la predarea amplasamentului (PCC 2), și acceptă beneficiarul notificări „rulante” cu calendar estimat? | Grafic: decalaj FS+7z după ziua notificării, adică ≥10 zile calendaristice. Fiecare punct de control e precedat de notificarea N1–N7. | 1.7.x, toate punctele de control |
+| 12 | **Ordinea aerisire → izolare tub**: memoriul și CS pun aerisirea după izolarea și verificarea tubului, dar racordul țevii 60,3 se sudează pe tubul deja izolat. Sudarea racordului înainte de izolarea tubului este acceptată? | Graficul urmează documentele și adaugă o retușare plus o verificare de continuitate înainte de PVLA (4.5.6, 4.6.1). | 4.4.1, 4.5.x, 4.6.1 (și 5.x) |
+| 13 | **Pământ excavat mecanizat în zona de protecție**: TSC04B1 (166305/166405) este săpătură mecanizată la ~2,5 m de conductă, iar memoriul (cap. d) și CS cer săpătură manuală în zona de 6 m. | Schimbă tehnologia și durata. | 4.5.1, 5.5.1 |
+| 14 | **Cantitatea TSE01C1 din 166102**: 121,5 x 100 mp (12.150 mp), față de 0,6 x 100 mp la bretea. | Pare o eroare a proiectantului. Dacă e corectă, nivelarea fundului de șanț durează mult mai mult. | 2.2.3 |
+| 15 | **Rolul consolelor metalice RPEJ01C1#** (350 kg / 125 kg): susțin conducta în funcțiune pe deschiderea șanțului sau semi-tuburile la sudare? | Dacă susțin conducta, trebuie montate în timpul săpăturii sub conductă, nu după verificarea șanțului. | 4.3.4–4.3.5, 5.3.4–5.3.5, 2.2.1 |
+| 16 | **Etanșarea capetelor tubului**: manșoane EPDM cu coliere inox (memoriul) sau manșoane termocontractabile armate cu fibră (CS, F3 IZMTT[9])? Izolația de protecție la sudură este vată minerală (memoriul) sau pătură ceramică 1260°C (CS, F3)? | Afectează procedura și durata, nu ordinea operațiilor. | 4.3.18, 4.1.8, 5.3.18, 5.1.8 |
+| 17 | **Starea solului și a apei subterane**: TSA04E2 este „pământ îmbibat cu apă” la priză. Trebuie epuismente? | Dacă da, trebuie adăugată o activitate de epuisment și decalaje la săpătură și umplutură. | 2.2.1, 3.2.1, 6.1.1, 7.1.1 |
+
+## C. Necesare pentru planificarea resurselor și jaloanelor
+
+| # | Ce lipsește | De ce | Activități |
+|---|---|---|---|
+| 18 | Termenele de livrare pentru benzile C50, manșoane, distanțieri CDM 50, aerisitoarele cu sită Davis, prize PVC, anozi Zn și cabluri (cerința 29). | Sunt presupuse la 10–15 zile. Marja este de 6 zile pentru distanțieri și aerisire. | 1.6.2–1.6.5, 1.6.7–1.6.8 |
+| 19 | Disponibilitatea utilajelor: macara-lansator, buldozer 81–180 CP, plăci vibrante, echipament de sablare, autolaborator, echipament DCVG. | Sunt necesare pentru alocarea resurselor cerută de Fișa IV.4.1 pct. 2 și pentru legăturile de resursă. | 4.3.6, 4.3.8, 5.3.6, 5.3.8, 2.1.2, 2.4.x, 8.1.1 |
+| 20 | Durata întăririi betonului B300 iarna, la fundațiile aerisirii și ale prizelor (presupusă 3 zile pentru aerisire, 0 pentru priză). | Este o pauză tehnologică înaintea montării aerisitorului și a cablurilor. | 4.5.3, 5.5.3, 6.1.3, 7.1.3 |
+| 21 | Data predării amplasamentului: înainte de OI (ordinea din memoriu f) sau la OI (cerința 141)? Mai trebuie știut dacă există proiect OS aprobat și unde e amplasamentul, la ≥20 m de conductă. | Graficul presupune ziua OI. | 1.3, 1.8.1 |
+| 22 | Programul de coordonare cu executantul lucrărilor rutiere (cerințele 118, 161, 195): de la ce dată i se predă frontul în zona de 20 m? | Ar fi un jalon contractual extern (8.5). | 8.5 |
+| 23 | Durata de întocmire a Cărții tehnice și a documentației as-built în STEREO 70. | Sunt presupuse la 2 și 3 zile. Cartea tehnică este o condiție pentru recepție (cerința 180). | 8.2, 8.3 |

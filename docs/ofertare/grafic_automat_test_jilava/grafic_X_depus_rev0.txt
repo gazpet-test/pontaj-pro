@@ -1,0 +1,124 @@
+Grafic MS Project depus (REV 0), citit din .mpp cu MPXJ. Nivel = numărul de puncte din WBS.
+WBS | rezumat | jalon | denumire | durata_zile_lucratoare | start | finish | predecesori (WBS tip+lag)
+0 | True | False | Protejare Conductă Transport Gaze Dn700 Bobești-Jilava (Inel București) REV0 | 65.0 | 2026-11-02 | 2027-01-29 | 
+1 | True | False | PROTEJARE CONDUCTĂ TRANSPORT GAZE DN700 BOBEȘTI-JILAVA (INEL BUCUREȘTI) | 65.0 | 2026-11-02 | 2027-01-29 | 
+1.1 | False | True | Ordin de incepere a lucrarilor | 0.0 | 2026-11-02 | 2026-11-02 | 
+1.2 | False | True | Predare-primire amplasamentului | 0.0 | 2026-11-02 | 2026-11-02 | 1.1 FS
+1.3 | False | True | Trasare lucrari | 0.0 | 2026-11-02 | 2026-11-02 | 1.2 FS
+1.4 | False | True | Finalizare procurare materiale | 0.0 | 2026-11-30 | 2026-11-30 | 1.12.1.1 FS
+1.5 | False | True | Finalizare montare patura ceramica | 0.0 | 2026-12-18 | 2026-12-18 | 1.12.1.6 FS
+1.6 | False | True | Finalizare montare tub protector | 0.0 | 2027-01-08 | 2027-01-08 | 1.12.3.4 FS
+1.7 | False | True | Finalizare masuratori specifice | 0.0 | 2027-01-22 | 2027-01-22 | 1.14.2.1 FS
+1.8 | False | True | Finalizare lucrari | 0.0 | 2027-01-29 | 2027-01-29 | 1.10.4 FS; 1.11.4 FS; 1.12.5.9 FS; 1.13.5.9 FS; 1.14.2 FS; 1.15.2 FS
+1.9 | False | True | Receptie la terminarea lucrarilor | 0.0 | 2027-01-29 | 2027-01-29 | 1.15.2.2 FS
+1.10 | True | False | Obiect 1 - TERASAMENTE DRUM PRINCIPAL | 58.0 | 2026-11-09 | 2027-01-27 | 
+1.10.1 | True | False | 166101 Pregatire culoar de lucru | 10.0 | 2026-11-09 | 2026-11-20 | 
+1.10.1.1 | False | False | curatare teren | 5.0 | 2026-11-09 | 2026-11-13 | 1.3 FS+4z
+1.10.1.2 | False | False | decopertare | 5.0 | 2026-11-16 | 2026-11-20 | 1.10.1.1 FS
+1.10.2 | True | False | 166102 Sapaturi sant | 5.0 | 2026-11-23 | 2026-11-27 | 
+1.10.2.1 | False | False | sapatrura, inclusiv nivelare fund sant | 5.0 | 2026-11-23 | 2026-11-27 | 1.10.1 FS
+1.10.2.2 | False | False | sprijiniri de maluri | 5.0 | 2026-11-23 | 2026-11-27 | 1.10.1.2 FS
+1.10.3 | True | False | 166103 Umplere sant si gropi de pozitie | 5.0 | 2027-01-18 | 2027-01-22 | 
+1.10.3.1 | False | False | astupare | 2.5 | 2027-01-18 | 2027-01-20 | 1.15.1.2 FS
+1.10.3.2 | False | False | compactare | 2.5 | 2027-01-20 | 2027-01-22 | 1.10.3.1 FS
+1.10.4 | True | False | 166104 Refacere amplasament | 5.5 | 2027-01-20 | 2027-01-27 | 
+1.10.4.1 | False | False | recopertare | 2.0 | 2027-01-20 | 2027-01-22 | 1.10.3.2 SS
+1.10.4.2 | False | False | nivelare | 3.0 | 2027-01-25 | 2027-01-27 | 1.10.3.2 FS
+1.11 | True | False | Obiect 2 - TERASAMENTE BRETEA | 60.0 | 2026-11-09 | 2027-01-29 | 
+1.11.1 | True | False | 166201 Pregatire culoar de lucru | 10.0 | 2026-11-09 | 2026-11-20 | 
+1.11.1.1 | False | False | curatare teren | 5.0 | 2026-11-09 | 2026-11-13 | 1.10.1.1 SS
+1.11.1.2 | False | False | decopertare | 5.0 | 2026-11-16 | 2026-11-20 | 1.11.1.1 FS
+1.11.2 | True | False | 166202 Sapaturi sant | 5.0 | 2026-11-23 | 2026-11-27 | 
+1.11.2.1 | False | False | sapatrura, inclusiv nivelare fund sant | 5.0 | 2026-11-23 | 2026-11-27 | 1.11.1 FS
+1.11.2.2 | False | False | sprijiniri de maluri | 5.0 | 2026-11-23 | 2026-11-27 | 1.11.1.2 FS
+1.11.3 | True | False | 166203 Umplere sant si gropi de pozitie | 5.0 | 2027-01-18 | 2027-01-22 | 
+1.11.3.1 | False | False | astupare | 3.0 | 2027-01-18 | 2027-01-20 | 1.10.3.1 SS
+1.11.3.2 | False | False | compactare | 3.0 | 2027-01-20 | 2027-01-22 | 1.11.3.1 SS+2z
+1.11.4 | True | False | 166204 Refacere amplasament | 8.0 | 2027-01-20 | 2027-01-29 | 
+1.11.4.1 | False | False | recopertare | 3.0 | 2027-01-20 | 2027-01-22 | 1.11.3.1 SS+2z
+1.11.4.2 | False | False | nivelare | 5.0 | 2027-01-25 | 2027-01-29 | 1.11.4.1 FS
+1.12 | True | False | Obiect 3 - MONTARE TUB DE PROTECTIE DRUM PRINCIPAL | 61.0 | 2026-11-03 | 2027-01-26 | 
+1.12.1 | True | False | 166301 Pregatirea conductei | 34.0 | 2026-11-03 | 2026-12-18 | 
+1.12.1.1 | False | False | procurare materiale (benzi, ID, etc.) | 20.0 | 2026-11-03 | 2026-11-30 | 1.2 FS
+1.12.1.2 | False | False | dezizolare conducta existenta | 5.0 | 2026-11-30 | 2026-12-04 | 1.12.1.1 FS-1z
+1.12.1.3 | False | False | verificare suduri de pe conducta existenta | 4.0 | 2026-12-07 | 2026-12-10 | 1.12.1.2 FS
+1.12.1.4 | False | False | curatare prin sablare suprafete dezizolate | 5.0 | 2026-12-07 | 2026-12-11 | 1.12.1.3 SS
+1.12.1.5 | False | False | izolare conducta existenta | 5.0 | 2026-12-07 | 2026-12-11 | 1.12.1.4 SS
+1.12.1.6 | False | False | montare patura ceramica | 5.0 | 2026-12-14 | 2026-12-18 | 1.12.1.5 FS
+1.12.2 | True | False | 166302 Verificarea calitatii izolatiei | 5.0 | 2026-12-07 | 2026-12-11 | 
+1.12.2.1 | False | False | verificare izolatie executata pe conducta existenta | 5.0 | 2026-12-07 | 2026-12-11 | 1.12.1.5 SS
+1.12.3 | True | False | 166303 Montarea tubului de protectie | 59.0 | 2026-11-03 | 2027-01-22 | 
+1.12.3.1 | False | False | procurare materile (teava, inele distantiere, benzi, etc.) | 20.0 | 2026-11-03 | 2026-11-30 | 1.2 FS
+1.12.3.2 | False | False | confectionare tub protector | 10.0 | 2026-11-30 | 2026-12-11 | 1.12.3.1 FS-1z
+1.12.3.3 | False | False | montare inele distantiere | 5.0 | 2026-12-21 | 2026-12-25 | 1.12.1.6 FS
+1.12.3.4 | False | False | montare tub protector (inclusiv executie suduri) | 10.0 | 2026-12-28 | 2027-01-08 | 1.12.3.3 FS
+1.12.3.5 | False | False | control suduri | 5.0 | 2027-01-11 | 2027-01-15 | 1.12.3.4 FS
+1.12.3.6 | False | False | curatare prin sablare suprafata exterioara tub | 2.0 | 2027-01-18 | 2027-01-19 | 1.12.3.5 FS
+1.12.3.7 | False | False | izolare tub protector | 2.0 | 2027-01-20 | 2027-01-21 | 1.12.3.6 FS
+1.12.3.8 | False | False | izolare capete tub | 1.0 | 2027-01-22 | 2027-01-22 | 1.12.3.7 FS
+1.12.4 | True | False | 166304 Verificarea calitatii izolatiei tubului de protectie | 5.0 | 2027-01-20 | 2027-01-26 | 
+1.12.4.1 | False | False | verificare izolatie executata la tubul protector | 5.0 | 2027-01-20 | 2027-01-26 | 1.12.3.7 SS
+1.12.5 | True | False | 166305 Montare instalatie de aerisire | 54.0 | 2026-11-03 | 2027-01-15 | 
+1.12.5.1 | False | False | procurare instalatie de aerisire | 20.0 | 2026-11-03 | 2026-11-30 | 1.2 FS
+1.12.5.2 | False | False | sapatura | 1.0 | 2027-01-11 | 2027-01-11 | 1.12.3.4 FS
+1.12.5.3 | False | False | montare instalatie de aerisire | 0.5 | 2027-01-12 | 2027-01-12 | 1.12.5.2 FS
+1.12.5.4 | False | False | executie conducta de legatura dintre tub si IA | 0.5 | 2027-01-12 | 2027-01-12 | 1.12.5.3 FS
+1.12.5.5 | False | False | curatare prin sablare suprafata exterioara cd legatura | 0.5 | 2027-01-13 | 2027-01-13 | 1.12.5.4 FS
+1.12.5.6 | False | False | izolare conducta de legatura | 0.5 | 2027-01-13 | 2027-01-13 | 1.12.5.5 FS
+1.12.5.7 | False | False | vopsire instalatie de aerisire | 0.5 | 2027-01-14 | 2027-01-14 | 1.12.5.6 FS
+1.12.5.8 | False | False | astupare | 0.5 | 2027-01-14 | 2027-01-14 | 1.12.5.7 FS
+1.12.5.9 | False | False | compactare | 1.0 | 2027-01-15 | 2027-01-15 | 1.12.5.8 FS
+1.13 | True | False | Obiect 4 - MONTARE TUB DE PROTECTIE BRETEA | 54.0 | 2026-11-03 | 2027-01-15 | 
+1.13.1 | True | False | 166401 Pregatirea conductei | 31.0 | 2026-11-03 | 2026-12-15 | 
+1.13.1.1 | False | False | procurare materiale (benzi, ID, etc.) | 20.0 | 2026-11-03 | 2026-11-30 | 1.2 FS
+1.13.1.2 | False | False | dezizolare conducta existenta | 5.0 | 2026-11-30 | 2026-12-04 | 1.13.1.1 FS-1z
+1.13.1.3 | False | False | verificare suduri de pe conducta existenta | 1.0 | 2026-12-07 | 2026-12-07 | 1.13.1.2 FS
+1.13.1.4 | False | False | curatare prin sablare suprafete dezizolate | 2.0 | 2026-12-08 | 2026-12-09 | 1.13.1.3 FS
+1.13.1.5 | False | False | izolare conducta existenta | 2.0 | 2026-12-10 | 2026-12-11 | 1.13.1.4 FS
+1.13.1.6 | False | False | montare patura ceramica | 2.0 | 2026-12-14 | 2026-12-15 | 1.13.1.5 FS
+1.13.2 | True | False | 166402 Verificarea calitatii izolatiei | 5.0 | 2026-12-01 | 2026-12-07 | 
+1.13.2.1 | False | False | verificare izolatie executata pe conducta existenta | 5.0 | 2026-12-01 | 2026-12-07 | 1.13.1.1 FS
+1.13.3 | True | False | 166403 Montarea tubului de protectie | 52.0 | 2026-11-03 | 2027-01-13 | 
+1.13.3.1 | False | False | procurare materile (teava, inele distantiere, benzi, etc.) | 20.0 | 2026-11-03 | 2026-11-30 | 1.2 FS
+1.13.3.2 | False | False | confectionare tub protector | 10.0 | 2026-11-30 | 2026-12-11 | 1.13.3.1 FS-1z
+1.13.3.3 | False | False | montare inele distantiere | 5.0 | 2026-12-14 | 2026-12-18 | 1.13.3.2 FS
+1.13.3.4 | False | False | montare tub protector (inclusiv executie suduri) | 10.0 | 2026-12-21 | 2027-01-01 | 1.13.3.3 FS
+1.13.3.5 | False | False | control suduri | 5.0 | 2027-01-04 | 2027-01-08 | 1.13.3.4 FS
+1.13.3.6 | False | False | curatare prin sablare suprafata exterioara tub | 1.0 | 2027-01-11 | 2027-01-11 | 1.13.3.5 FS
+1.13.3.7 | False | False | izolare tub protector | 1.0 | 2027-01-12 | 2027-01-12 | 1.13.3.6 FS
+1.13.3.8 | False | False | izolare capete tub | 1.0 | 2027-01-13 | 2027-01-13 | 1.13.3.7 FS
+1.13.4 | True | False | 166404 Verificarea calitatii izolatiei tubului de protectie | 2.0 | 2027-01-14 | 2027-01-15 | 
+1.13.4.1 | False | False | verificare izolatie executata la tubul protector | 2.0 | 2027-01-14 | 2027-01-15 | 1.13.3.8 FS
+1.13.5 | True | False | 166405 Montare instalatie de aerisire | 49.0 | 2026-11-03 | 2027-01-08 | 
+1.13.5.1 | False | False | procurare instalatie de aerisire | 20.0 | 2026-11-03 | 2026-11-30 | 1.2 FS
+1.13.5.2 | False | False | sapatura | 5.0 | 2026-12-21 | 2026-12-25 | 1.13.3.3 FS
+1.13.5.3 | False | False | montare instalatie de aerisire | 5.0 | 2026-12-01 | 2026-12-07 | 1.13.5.1 FS
+1.13.5.4 | False | False | executie conducta de legatura dintre tub si IA | 5.0 | 2026-12-01 | 2026-12-07 | 1.13.5.1 FS
+1.13.5.5 | False | False | curatare prin sablare suprafata exterioara cd legatura | 5.0 | 2026-12-28 | 2027-01-01 | 1.13.5.2 FS
+1.13.5.6 | False | False | izolare conducta de legatura | 5.0 | 2026-12-08 | 2026-12-14 | 1.13.5.3 FS
+1.13.5.7 | False | False | vopsire instalatie de aerisire | 5.0 | 2026-12-08 | 2026-12-14 | 1.13.5.4 FS
+1.13.5.8 | False | False | astupare | 5.0 | 2027-01-04 | 2027-01-08 | 1.13.5.5 FS
+1.13.5.9 | False | False | compactare | 5.0 | 2026-12-15 | 2026-12-21 | 1.13.5.6 FS
+1.14 | True | False | Obiect 5 - PROTECTIE CATODICA TRAVERSARE DRUM PRINCIPAL | 64.0 | 2026-11-03 | 2027-01-29 | 
+1.14.1 | True | False | 166501 Montare priza de potential | 57.0 | 2026-11-03 | 2027-01-20 | 
+1.14.1.1 | False | False | procurare materiale (prize, anozi, etc.) | 20.0 | 2026-11-03 | 2026-11-30 | 1.2 FS
+1.14.1.2 | False | False | sapatrura | 5.0 | 2027-01-11 | 2027-01-15 | 1.12.5.2 SS
+1.14.1.3 | False | False | montare prize, anozi, cabluri | 1.0 | 2027-01-18 | 2027-01-18 | 1.14.1.2 FS
+1.14.1.4 | False | False | executie conexiuni | 1.0 | 2027-01-19 | 2027-01-19 | 1.14.1.3 FS
+1.14.1.5 | False | False | verificare montaje | 1.0 | 2027-01-20 | 2027-01-20 | 1.14.1.4 FS
+1.14.2 | True | False | 166502 Punere in functiune protectie catodica | 7.0 | 2027-01-21 | 2027-01-29 | 
+1.14.2.1 | False | False | efectuare masuratori specifice | 2.0 | 2027-01-21 | 2027-01-22 | 1.14.1.5 FS
+1.14.2.2 | False | False | eliberare buletine / rapoarte | 5.0 | 2027-01-25 | 2027-01-29 | 1.14.2.1 FS
+1.15 | True | False | Obiect 6 - PROTECTIE CATODICA TRAVERSARE BRETEA | 64.0 | 2026-11-03 | 2027-01-29 | 
+1.15.1 | True | False | 166601 Montare priza de potential | 57.0 | 2026-11-03 | 2027-01-20 | 
+1.15.1.1 | False | False | procurare materiale (prize, anozi, etc.) | 20.0 | 2026-11-03 | 2026-11-30 | 1.2 FS
+1.15.1.2 | False | False | sapatrura | 5.0 | 2027-01-11 | 2027-01-15 | 1.14.1.2 SS
+1.15.1.3 | False | False | montare prize, anozi, cabluri | 1.0 | 2027-01-18 | 2027-01-18 | 1.15.1.2 FS
+1.15.1.4 | False | False | executie conexiuni | 1.0 | 2027-01-19 | 2027-01-19 | 1.15.1.3 FS
+1.15.1.5 | False | False | verificare montaje | 1.0 | 2027-01-20 | 2027-01-20 | 1.15.1.4 FS
+1.15.2 | True | False | 166602 Punere in functiune protectie catodica | 7.0 | 2027-01-21 | 2027-01-29 | 
+1.15.2.1 | False | False | efectuare masuratori specifice | 2.0 | 2027-01-21 | 2027-01-22 | 1.15.1.5 FS
+1.15.2.2 | False | False | eliberare buletine / rapoarte | 5.0 | 2027-01-25 | 2027-01-29 | 1.15.2.1 FS
+1.16 | True | False | Organizare de santier | 64.0 | 2026-11-02 | 2027-01-28 | 
+1.16.1 | False | False | Organizare de santier | 63.0 | 2026-11-03 | 2027-01-28 | 1.2 FS
+1.16.2 | False | False |  | 1.0 | 2026-11-02 | 2026-11-02 | 

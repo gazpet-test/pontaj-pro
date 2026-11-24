@@ -1,0 +1,47 @@
+# Drumul critic (marjă totală 0), în ordinea ES — derivat din grafic_ai.txt prin cpm.py
+nr | WBS | denumire | durata | start | finish | predecesori critici
+1 | 1.1 | Ordin administrativ de începere a lucrărilor (OI) – PCC 1 | 0 | 2026-11-02 | 2026-11-02 | 
+2 | 1.6.1 | Comandă și livrare tub de protecție Ø914,4x7,1 L245N SR EN ISO 3183 (36,5 + 16,0 m) cu certificat 3.1 [3273442] | 20 | 2026-11-02 | 2026-11-27 | 1.1 FS
+3 | 1.6.6 | Recepție calitativă material tubular – vizual, măsurare, certificate (PCC 3.1; PV+CC) | 1 | 2026-11-30 | 2026-11-30 | 1.6.1 FS
+4 | 4.3.1 | TRB05C15 Transport tub prin purtare / rostogolire (50 m) la culoar | 1 | 2026-12-01 | 2026-12-01 | 1.6.6 FS
+5 | 4.3.2 | RI1061ZA331 Tăiere longitudinală tub în două semi-tuburi pe generatoare diametral opuse (4 tăieri) și pregătire rosturi | 2 | 2026-12-02 | 2026-12-03 | 4.3.1 FS
+6 | 4.3.3 | M1L77A1 (parțial) Sudare semicirculară a tronsoanelor de semi-tub | 1 | 2026-12-04 | 2026-12-04 | 4.3.2 FS
+7 | 4.3.6 | GA08L1% Lansare semi-tub inferior sub conductă cu macara-lansator | 1 | 2026-12-07 | 2026-12-07 | 4.3.3 FS
+8 | 4.3.7 | IZL04C1 + NMB025051 Montare distanțieri CDM 50 la 1,5 m (29 buc) | 1 | 2026-12-08 | 2026-12-08 | 4.3.6 FS
+9 | 4.1.8 | IZH08A1 Izolare cu pătură ceramică 1260°C a conductei în zona sudurii longitudinale (85,95 mp, coliere 29 buc) – după semi-tubul inferior | 1 | 2026-12-09 | 2026-12-09 | 4.3.7 FS
+10 | 4.3.8 | GA08L1% Lansare semi-tub superior peste conductă și centrare | 1 | 2026-12-10 | 2026-12-10 | 4.1.8 FS
+11 | 4.3.9 | M1L77A1 + NMB222791 Sudare longitudinală pe generatoare a semi-tuburilor, la poziție în șanț, clasa II (75,87 m) | 5 | 2026-12-11 | 2026-12-17 | 4.3.8 FS
+12 | 4.3.11 | Examinare vizuală 100% a sudurilor (PCC 4.6; SR EN ISO 17637) | 1 | 2026-12-18 | 2026-12-18 | 4.3.9 FS
+13 | 4.3.12 | M1L05L1 + M1L29A1 Control nedistructiv suduri tub (gamagrafiere 5 buc + pulberi magnetice 75,87 m; CS/memoriu: UT 100%) (PCC 4.7) | 2 | 2026-12-21 | 2026-12-22 | 4.3.11 FS
+14 | 4.3.13 | Remediere suduri neconforme și reexaminare (dacă e cazul) | 1 | 2026-12-23 | 2026-12-23 | 4.3.12 FS
+15 | 4.3.14 | Jurnal suduri și buletine VT/NDT acceptate (PCC 4.8; PVLA+BM) | 0 | 2026-12-23 | 2026-12-23 | 4.3.13 FS
+16 | 4.3.15 | M1G27A1 Polizarea cordoanelor de sudură în vederea protecției anticorozive (75,87 m) | 1 | 2026-12-24 | 2026-12-24 | 4.3.14 FS
+17 | 4.3.16 | IZA01F1 + NMB019931 Sablare tub de protecție (104,8 mp) | 2 | 2026-12-25 | 2026-12-28 | 4.3.15 FS
+18 | 4.3.17 | IZFBTT[6] Izolare tub de protecție cu benzi C50, tip foarte întărit (157,2 mp) | 2 | 2026-12-28 | 2026-12-29 | 4.3.16 SS+1z; 4.3.16 FF+1z
+19 | 4.4.1 | AUT4803 + NMB020161 Verificare izolație tub: aderență, grosime (PCC 4.3), continuitate izotest 25 kV (PCC 4.9) | 1 | 2026-12-30 | 2026-12-30 | 4.3.17 FS
+20 | 4.5.4 | GA11A1 Montare instalație de aerisire DN150 cu sită Davis pe fundație | 1 | 2026-12-31 | 2026-12-31 | 4.4.1 FS
+21 | 4.5.5 | ACB08A1 + M1J38A1 + M1G27A1 + NMB222791 Montare țeavă 60,3x3,6 + cot, sudare la tubul de protecție și la aerisitor, poansonare, polizare, examinare vizuală | 1 | 2027-01-01 | 2027-01-01 | 4.5.4 FS
+22 | 4.5.6 | IZA01B1 + IZL06C1 Sablare și izolare țeavă la ieșirea din sol + retușare izolație tub la racord | 1 | 2027-01-04 | 2027-01-04 | 4.5.5 FS
+23 | 6.1.6 | W2H04A1 + W2G01A01 + EA01B1 + W2D14A01 Pozare cabluri CYY 1x25 (roșu) / 1x6 (negru) în pat de nisip, tub PVC, papuci, conectare la bornele prizei | 1 | 2027-01-04 | 2027-01-04 | 4.5.5 FS
+24 | 4.3.18 | IZMTT[9] Montare manșoane de izolare/etanșare a spațiului inelar la capetele tubului (2 buc) | 1 | 2027-01-05 | 2027-01-05 | 4.5.6 FS
+25 | 6.1.7 | W2J02A1 Verificare și încercare cabluri (continuitate izolație înainte de îngropare, marcaj, secțiune) | 1 | 2027-01-05 | 2027-01-05 | 6.1.6 FS
+26 | 4.6.1 | Verificare contact tub–conductă (PCC 4.10) și continuitate izolație pe zonele retușate | 1 | 2027-01-06 | 2027-01-06 | 4.3.18 FS; 6.1.7 FS
+27 | 4.6.2 | PV lucrări ascunse – drum principal (izolație conductă și tub, distanțieri, manșoane, aerisire, PC) – admis astuparea | 0 | 2027-01-06 | 2027-01-06 | 4.6.1 FS
+28 | 2.3.1 | TSD01D1 + CG32A# Umplutură manuală în straturi de 10–15 cm până la 30 cm peste generatoare, apoi 20–30 cm (207 mc) | 4 | 2027-01-07 | 2027-01-12 | 4.6.2 FS
+29 | 2.3.2 | TSD06A1 Compactare cu placa vibrantă 0,7 t, grad 97–98% (207 mc) | 4 | 2027-01-08 | 2027-01-13 | 2.3.1 SS+1z; 2.3.1 FF
+30 | 8.1.1 | Măsurători DCVG pe ambele traversări, cu grupurile de anozi decuplate | 1 | 2027-01-14 | 2027-01-14 | 2.3.2 FS
+31 | 8.1.2 | Raport DCVG (număr, mărime, coordonate GPS, caracter coroziv) + buletin de verificare | 1 | 2027-01-15 | 2027-01-15 | 8.1.1 FS
+32 | 6.2.3 | Conectare anozi–conductă în priză (scurtcircuitoare platbandă Cu 12,5x2) după DCVG | 1 | 2027-01-18 | 2027-01-18 | 8.1.2 FS
+33 | 7.2.3 | Conectare anozi–conductă în priză după DCVG | 1 | 2027-01-18 | 2027-01-18 | 8.1.2 FS
+34 | 6.2.4 | Polarizare conductă (minim 2 zile; măsurători după 3 zile de la polarizare) | 3 | 2027-01-19 | 2027-01-21 | 6.2.3 FS
+35 | 7.2.4 | Polarizare conductă (minim 2 zile; măsurători după 3 zile de la polarizare) | 3 | 2027-01-19 | 2027-01-21 | 7.2.3 FS
+36 | 6.2.5 | W2J02A1 + Măsurare potențial structură/sol ON/OFF (≥ −850 mV OFF; −900 mV la injecție) (PCC 4.14), diagramă potențial | 1 | 2027-01-22 | 2027-01-22 | 6.2.4 FS
+37 | 7.2.5 | W2J02A1 + Măsurare potențial ON/OFF (PCC 4.14), diagramă potențial | 1 | 2027-01-22 | 2027-01-22 | 7.2.4 FS
+38 | 6.2.6 | Buletin PIF protecție catodică semnat Constructor + TRANSGAZ – drum principal | 0 | 2027-01-22 | 2027-01-22 | 6.2.5 FS
+39 | 7.2.6 | Buletin PIF protecție catodică semnat Constructor + TRANSGAZ – bretea | 0 | 2027-01-22 | 2027-01-22 | 7.2.5 FS
+40 | 8.3 | Completare Carte tehnică a construcției (opis, certificate în original, PV, buletine, jurnal suduri, PCC completat) | 2 | 2027-01-25 | 2027-01-26 | 8.1.2 FS; 6.2.6 FS; 7.2.6 FS
+41 | 8.6 | Comunicare scrisă către beneficiar privind finalizarea lucrărilor | 0 | 2027-01-26 | 2027-01-26 | 8.3 FS
+42 | 8.7 | Recepția la terminarea lucrărilor (PCC 6; HG 343/2017; cu reprezentant TRANSGAZ) | 1 | 2027-01-27 | 2027-01-27 | 8.6 FS
+43 | 8.8 | Final proiect – PV de recepție la terminarea lucrărilor | 0 | 2027-01-27 | 2027-01-27 | 8.7 FS
+
+# Durata drumului critic: 63 zile lucrătoare (2026-11-02 – 2027-01-27); termen contractual 2027-02-01; rezervă 3 zile lucrătoare.
