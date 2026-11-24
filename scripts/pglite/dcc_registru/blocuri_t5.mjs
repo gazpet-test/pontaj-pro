@@ -213,6 +213,34 @@ export const BLOCURI_T5 = [
     },
   },
   {
+    // review r1 implementare (P2): configurarea reia cheia proprie ÎNAINTEA dreptului (L05), ca registrul; o cheie nouă = 42501
+    nume: 'p_reluare_config_dupa_retragere', task: 5, cere: ['5'], fixtura: false,
+    async fn(db, A) {
+      const g = GHIDURI.G1, kg = K(61), kc = K(62), kp = K(63), kp2 = K(64)
+      const rg = await trece(A, rpc(db, U.OWNER, 'fn_dcc_ghid_creeaza', [JSON.stringify(g), kg]), 'ghid cu Kg')
+      const rc = await trece(A, rpc(db, U.OWNER, 'fn_dcc_contract_creeaza', ['BEN', '30', 'automat', null, kc]), 'contract cu Kc')
+      const sp = (k, versiune) => rpc(db, U.OWNER, 'fn_dcc_proiect_seteaza', [1, rc?.contract_id, rg?.ghid_id, 'AAA', 'RO', 'dcc@exemplu.invalid', tab([]), '{}', null, 15, versiune, k])
+      const rp = await trece(A, sp(kp, null), 'proiect creat cu Kp')
+      const ru = await trece(A, sp(kp2, 1), 'proiect actualizat cu Kp2')
+      await db.exec(`UPDATE public.profiles SET is_owner = false WHERE id = '${U.OWNER}'`)
+      try {
+        const inainte = await numaraTot(db)
+        for (const [ce, p, a] of [['ghid', rpc(db, U.OWNER, 'fn_dcc_ghid_creeaza', [JSON.stringify(g), kg]), rg],
+          ['contract', rpc(db, U.OWNER, 'fn_dcc_contract_creeaza', ['BEN', '30', 'automat', null, kc]), rc], ['proiect creat', sp(kp, null), rp], ['proiect actualizat', sp(kp2, 1), ru]]) {
+          const b = await trece(A, p, `${ce} reluat după retragerea calității de proprietar`)
+          egal(A, b && { ...b, reluat: false }, a && { ...a, reluat: false }, `${ce}: același rezultat`)
+          A.ok(b?.reluat === true, `${ce}: reluat: true`)
+        }
+        egal(A, await numaraTot(db), inainte, '0 rânduri noi în orice tabel dcc_*')
+        A.cod(await rpc(db, U.OWNER, 'fn_dcc_contract_creeaza', ['BEN', '31', 'automat', null, KN()]), '42501', 'contract cu o cheie nouă', { re: RE('DCC_FARA_DREPT') })
+        A.cod(await sp(KN(), 2), '42501', 'proiect cu o cheie nouă', { re: RE('DCC_FARA_DREPT') })
+        A.cod(await rpc(db, U.OWNER, 'fn_dcc_contract_creeaza', ['BEN', '30', 'automat', null, kp]), '22023', 'cheia altei operații', { re: RE('DCC_CHEIE_ALTI_PARAMETRI') })
+      } finally {
+        await db.exec(`UPDATE public.profiles SET is_owner = true WHERE id = '${U.OWNER}'`)
+      }
+    },
+  },
+  {
     nume: 'p3_revizii_secvential', task: 5, cere: ['5'], fixtura: false,
     async fn(db, A) {
       const c = await configurare(db, A)

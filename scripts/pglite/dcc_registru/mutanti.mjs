@@ -132,6 +132,15 @@ export const MUTANTI = [
   { nume: 'reia_dupa_drept', inlocuiri: [["  v_r := public.fn_dcc_intentie_reia(p_cheie, 'aloca', v_hash);\n  IF v_r IS NOT NULL THEN RETURN v_r; END IF;\n  IF NOT public.fn_dcc_drept(p_proiect_dcc, 'scriere') THEN RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501'; END IF;\n  v_r := public.fn_dcc_intentie_revendica(p_cheie, 'aloca', v_hash);",
       "  IF NOT public.fn_dcc_drept(p_proiect_dcc, 'scriere') THEN RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501'; END IF;\n  v_r := public.fn_dcc_intentie_reia(p_cheie, 'aloca', v_hash);\n  IF v_r IS NOT NULL THEN RETURN v_r; END IF;\n  v_r := public.fn_dcc_intentie_revendica(p_cheie, 'aloca', v_hash);"]],
     post: 'trece', bloc: 'p_reluare_dupa_retragere', asteptat: /E reia K după retragerea dreptului: 42501/, drum: 'dreptul retras e verificat înaintea reconcilierii' },
+  // review r1 implementare (P2): în configurare dreptul vine DUPĂ reluarea cheii; mutantul îl pune înaintea ei (proiectul), ordinea veche
+  { nume: 'config_drept_inaintea_reluarii', inlocuiri: [["  v_r := public.fn_dcc_intentie_reia(p_cheie, 'proiect_seteaza', v_hash);\n  IF v_r IS NOT NULL THEN RETURN v_r; END IF;\n  PERFORM public.fn_dcc_config_permisa_intern(); -- dreptul, dupa reluarea proiectului\n",
+      "  PERFORM public.fn_dcc_config_permisa_intern();\n  v_r := public.fn_dcc_intentie_reia(p_cheie, 'proiect_seteaza', v_hash);\n  IF v_r IS NOT NULL THEN RETURN v_r; END IF;\n"]],
+    post: 'trece', bloc: 'p_reluare_config_dupa_retragere', asteptat: /proiect creat reluat după retragerea calității de proprietar: 42501/,
+    drum: 'calitatea de proprietar retrasă e verificată înaintea reconcilierii cheii proiectului' },
+  // review r1 implementare (P1): forma citirii documentului în gărzi (comportamentul: C8 din concurenta.sh, mutantul garzi_fara_lock)
+  { nume: 'garda_snapshot_fara_lock', inlocuiri: [['WHERE r.id = NEW.revizie_id FOR UPDATE OF x; -- garda snapshotului', 'WHERE r.id = NEW.revizie_id; -- garda snapshotului']],
+    post: 'trece', bloc: 't4_garzi_lock_document', asteptat: /fn_dcc_snapshot_revizii_garda: citirea documentului = /,
+    drum: 'pe o singură conexiune lipsa lock-ului nu schimbă nimic; forma o prinde blocul de formă, comportamentul concurența' },
   { nume: 'hash_nenormalizat', inlocuiri: [["jsonb_build_object('proiect', p_proiect_dcc, 'emitent', v_em, 'tematica', v_tem, 'tip', v_tip, 'interval', v_int,\n    'titlu', v_titlu",
       "jsonb_build_object('proiect', p_proiect_dcc, 'emitent', v_em, 'tematica', p_tematica, 'tip', v_tip, 'interval', v_int,\n    'titlu', v_titlu"]],
     post: 'trece', bloc: 'p2_cheie_aloca', asteptat: /aceeași cheie, aceiași parametri \(netrimați\): 22023/,

@@ -60,6 +60,13 @@
 #        → Lock (advisory-ul cheii fără interval); A COMMIT → B: 23P01 DCC_INTERVALE_SUPRAPUSE; o singură serie.
 #   C6b_ghid_vs_initializare  BEN/39: A (OWNER) inițializează SR1 100–199 pe P1 (GA), necomis; B (OWNER) mută P2 pe G3 (SR1 100–150) → Lock (advisory
 #        EXCLUSIV pe contract); A COMMIT → B: P0001 DCC_GHID_INCOMPATIBIL; P2 neschimbat.
+#   C7_owner_retras_la_configurare  BEN/40 (review r1 implementare, P1): (1) A (OWNER) actualizează proiectul DCC pe Execuție 2, necomis (ține
+#        advisory-ul EXCLUSIV pe contract); (2) B (OWNER2) actualizează proiectul pe Execuție 1 în fundal; (3) observatorul: B în Lock; (4) sesiunea C
+#        (postgres) scoate is_owner al lui OWNER2 și COMITE, observatorul vede retragerea și B ÎNCĂ în Lock; (5) A COMMIT; (6) B → 42501
+#        DCC_FARA_DREPT; proiectul pe Execuție 1 rămâne la versiunea 1; niciun rând dcc_intentii pentru cheia lui B.
+#   C8_anulare_vs_scriere_directa  BEN/41 (review r1 implementare, P1): A (OWNER) anulează documentul prin RPC, necomis; B = postgres, INSERT DIRECT
+#        (triggerele active, fără replica) — runda anexei (anexa 1), a filei (fila 3 pe un document cu 2 file), a reviziei (Rev1 copiată din Rev0)
+#        → Lock (rândul documentului, luat FOR UPDATE de garda tabelului); A COMMIT → B: P0001 DCC_GARDA_DOCUMENT_ANULAT; nimic nou pe document.
 #
 # MUTANȚII (DCC_MUTANT; fiecare `din` verificat că apare EXACT o dată în secțiunile extrase, altfel ieșire 2):
 #   | mutant                 | ce elimină                                                          | scenariu   | observator     | OPUSUL cerut                  |
@@ -71,6 +78,8 @@
 #   | fara_garzi_anexa       | (1) verificarea din fn_dcc_anexa_noua, (2) condiția din fn_dcc_anexe_garda, (3) condiția INSERT din fn_dcc_revizii_garda | C4b (anexa) | asteapta_lock | B succes; 1 anexă + Rev0 rezervata pe documentul anulat |
 #   | advisory_cu_interval   | intervalul intră în cheia fn_dcc_lock_cheie_serie                    | C6         | fara_asteptare | B succes; 2 serii suprapuse   |
 #   | fara_advisory_contract | fn_dcc_lock_contract nu mai ia niciun lock (NULL;)                   | C6b        | fara_asteptare | B succes; ghidul G3 incompatibil cu seria lui A |
+#   | fara_reverificare_config | reverificarea dreptului după lock-uri din fn_dcc_proiect_seteaza   | C7         | asteapta_lock  | B succes; proiectul la versiunea 2 |
+#   | garzi_fara_lock        | FOR UPDATE din citirea documentului în gărzile filei, anexei, reviziei | C8 (toate) | asteapta_lock | B succes (cheia străină așteaptă tot rândul, dar nu reverifică starea); rândul nou pe documentul anulat |
 #   Mutantul fara_claim are nevoie de operație + hash la INSERT-ul din incheie: revendica le pune în setări LOCALE tranzacției (dcc_mutant.*).
 set -u
 set -o pipefail
@@ -79,7 +88,7 @@ if [ "${DCC_CLUSTER_DISPENSABIL:-}" != "da" ]; then
   echo "refuz: scriptul creeaza / sterge o baza si poate crea roluri la nivel de CLUSTER; ruleaza-l DOAR pe un cluster complet dispensabil, cu DCC_CLUSTER_DISPENSABIL=da" >&2
   exit 2
 fi
-MUTANTI_LISTA='fara_lock_serie fara_reverificare fara_claim fara_lock_document fara_stare_dupa_lock fara_garzi_anexa advisory_cu_interval fara_advisory_contract'
+MUTANTI_LISTA='fara_lock_serie fara_reverificare fara_claim fara_lock_document fara_stare_dupa_lock fara_garzi_anexa advisory_cu_interval fara_advisory_contract fara_reverificare_config garzi_fara_lock'
 if [ $# -ne 1 ] || ! [[ "$1" =~ ^[a-z][a-z0-9_]{2,62}$ ]]; then
   echo "folosire: DCC_CLUSTER_DISPENSABIL=da [DCC_MUTANT=<$MUTANTI_LISTA>] $0 <nume_baza_noua (^[a-z][a-z0-9_]{2,62}\$)>" >&2; exit 2
 fi
@@ -97,7 +106,9 @@ export PGCLIENTENCODING=UTF8
 
 # scenariile rulate: toate fără mutant; altfel DOAR scenariul (scenariile) mutantului, din tabel
 case "$MUTANT" in
-  nu) RULEAZA=' C1 C1b C2i C2ii C2iii C3 C4 C4b_anexa C4b_fila C5a C5b C6 C6b ';;
+  nu) RULEAZA=' C1 C1b C2i C2ii C2iii C3 C4 C4b_anexa C4b_fila C5a C5b C6 C6b C7 C8_anexa C8_fila C8_revizie ';;
+  fara_reverificare_config) RULEAZA=' C7 ';;
+  garzi_fara_lock) RULEAZA=' C8_anexa C8_fila C8_revizie ';;
   fara_lock_serie) RULEAZA=' C1 ';;
   fara_reverificare) RULEAZA=' C5a C5b ';;
   fara_claim) RULEAZA=' C2i ';;
@@ -165,7 +176,7 @@ astept() { if [ "$2" = "$1" ]; then echo "  OK  $3 → $2"; return 0; fi; echo "
 potriveste() { case "$2" in $1) echo "  OK  $3 → $2"; return 0;; esac; echo "  NU  $3 → $2 (astepta $1)"; esec=$((esec + 1)); return 1; }
 q() { psql -X -q -w -v ON_ERROR_STOP=1 -d "$BAZA" -tAc "$1"; }
 k() { printf '00000000-0000-4000-8000-%012d' "$1"; }
-U_OWNER=$(k 1); U_ED=$(k 3); U_ED2=$(k 4); U_ADM=$(k 6); U_ED3=$(k 10)
+U_OWNER=$(k 1); U_ED=$(k 3); U_ED2=$(k 4); U_ADM=$(k 6); U_ED3=$(k 10); U_OWNER2=$(k 11)
 A_REZ=''
 caOm() { printf "SET LOCAL ROLE authenticated; SELECT set_config('request.jwt.claim.sub', '%s', true);" "$1"; }
 
@@ -301,7 +312,8 @@ concurent() {   # <S> <uid A> <sql A> <tipar A> <uid B> <sql B> [<final A: COMMI
   A_REZ="$A_STARE"   # rezultatul scrierii lui A (A_STARE se suprascrie la COMMIT)
   xa="$(xactA)"
   case "$xa" in "idle in transaction|"*) ;; *) ok 1 "A ($S): backend-ul nu e idle in transaction ($xa)"; pasA "${S}_X" "ROLLBACK;"; return 1;; esac
-  porniB "$S" "$(caOm "$5")" "$6"
+  # B = postgres: scriere DIRECTĂ (fără rol / JWT), cu triggerele active
+  if [ "$5" = postgres ]; then porniB "$S" "-- B ca postgres, scriere directa" "$6"; else porniB "$S" "$(caOm "$5")" "$6"; fi
   if [ "$mod" = asteapta_lock ]; then observaLock; else observaFaraLock "$xa"; fi
   obs=$?
   if [ "$obs" = 0 ] && [ -n "$pas" ]; then "$pas"; obs=$?; fi
@@ -415,6 +427,16 @@ MUTANTI = {
     ],
     'advisory_cu_interval': [("|| '|' || p_tip, 0);", "|| '|' || p_tip || '|' || coalesce(p_interval, '-'), 0);")],
     'fara_advisory_contract': [("IF p_exclusiv THEN PERFORM pg_advisory_xact_lock(v_k); ELSE PERFORM pg_advisory_xact_lock_shared(v_k); END IF;", "NULL;")],
+    'fara_reverificare_config': [("  PERFORM public.fn_dcc_config_permisa_intern(); -- reverificarea proiectului dupa lock\n",
+                                  "  -- MUTANT fara_reverificare_config: fara reverificarea dupa lock-uri\n")],
+    'garzi_fara_lock': [
+        ("  SELECT * INTO d FROM public.dcc_documente x WHERE x.id = NEW.document_id FOR UPDATE; -- garda filei\n",
+         "  SELECT * INTO d FROM public.dcc_documente x WHERE x.id = NEW.document_id; -- MUTANT garzi_fara_lock (fila)\n"),
+        ("  SELECT * INTO d FROM public.dcc_documente x WHERE x.id = NEW.document_id FOR UPDATE; -- garda anexei\n",
+         "  SELECT * INTO d FROM public.dcc_documente x WHERE x.id = NEW.document_id; -- MUTANT garzi_fara_lock (anexa)\n"),
+        ("  SELECT * INTO d FROM public.dcc_documente x WHERE x.id = NEW.document_id FOR UPDATE; -- garda reviziei\n",
+         "  SELECT * INTO d FROM public.dcc_documente x WHERE x.id = NEW.document_id; -- MUTANT garzi_fara_lock (revizie)\n"),
+    ],
 }
 for din, in_ in MUTANTI[mutant]:
     c = ddl.count(din)
@@ -459,32 +481,32 @@ astept "$(cat "$D/numere.txt")" "$(q "SELECT (SELECT count(*) FROM pg_class WHER
   cat <<EOF
 INSERT INTO public.executie_proiecte (id, cod_intern, nume) VALUES (1, 'E1', 'Proiect unu'), (2, 'E2', 'Proiect doi');
 INSERT INTO public.profiles (id, name, is_owner) VALUES ('$U_OWNER', 'OWNER', true), ('$U_ED', 'ED', false), ('$U_ED2', 'ED2', false), ('$U_ADM', 'ADM', false),
-  ('$U_ED3', 'ED3', false);
+  ('$U_ED3', 'ED3', false), ('$U_OWNER2', 'OWNER2', true);
 INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES ('$U_ED', 'executie_dcc', 'editor'), ('$U_ED2', 'executie_dcc', 'editor'),
   ('$U_ED3', 'executie_dcc', 'editor'), ('$U_ADM', 'executie_dcc', 'admin');
 \ir ghiduri.sql
 BEGIN;
 $(caOm "$U_OWNER")
 EOF
-  for c in 30 31 32 33 34 35 36 37 38 39; do printf "SELECT public.fn_dcc_contract_creeaza('BEN', '%s', 'automat', NULL, '%s');\n" "$c" "$(k $((1100 + c)))"; done
+  for c in 30 31 32 33 34 35 36 37 38 39 40 41; do printf "SELECT public.fn_dcc_contract_creeaza('BEN', '%s', 'automat', NULL, '%s');\n" "$c" "$(k $((1100 + c)))"; done
   echo 'COMMIT;'
   # `\gset` trece ca ARGUMENT (%s), nu în formatul printf (unde `\g` ar fi o secvență de escape)
   # alias-ul CITAT („g_GL1”): necitat, Postgres îl coboară la litere mici și :g_GL1 n-ar mai exista
   for g in GL1 GA GB G3; do printf "SELECT id AS \"g_%s\" FROM public.dcc_ghiduri WHERE cod = '%s' AND versiune = 1 %s\n" "$g" "$g" '\gset'; done
-  for c in 30 31 32 33 34 35 36 37 38 39; do printf "SELECT id AS c%s FROM public.dcc_contracte WHERE beneficiar = 'BEN' AND cod_contract = '%s' %s\n" "$c" "$c" '\gset'; done
+  for c in 30 31 32 33 34 35 36 37 38 39 40 41; do printf "SELECT id AS c%s FROM public.dcc_contracte WHERE beneficiar = 'BEN' AND cod_contract = '%s' %s\n" "$c" "$c" '\gset'; done
   echo 'BEGIN;'; caOm "$U_OWNER"; echo
   # proiectele DCC: <contract> <proiect Execuție> <ghid>
   n=1200
-  for t in '30 1 GL1' '31 1 GL1' '31 2 GL1' '32 1 GL1' '33 1 GL1' '34 1 GL1' '35 1 GL1' '36 1 GL1' '37 1 GL1' '38 1 GA' '38 2 GB' '39 1 GA' '39 2 GA'; do
+  for t in '30 1 GL1' '31 1 GL1' '31 2 GL1' '32 1 GL1' '33 1 GL1' '34 1 GL1' '35 1 GL1' '36 1 GL1' '37 1 GL1' '38 1 GA' '38 2 GB' '39 1 GA' '39 2 GA' '40 1 GL1' '40 2 GL1' '41 1 GL1'; do
     set -- $t; n=$((n + 1))
     printf "SELECT public.fn_dcc_proiect_seteaza(%s, :c%s, :g_%s, 'AAA', 'RO', 'dcc@exemplu.invalid', '{}'::text[], '{}'::jsonb, NULL, 15, NULL, '%s');\n" "$2" "$1" "$3" "$(k $n)"
   done
   echo 'COMMIT;'
-  for c in 30 31 32 33 34 35 36 37; do printf "SELECT id AS p%s FROM public.dcc_proiecte WHERE contract_id = :c%s AND executie_proiect_id = 1 %s\n" "$c" "$c" '\gset'; done
+  for c in 30 31 32 33 34 35 36 37 41; do printf "SELECT id AS p%s FROM public.dcc_proiecte WHERE contract_id = :c%s AND executie_proiect_id = 1 %s\n" "$c" "$c" '\gset'; done
   echo 'BEGIN;'; caOm "$U_OWNER"; echo
   # seriile: <proiect> <tip> <prag>
   n=1300
-  for t in '30 COR 44' '31 COR 44' '32 COR 44' '33 COR 0' '34 COR 0' '35 COR 0' '35 DES 0' '36 COR 0' '37 COR 0'; do
+  for t in '30 COR 44' '31 COR 44' '32 COR 44' '33 COR 0' '34 COR 0' '35 COR 0' '35 DES 0' '36 COR 0' '37 COR 0' '41 COR 0' '41 DES 0'; do
     set -- $t; n=$((n + 1))
     printf "SELECT public.fn_dcc_initializeaza_serie(:p%s, 'AAA', 'TM1', '%s', 'general', %s, 'prag confirmat', false, '%s');\n" "$1" "$2" "$3" "$(k $n)"
   done
@@ -496,12 +518,16 @@ EOF
   printf "SELECT public.fn_dcc_aloca(:p34, 'AAA', 'TM1', 'COR', 'general', 'C4 doc', NULL, NULL, '%s');\n" "$(k 1403)"
   printf "SELECT public.fn_dcc_aloca(:p35, 'AAA', 'TM1', 'COR', 'general', 'C4b anexa', NULL, NULL, '%s');\n" "$(k 1404)"
   printf "SELECT public.fn_dcc_aloca(:p35, 'AAA', 'TM1', 'DES', 'general', 'C4b file', NULL, 2, '%s');\n" "$(k 1405)"
+  # documentele scenariului C8 (anulare vs scriere directă)
+  printf "SELECT public.fn_dcc_aloca(:p41, 'AAA', 'TM1', 'COR', 'general', 'C8 anexa', NULL, NULL, '%s');\n" "$(k 1406)"
+  printf "SELECT public.fn_dcc_aloca(:p41, 'AAA', 'TM1', 'DES', 'general', 'C8 file', NULL, 2, '%s');\n" "$(k 1407)"
+  printf "SELECT public.fn_dcc_aloca(:p41, 'AAA', 'TM1', 'COR', 'general', 'C8 revizie', NULL, NULL, '%s');\n" "$(k 1408)"
   echo 'COMMIT;'
 } > "$D/fixtura.sql"
 psql -X -q -w -v ON_ERROR_STOP=1 -d "$BAZA" -f "$D/fixtura.sql" > "$D/fixtura.out" 2>&1; rc=$?
-ok "$rc" "fixturile prin RPC (4 ghiduri, 10 contracte, 13 proiecte DCC, 9 serii, 5 documente)"
+ok "$rc" "fixturile prin RPC (4 ghiduri, 12 contracte, 16 proiecte DCC, 11 serii, 8 documente)"
 [ "$rc" = 0 ] || { tail -n 20 "$D/fixtura.out"; exit 1; }
-astept '4|10|13|9|5|6' "$(q "SELECT (SELECT count(*) FROM public.dcc_ghiduri), (SELECT count(*) FROM public.dcc_contracte), (SELECT count(*) FROM public.dcc_proiecte),
+astept '4|12|16|11|8|10' "$(q "SELECT (SELECT count(*) FROM public.dcc_ghiduri), (SELECT count(*) FROM public.dcc_contracte), (SELECT count(*) FROM public.dcc_proiecte),
   (SELECT count(*) FROM public.dcc_serii), (SELECT count(*) FROM public.dcc_documente), (SELECT count(*) FROM public.dcc_revizii)")" \
   "fixturile: ghiduri | contracte | proiecte | serii | documente | revizii"
 [ "$esec" = 0 ] || exit 1
@@ -717,6 +743,50 @@ if ruleaza C6b; then
     fi
   fi
 fi
+
+# ── C7 ──
+retrage_owner_C7() {
+  local n
+  n="$(psql -X -q -w -v ON_ERROR_STOP=1 -d "$BAZA" -tA -c "WITH x AS (UPDATE public.profiles SET is_owner = false WHERE id = '$U_OWNER2' AND is_owner RETURNING 1) SELECT count(*) FROM x")"
+  ok $? "C: is_owner = false pentru OWNER2, COMIS"; astept 1 "$n" "randuri schimbate"
+  astept f "$(q "SELECT is_owner FROM public.profiles WHERE id = '$U_OWNER2'")" "observator: o citire noua vede retragerea" || return 1
+  c5_dupa
+}
+if ruleaza C7; then
+  SCEN=C7; c40="$(C 40)"; gl1="$(G GL1)"
+  echo "C7_owner_retras_la_configurare: BEN/40, A (OWNER) actualizeaza proiectul pe Executie 2, B (OWNER2) pe Executie 1 (mutant: $MUTANT)"
+  if concurent C7 "$U_OWNER" "$(sqlSeteaza 2 "$c40" "$gl1" 1 "$(k 2801)")" '00000 2|false|false' "$U_OWNER2" "$(sqlSeteaza 1 "$c40" "$gl1" 1 "$(k 2802)")" COMMIT retrage_owner_C7; then
+    p1v="SELECT versiune FROM public.dcc_proiecte WHERE contract_id = $c40 AND executie_proiect_id = 1"
+    if [ "$MUTANT" = fara_reverificare_config ]; then
+      astept '00000 2|false|false' "$B_STARE" "B (OPUS): fara reverificare dupa lock-uri, fostul proprietar actualizeaza proiectul"
+      astept 2 "$(q "$p1v")" "proiectul pe Executie 1: versiunea 2"
+    else
+      astept '42501 DCC_FARA_DREPT' "$B_STARE" "B: reverificarea dupa lock-uri vede retragerea calitatii de proprietar"
+      astept 1 "$(q "$p1v")" "proiectul pe Executie 1 neschimbat (versiunea 1)"
+      astept 0 "$(nint "$(k 2802)")" "niciun rand dcc_intentii pentru cheia lui B"
+    fi
+  fi
+fi
+
+# ── C8 ──
+c8() {   # <runda> <titlul documentului> <tabel numarat> <sql B (postgres, direct)> <numar asteptat cu fix>
+  SCEN=C8; local d; d="$(DOC "$2")"
+  echo "C8_anulare_vs_scriere_directa: runda $1 (mutant: $MUTANT)"
+  local sqlB="${4//@D@/$d}" n="SELECT count(*) FROM public.$3 WHERE document_id = $d"
+  if concurent "C8$1" "$U_OWNER" "$(sqlAnuleaza "$d" "$(k $((2900 + ${#1})))")" '00000 document|false' postgres "$sqlB"; then
+    if [ "$MUTANT" = garzi_fara_lock ]; then
+      potriveste '00000 *' "$B_STARE" "B (OPUS): garda citeste starea fara lock, cheia straina asteapta randul dar nu reverifica starea"
+      astept $(($5 + 1)) "$(q "$n")" "$3 pe documentul anulat (randul nou a intrat)"
+    else
+      astept 'P0001 DCC_GARDA_DOCUMENT_ANULAT' "$B_STARE" "B: garda asteapta anularea si refuza"
+      astept "$5" "$(q "$n")" "$3 pe document (nimic nou)"
+    fi
+    astept anulat "$(q "SELECT stare FROM public.dcc_documente WHERE id = $d")" "documentul e anulat"
+  fi
+}
+ruleaza C8_anexa && c8 anexa 'C8 anexa' dcc_anexe "WITH x AS (INSERT INTO public.dcc_anexe (document_id, numar, titlu) VALUES (@D@, 1, 'Anexa directa') RETURNING id) SELECT id::text AS r FROM x" 0
+ruleaza C8_fila && c8 fila 'C8 file' dcc_file "WITH x AS (INSERT INTO public.dcc_file (document_id, fila) VALUES (@D@, 3) RETURNING id) SELECT id::text AS r FROM x" 2
+ruleaza C8_revizie && c8 revizie 'C8 revizie' dcc_revizii "WITH x AS (INSERT INTO public.dcc_revizii (contract_id, document_id, revizie, limba, ghid_id, cod_text, nume_fisier_baza, creat_de) SELECT contract_id, document_id, 1, limba, ghid_id, cod_text || '-D', nume_fisier_baza || '-D', creat_de FROM public.dcc_revizii WHERE document_id = @D@ AND revizie = 0 RETURNING id) SELECT id::text AS r FROM x" 1
 
 inchideA; ok $? "sesiunea A inchisa curat"
 if [ "$MUTANT" = nu ]; then

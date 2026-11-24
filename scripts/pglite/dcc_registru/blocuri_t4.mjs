@@ -236,4 +236,25 @@ export const BLOCURI_T4 = [
       }
     },
   },
+  {
+    // review r1 implementare (P1): fiecare gardă care citește starea documentului îl ia FOR UPDATE (o anulare necomisă se așteaptă). PGlite are o
+    // singură conexiune, deci comportamentul îl probează C8 din concurenta.sh; aici, forma: citirea documentului din fiecare gardă, exact.
+    nume: 't4_garzi_lock_document', task: 4, cere: ['4'], fixtura: false,
+    async fn(db, A) {
+      const asteptat = {
+        fn_dcc_file_garda: 'SELECT * INTO d FROM public.dcc_documente x WHERE x.id = NEW.document_id FOR UPDATE;',
+        fn_dcc_anexe_garda: 'SELECT * INTO d FROM public.dcc_documente x WHERE x.id = NEW.document_id FOR UPDATE;',
+        fn_dcc_revizii_garda: 'SELECT * INTO d FROM public.dcc_documente x WHERE x.id = NEW.document_id FOR UPDATE;',
+        fn_dcc_snapshot_revizii_garda: 'SELECT x.* INTO d FROM public.dcc_documente x JOIN public.dcc_revizii r ON r.document_id = x.id WHERE r.id = NEW.revizie_id FOR UPDATE OF x;',
+        fn_dcc_legaturi_garda: 'SELECT x.* INTO d FROM public.dcc_documente x JOIN public.dcc_revizii r ON r.document_id = x.id WHERE r.id = NEW.revizie_id FOR UPDATE OF x;',
+      }
+      const r = (await db.query(`SELECT p.proname, p.prosrc FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.prosrc LIKE '%FROM public.dcc_documente x%'
+        AND p.prorettype = 'trigger'::regtype ORDER BY 1`)).rows
+      A.ok(r.map(x => x.proname).join(',') === Object.keys(asteptat).sort().join(','), `gărzile care citesc documentul: ${r.map(x => x.proname).join(',')}`)
+      for (const x of r) {
+        const citiri = x.prosrc.split('\n').filter(l => /FROM public\.dcc_documente x/.test(l)).map(l => l.replace(/--.*$/, '').trim())
+        A.ok(citiri.length === 1 && citiri[0] === asteptat[x.proname], `${x.proname}: citirea documentului = ${JSON.stringify(citiri)}`)
+      }
+    },
+  },
 ]
