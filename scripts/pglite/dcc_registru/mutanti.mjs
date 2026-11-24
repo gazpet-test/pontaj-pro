@@ -10,9 +10,19 @@
 //   nu întoarce NULL; o gardă `array_position(probleme, NULL) IS NULL` în plus (N5: <@ dă deja false); verificarea filei în fn_dcc_revizie_noua
 //   (triggerul dcc_revizii dă același cod și același mesaj DCC_TINTA_STRAINA). Regula 3 de compatibilitate din fn_dcc_aloca NU e echivalentă
 //   (Jakarinos #1182 r1): un proiect setat înaintea seriei poate avea alt interval cu același nume -> mutantul `fara_limite_ghid_aloca`.
+// Runda r6: fiecare RPC de scriere are o reverificare FINALĂ (mutanții fara_reverificare_finala_*). Reverificarea de după lock a RPC-urilor
+//   registrului (serie, alocări, revizie / filă / anexă, anulare, import, copiat, confirmat) nu mai schimbă ce se scrie, doar ORDINEA refuzurilor
+//   (42501 înaintea codurilor de stare): nu are mutant separat aici; la alocare, mutantul de concurență fara_reverificare le scoate pe amândouă (C5).
+//   La proiect, ordinea are probă proprie (CAS cu versiune veche -> mutantul fara_reverificare_proiect).
 import { citeste, CALE_MIG, CALE_REV } from './baza.mjs'
 
 const UP = 'USING ERRCODE = \'P0001\';'
+// linia reverificării finale a unui RPC (runda r6), după marcajul ei; aplica() verifică apoi că apare EXACT o dată
+function liniaFinala(eticheta) {
+  const l = citeste(CALE_MIG).split('\n').filter(x => x.endsWith('-- reverificarea finala (' + eticheta + ')'))
+  if (l.length !== 1) throw new Error('liniaFinala: ' + eticheta + ' apare de ' + l.length + ' ori')
+  return l[0] + '\n'
+}
 export const MUTANTI = [
   // ── politici, drepturi, unicitate ──
   { nume: 'politica_using_true', inlocuiri: [["ON public.dcc_documente FOR SELECT TO authenticated USING (public.fn_dcc_drept(proiect_dcc_id, 'citire'));",
@@ -144,9 +154,26 @@ export const MUTANTI = [
   { nume: 'fara_reverificare_contract', inlocuiri: [['  PERFORM public.fn_dcc_config_permisa_intern(); -- reverificarea dupa scrierea contractului (asteptarea pe indexul unic)\n', '']],
     post: 'trece', bloc: 'p_owner_retras_in_asteptare', asteptat: /contract: owner retras după claim: a trecut/,
     drum: 'ca la ghid; triggerul dcc_contracte verifică imuabilitatea, nu dreptul' },
+  // runda r6: proiectul are DOUĂ reverificări (după lock și finală, după scriere). Fără cea de după lock, refuzul vine abia din CAS (40001) sau din
+  // reverificarea finală: proba ordinii refuzurilor (CAS cu versiune veche) o prinde; fără amândouă, fostul owner scrie (ambele ramuri)
   { nume: 'fara_reverificare_proiect', inlocuiri: [['  PERFORM public.fn_dcc_config_permisa_intern(); -- reverificarea proiectului dupa lock\n', '']],
+    post: 'trece', bloc: 'p_owner_retras_in_asteptare', asteptat: /proiect CAS cu versiune veche: owner retras după lock: 40001 /,
+    drum: 'fără reverificarea de după lock, UPDATE-ul CAS cu versiunea 1 nu găsește rândul (P1 e la 2) și aruncă DCC_CONFLICT_VERSIUNE înaintea reverificării finale' },
+  { nume: 'fara_reverificari_proiect', inlocuiri: [['  PERFORM public.fn_dcc_config_permisa_intern(); -- reverificarea proiectului dupa lock\n', ''],
+      ['  PERFORM public.fn_dcc_config_permisa_intern(); -- reverificarea finala (proiect)\n', '']],
     post: 'trece', bloc: 'p_owner_retras_in_asteptare', asteptat: /proiect nou: owner retras după lock: a trecut[\s\S]*proiect CAS: owner retras după lock: a trecut/,
-    drum: 'triggerul dcc_proiecte verifică ghidul / emitentul, nu dreptul; ambele ramuri (INSERT și UPDATE CAS) trec' },
+    drum: 'triggerul dcc_proiecte verifică ghidul / emitentul, nu dreptul; fără ambele reverificări, ambele ramuri (INSERT și UPDATE CAS) trec' },
+  // runda r6 (Jakarinos #1182 r5, P1): reverificarea FINALĂ, după ultima operație care poate aștepta, pe fiecare RPC de scriere; linia o găsește
+  // marcajul ei unic (`-- reverificarea finala (<eticheta>)`); retragerea vine din triggerul tabelului scris (p_drept_retras_la_scriere)
+  ...[['proiect', /proiect nou: drept retras în timpul scrierii: a trecut[\s\S]*proiect CAS: drept retras în timpul scrierii: a trecut/],
+    ['serie', /serie: drept retras în timpul scrierii: a trecut/], ['aloca', /aloca: drept retras în timpul scrierii: a trecut/],
+    ['aloca manual', /aloca manual: drept retras în timpul scrierii: a trecut/], ['revizie noua', /revizie noua: drept retras în timpul scrierii: a trecut/],
+    ['fila noua', /fila noua: drept retras în timpul scrierii: a trecut/], ['anexa noua', /anexa noua: drept retras în timpul scrierii: a trecut/],
+    ['anulare', /anulare revizie: drept retras în timpul scrierii: a trecut[\s\S]*anulare document: drept retras în timpul scrierii: a trecut/],
+    ['import istoric', /import istoric: drept retras în timpul scrierii: a trecut/], ['copiat', /copiat: drept retras în timpul scrierii: a trecut/],
+    ['confirmat', /confirmat: drept retras în timpul scrierii: a trecut/]].map(([e, asteptat]) => ({
+    nume: 'fara_reverificare_finala_' + e.replace(/ /g, '_'), inlocuiri: [[liniaFinala(e), '']], post: 'trece', bloc: 'p_drept_retras_la_scriere', asteptat,
+    drum: 'dreptul e verificat înaintea claim-ului și după lock, deci înaintea scrierii; retragerea din trigger (= comisă cât scrierea a așteptat) nu mai e văzută' })),
   { nume: 'reia_dupa_drept_ghid', inlocuiri: [["  v_r := public.fn_dcc_intentie_reia(p_cheie, 'ghid_creeaza', v_hash);\n  IF v_r IS NOT NULL THEN RETURN v_r; END IF;\n  PERFORM public.fn_dcc_config_permisa_intern(); -- dreptul, dupa reluarea ghidului\n",
       "  PERFORM public.fn_dcc_config_permisa_intern(); -- dreptul, dupa reluarea ghidului\n  v_r := public.fn_dcc_intentie_reia(p_cheie, 'ghid_creeaza', v_hash);\n  IF v_r IS NOT NULL THEN RETURN v_r; END IF;\n"]],
     post: 'trece', bloc: 'p_reluare_config_dupa_retragere', asteptat: /ghid reluat după retragerea calității de proprietar: 42501/,

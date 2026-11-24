@@ -1370,14 +1370,18 @@ REVOKE ALL ON FUNCTION public.fn_dcc_ghid_garda(), public.fn_dcc_ghid_intervale_
 -- (2) normalizarea parametrilor și validarea formei, fără citiri de date; (3) hash-ul pe parametrii NORMALIZAȚI; (4) reluarea unei chei deja
 -- comise, ÎNAINTEA dreptului (un retry după timeout află rezultatul chiar dacă dreptul s-a schimbat; rezultatul e doar al autorului cheii; nimic
 -- nou scris); (5) dreptul; (6) claim-ul; (7) lock-urile, în ordinea globală; (8) REVERIFICAREA dreptului și a stării după lock; (9) scrierile;
--- (10) rezultatul în intenție; (11) RETURN. O excepție după (6) anulează tot, inclusiv claim-ul (o singură tranzacție).
+-- (9b) REVERIFICAREA FINALĂ a dreptului, după ULTIMA operație care poate aștepta (cheile străine iau FOR KEY SHARE pe părinte, indexurile unice
+-- așteaptă o inserare necomisă, ON CONFLICT, triggerele iau rânduri): o retragere comisă cât scrierea a așteptat se vede aici, iar refuzul
+-- anulează tot; după ea vine doar UPDATE-ul rândului propriu de intenție (inserat în aceeași tranzacție, nu poate aștepta); (10) rezultatul în
+-- intenție; (11) RETURN. O excepție după (6) anulează tot, inclusiv claim-ul (o singură tranzacție).
 
 -- ─── 5a. RPC-urile de configurare (owner sau calea serverului)
 
 -- ajutătoare interne (fără EXECUTE): identitatea apelului de configurare și valorile ghidului. Ordinea în RPC-urile de configurare (L05, ca în
 -- registru): (1) DOAR autentificarea (JWT sau calea serverului), (2) validarea + reluarea cheii proprii (rezultatul comis se întoarce și după
 -- retragerea calității de proprietar), (3) dreptul (fn_dcc_config_permisa_intern) înaintea revendicării, (4) lock-urile, (5) dreptul REVERIFICAT
--- cu un instantaneu nou (o retragere comisă cât am așteptat se vede aici).
+-- cu un instantaneu nou (o retragere comisă cât am așteptat se vede aici), (6) scrierile, (7) reverificarea FINALĂ după ultima scriere (ghidul și
+-- contractul n-au lock explicit: la ele (5) și (7) coincid, după INSERT-uri).
 CREATE FUNCTION public.fn_dcc_config_permisa_intern() RETURNS void
 LANGUAGE plpgsql SET search_path = public, pg_temp AS $f$
 BEGIN
@@ -1589,6 +1593,9 @@ BEGIN
     END IF;
     v_r := jsonb_build_object('proiect_dcc_id', v_id, 'versiune', v_vers, 'creat', false);
   END IF;
+  -- reverificarea FINALĂ (9b): INSERT-ul așteaptă cheia străină spre executie_proiecte (FOR KEY SHARE; un FOR UPDATE ținut de alt modul) și indexul
+  -- unic; UPDATE-ul, cheia străină spre ghidul nou. O retragere comisă în așteptare se vede aici, înaintea rezultatului (C10 din concurenta.sh)
+  PERFORM public.fn_dcc_config_permisa_intern(); -- reverificarea finala (proiect)
   PERFORM public.fn_dcc_intentie_incheie(p_cheie, v_r);
   RETURN v_r || '{"reluat": false}'::jsonb;
 END $f$;
@@ -1665,6 +1672,8 @@ BEGIN
   RETURNING id INTO v_id;
   v_r := jsonb_build_object('serie_id', v_id, 'interval', v_int, 'limita_inf', gi.limita_inf, 'limita_sup', gi.limita_sup, 'prag', p_prag,
                             'urmatorul', p_prag + 1, 'max_istoric', v_max_ist);
+  -- reverificarea FINALĂ (9b): INSERT-ul seriei așteaptă cheile străine (contractul, ghidul) și indexul unic
+  IF NOT v_srv AND NOT public.fn_dcc_drept(p_proiect_dcc, 'admin') THEN RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501'; END IF; -- reverificarea finala (serie)
   PERFORM public.fn_dcc_intentie_incheie(p_cheie, v_r);
   RETURN v_r || '{"reluat": false}'::jsonb;
 END $f$;
@@ -1737,6 +1746,8 @@ BEGIN
     RAISE EXCEPTION 'DCC_COD_OCUPAT: codul e deja folosit pe contract' USING ERRCODE = '23505';
   END;
   v_r := jsonb_build_object('document_id', v_doc, 'secventa', v_urmator, 'interval', s.interval, 'revizii', v_revizii);
+  -- reverificarea FINALĂ (9b): INSERT-urile documentului / filelor / reviziilor așteaptă indexurile unice și cheile străine (ghidul, contractul)
+  IF NOT public.fn_dcc_drept(p_proiect_dcc, 'scriere') THEN RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501'; END IF; -- reverificarea finala (aloca)
   PERFORM public.fn_dcc_intentie_incheie(p_cheie, v_r);
   RETURN v_r || '{"reluat": false}'::jsonb;
 END $f$;
@@ -1802,6 +1813,8 @@ BEGIN
     RAISE EXCEPTION 'DCC_COD_OCUPAT: codul e deja folosit pe contract' USING ERRCODE = '23505';
   END;
   v_r := jsonb_build_object('document_id', v_doc, 'secventa', p_secventa, 'interval', NULL, 'revizii', v_revizii);
+  -- reverificarea FINALĂ (9b): INSERT-ul documentului așteaptă indexul unic al codului (o scriere directă necomisă pe aceeași secvență)
+  IF NOT public.fn_dcc_drept(p_proiect_dcc, 'scriere') THEN RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501'; END IF; -- reverificarea finala (aloca manual)
   PERFORM public.fn_dcc_intentie_incheie(p_cheie, v_r);
   RETURN v_r || '{"reluat": false}'::jsonb;
 END $f$;
@@ -1859,6 +1872,8 @@ BEGIN
                                        'fila', v_nr_fila, 'anexa', v_nr_anexa),
            'revizie', v_rev, 'limba', v_limba, 'cod_text', v_coduri[1], 'nume_fisier_baza', v_coduri[2],
            'ultima_netrimisa', coalesce(u.stare_transport IN ('rezervata', 'pregatita', 'copiata_pentru_gmail'), false));
+  -- reverificarea FINALĂ (9b): INSERT-ul reviziei așteaptă indexul unic al codului și cheile străine (ghidul, fila / anexa)
+  IF NOT public.fn_dcc_drept(v_proiect, 'scriere') THEN RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501'; END IF; -- reverificarea finala (revizie noua)
   PERFORM public.fn_dcc_intentie_incheie(p_cheie, v_r);
   RETURN v_r || '{"reluat": false}'::jsonb;
 END $f$;
@@ -1900,6 +1915,8 @@ BEGIN
     RAISE EXCEPTION 'DCC_COD_OCUPAT: codul e deja folosit pe contract' USING ERRCODE = '23505';
   END;
   v_r := jsonb_build_object('document_id', d.id, 'fila_id', v_fila, 'fila', p_fila, 'revizie_id', v_id, 'cod_text', v_coduri[1], 'nume_fisier_baza', v_coduri[2]);
+  -- reverificarea FINALĂ (9b): INSERT-urile filei și ale reviziei așteaptă indexurile unice și cheile străine
+  IF NOT public.fn_dcc_drept(v_proiect, 'scriere') THEN RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501'; END IF; -- reverificarea finala (fila noua)
   PERFORM public.fn_dcc_intentie_incheie(p_cheie, v_r);
   RETURN v_r || '{"reluat": false}'::jsonb;
 END $f$;
@@ -1936,6 +1953,8 @@ BEGIN
     RAISE EXCEPTION 'DCC_COD_OCUPAT: codul e deja folosit pe contract' USING ERRCODE = '23505';
   END;
   v_r := jsonb_build_object('document_id', d.id, 'anexa_id', v_anexa, 'anexa', v_nr, 'revizie_id', v_id, 'cod_text', v_coduri[1], 'nume_fisier_baza', v_coduri[2]);
+  -- reverificarea FINALĂ (9b): INSERT-urile anexei și ale reviziei așteaptă indexurile unice și cheile străine
+  IF NOT public.fn_dcc_drept(v_proiect, 'scriere') THEN RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501'; END IF; -- reverificarea finala (anexa noua)
   PERFORM public.fn_dcc_intentie_incheie(p_cheie, v_r);
   RETURN v_r || '{"reluat": false}'::jsonb;
 END $f$;
@@ -1985,6 +2004,8 @@ BEGIN
      WHERE r.id = rv.id;
     v_r := jsonb_build_object('tinta', 'revizie', 'document_id', d.id, 'revizie_id', rv.id, 'revizii_anulate', jsonb_build_array(rv.id), 'revizii_pastrate', '[]'::jsonb);
   END IF;
+  -- reverificarea FINALĂ (9b): UPDATE-urile reviziilor așteaptă rândurile lor (o scriere directă care ține o revizie)
+  IF NOT public.fn_dcc_drept(v_proiect, 'admin') THEN RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501'; END IF; -- reverificarea finala (anulare)
   PERFORM public.fn_dcc_intentie_incheie(p_cheie, v_r);
   RETURN v_r || '{"reluat": false}'::jsonb;
 END $f$;
@@ -2155,6 +2176,9 @@ BEGIN
     RAISE EXCEPTION 'DCC_IMPORT_NECONTABILIZAT: % + % + % <> %', v_inserate, v_identice, jsonb_array_length(v_diferite), jsonb_array_length(v_randuri) USING ERRCODE = 'P0001';
   END IF;
   v_r := jsonb_build_object('inserate', v_inserate, 'identice', v_identice, 'diferite', v_diferite, 'total', jsonb_array_length(v_randuri));
+  -- reverificarea FINALĂ (9b), după bucla de import: ON CONFLICT așteaptă pe dcc_istoric_sursa_uq o inserare necomisă a aceleiași identități (alt
+  -- import, altă cheie); o retragere comisă în așteptare se vede aici, înaintea rezultatului (C11 din concurenta.sh)
+  IF NOT v_srv AND NOT public.fn_dcc_drept(p_proiect_dcc, 'admin') THEN RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501'; END IF; -- reverificarea finala (import istoric)
   PERFORM public.fn_dcc_intentie_incheie(p_cheie, v_r);
   RETURN v_r || '{"reluat": false}'::jsonb;
 END $f$;
@@ -2242,6 +2266,8 @@ BEGIN
     v_rev := v_rev || jsonb_build_object('revizie_id', rv.id, 'stare_anterioara', rv.stare_transport, 'stare', 'copiata_pentru_gmail');
   END LOOP;
   v_r := jsonb_build_object('snapshot_id', v_sid, 'hash', v_shash, 'revizii', v_rev);
+  -- reverificarea FINALĂ (9b): legăturile snapshotului și UPDATE-urile reviziilor așteaptă rândurile reviziilor (cheia străină, rândul însuși)
+  IF public.fn_dcc_lista_drept_intern(v_lista) IS DISTINCT FROM v_proiect THEN RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501'; END IF; -- reverificarea finala (copiat)
   PERFORM public.fn_dcc_intentie_incheie(p_cheie, v_r);
   RETURN v_r || '{"reluat": false}'::jsonb;
 END $f$;
@@ -2305,6 +2331,8 @@ BEGIN
     v_rev := v_rev || jsonb_build_object('revizie_id', rv.id, 'stare_anterioara', rv.stare_transport, 'stare', 'trimisa_manual_neverificata');
   END LOOP;
   v_r := jsonb_build_object('mesaj_id', v_mid, 'legaturi', v_leg, 'revizii', v_rev);
+  -- reverificarea FINALĂ (9b): mesajul (cheia străină spre snapshot), legăturile și UPDATE-urile reviziilor așteaptă rândurile părinte / reviziile
+  IF public.fn_dcc_lista_drept_intern(v_lista) IS DISTINCT FROM v_proiect THEN RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501'; END IF; -- reverificarea finala (confirmat)
   PERFORM public.fn_dcc_intentie_incheie(p_cheie, v_r);
   RETURN v_r || '{"reluat": false}'::jsonb;
 END $f$;

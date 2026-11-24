@@ -21,6 +21,20 @@ export function cuRetragere(cap, punct, ancora) {
   return corp.replace('CREATE FUNCTION', 'CREATE OR REPLACE FUNCTION')
     .replace(ancora, `  IF current_setting('dcc_proba.retrage', true) = '${punct}' THEN UPDATE public.profiles SET is_owner = false WHERE id = auth.uid(); END IF;\n` + ancora)
 }
+// runda r6 (Jakarinos #1182 r5, P1): retragerea comisă cât o SCRIERE a așteptat (cheia străină, indexul unic, ON CONFLICT). Linia intră la începutul
+// corpului unui TRIGGER al tabelului scris (primul `BEGIN` al funcției), deci după reverificarea de după lock a RPC-ului și înaintea reverificării
+// finale; retrage ambele surse ale dreptului (is_owner + executie_dcc) DOAR pentru apelant și DOAR la punctul 'scriere'.
+export function cuRetragereLaScriere(cap) {
+  const MIG = citeste(CALE_MIG)
+  if (MIG.split(cap).length !== 2) throw new Error('INJECTIE: ' + cap + ' nu apare exact o data')
+  const i = MIG.indexOf(cap), j = MIG.indexOf('END $f$;', i) + 'END $f$;'.length
+  const corp = MIG.slice(i, j)
+  const b = corp.indexOf('\nBEGIN\n')
+  if (b < 0) throw new Error('INJECTIE: ' + cap + ' fara BEGIN')
+  const linie = "  IF current_setting('dcc_proba.retrage', true) = 'scriere' THEN UPDATE public.profiles SET is_owner = false WHERE id = auth.uid();" +
+    " DELETE FROM public.user_module_access WHERE profile_id = auth.uid() AND module = 'executie_dcc'; END IF;\n"
+  return (corp.slice(0, b + 7) + linie + corp.slice(b + 7)).replace('CREATE FUNCTION', 'CREATE OR REPLACE FUNCTION')
+}
 const argsProiect = (exec, contract, ghidId, versiune, k, adresa = 'dcc@exemplu.invalid') =>
   [exec, contract, ghidId, 'AAA', 'RO', adresa, tab([]), '{}', null, 15, versiune, k]
 // comparația pe forma canonică (cheile obiectelor sortate: jsonb își ordonează cheile după lungime)
@@ -542,6 +556,17 @@ export const BLOCURI_T5 = [
       await db.exec(`SELECT set_config('dcc_proba.retrage', 'claim', false)`)
       A.trece(await rpc(db, 'server', 'fn_dcc_contract_creeaza', ['BEN', '32', 'automat', null, K(n++)]), 'server: contract cu injecția activă')
       await db.exec(`SELECT set_config('dcc_proba.retrage', '', false)`)
+      // runda r6: ordinea refuzurilor. Reverificarea de după lock vine ÎNAINTEA CAS-ului: un cont retras primește 42501, nu află starea versiunii
+      // (P1 e acum la versiunea 2 după contra-proba; cererea cu versiunea 1 ar da 40001). Fără ea, refuzul ar veni abia din CAS sau din reverificarea finală.
+      egal(A, (await db.query(`SELECT versiune FROM public.dcc_proiecte WHERE id = ${P1}`)).rows[0], { versiune: 2 }, 'P1 la versiunea 2 (pregătirea)')
+      const inainteV = await numaraTot(db)
+      await db.exec(`SELECT set_config('dcc_proba.retrage', 'lock', false)`)
+      const kv = K(n++)
+      const rv = await rpc(db, U.OWNER, 'fn_dcc_proiect_seteaza', argsProiect(1, c, g, 1, kv, 'alt2@exemplu.invalid'))
+      await db.exec(`SELECT set_config('dcc_proba.retrage', '', false)`)
+      A.cod(rv, '42501', 'proiect CAS cu versiune veche: owner retras după lock', { re: RE('DCC_FARA_DREPT') })
+      egal(A, await numaraTot(db), inainteV, 'CAS cu versiune veche: nimic scris')
+      A.ok((await owner()) === true, 'CAS cu versiune veche: retragerea simulată s-a anulat')
     },
   },
   {

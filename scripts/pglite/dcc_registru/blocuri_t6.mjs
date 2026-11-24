@@ -1,7 +1,8 @@
 // Blocurile Task 6 (secțiunea 6: importul istoric, „copiat”, „confirm că am trimis”). Datele prin RPC; valorile așteptate scrise de mână.
 import { U, ca, sonda, sha256 } from './baza.mjs'
-import { K, KN, rpc, trece, tab, big, configurare, initSerie, aloca, revizieNoua, anuleaza, numar, numaraTot } from './rpc.mjs'
-import { egal } from './blocuri_t5.mjs'
+import { K, KN, rpc, trece, tab, big, ghid, configurare, initSerie, aloca, alocaManual, revizieNoua, filaNoua, anexaNoua, anuleaza, numar, numaraTot } from './rpc.mjs'
+import { F } from './fixtura.mjs'
+import { egal, cuRetragereLaScriere } from './blocuri_t5.mjs'
 
 const RE = cod => new RegExp('^' + cod + ':')
 const importa = (db, uid, p, randuri, { lot = 'lot1', cheie: k = KN() } = {}) => rpc(db, uid, 'fn_dcc_istoric_importa', [p, lot, JSON.stringify(randuri), k])
@@ -231,6 +232,67 @@ export const BLOCURI_T6 = [
       A.cod(await copiat(db, U.ED, [r1]), 'P0001', 'copiat pe revizia anulată', { re: RE('DCC_DOCUMENT_ANULAT') })
       A.cod(await confirma(db, U.ED, [r1]), 'P0001', 'confirmat pe documentul anulat', { re: RE('DCC_DOCUMENT_ANULAT') })
       egal(A, await numaraTot(db), inainte, '0 rânduri noi')
+    },
+  },
+  {
+    // runda r6 (Jakarinos #1182 r5, P1, principiul aplicat pe FIECARE RPC de scriere): dreptul retras cât o SCRIERE a așteptat (cheia străină,
+    // indexul unic, ON CONFLICT, rândul luat de un trigger) e văzut de reverificarea FINALĂ, înaintea rezultatului. Injecția: triggerul tabelului
+    // scris retrage dreptul apelantului (după reverificarea de după lock). Fiecare RPC are mutantul lui (fara_reverificare_finala_*); ghidul își
+    // păstrează mutantul fara_reverificare_ghid. Contractul n-are trigger la INSERT: așteptarea lui pe indexul unic o probează C9b (concurenta.sh).
+    // Cele două sesiuni reale: C10 (proiectul, cheia străină spre executie_proiecte) și C11 (importul, ON CONFLICT pe dcc_istoric_sursa_uq).
+    nume: 'p_drept_retras_la_scriere', task: 6, cere: ['5', '6'], fixtura: false,
+    async fn(db, A) {
+      const c = await configurare(db, A)
+      await trece(A, initSerie(db, U.ADM, c.P1, 'TM1', 'COR', 'general', 44), 'inițializare TM1/COR')
+      const d = await trece(A, aloca(db, U.ED, c.P1, 'TM1', 'COR', 'general', { titlu: 'Doc R6' }), 'documentul')
+      const df = await trece(A, aloca(db, U.ED, c.P1, 'TM1', 'COR', 'general', { titlu: 'Doc R6 file', nrFile: 1 }), 'documentul cu o filă')
+      const d3 = await trece(A, aloca(db, U.ED, c.P1, 'TM1', 'COR', 'general', { titlu: 'Doc R6 trei' }), 'al treilea document')
+      const d4 = await trece(A, aloca(db, U.ED, c.P1, 'TM1', 'COR', 'general', { titlu: 'Doc R6 patru' }), 'al patrulea document')
+      const rev = d?.revizii?.[0]?.revizie_id, rev3 = d3?.revizii?.[0]?.revizie_id
+      for (const f of ['fn_dcc_ghid_intervale_disjuncte', 'fn_dcc_proiecte_garda', 'fn_dcc_serii_garda', 'fn_dcc_documente_garda', 'fn_dcc_file_garda',
+        'fn_dcc_anexe_garda', 'fn_dcc_revizii_garda', 'fn_dcc_istoric_garda', 'fn_dcc_snapshoturi_garda', 'fn_dcc_mesaje_garda']) {
+        await db.exec(cuRetragereLaScriere(`CREATE FUNCTION public.${f}(`))
+      }
+      // [eticheta, contul, apelul]; ordinea = cea a contra-probei (fiecare apel lasă starea bună pentru următorul)
+      const cazuri = [
+        ['ghid', U.OWNER, k => rpc(db, U.OWNER, 'fn_dcc_ghid_creeaza', [JSON.stringify(ghid('GR6', 1, F.lot1, [['general', 1, 99999]])), k])],
+        ['proiect nou', U.OWNER, k => rpc(db, U.OWNER, 'fn_dcc_proiect_seteaza', [6, c.c30, c.g1, 'AAA', 'RO', 'dcc@exemplu.invalid', tab([]), '{}', null, 15, null, k])],
+        ['proiect CAS', U.OWNER, k => rpc(db, U.OWNER, 'fn_dcc_proiect_seteaza', [1, c.c30, c.g1, 'AAA', 'RO', 'dcc@exemplu.invalid', tab(['cc@exemplu.invalid']), '{}', null, 15, 1, k])],
+        ['serie', U.ADM, k => initSerie(db, U.ADM, c.P1, 'TM2', 'COR', 'general', 0, { cheie: k })],
+        ['aloca', U.ED, k => aloca(db, U.ED, c.P1, 'TM1', 'COR', 'general', { titlu: 'Doc R6 nou', cheie: k })],
+        ['aloca manual', U.ED, k => alocaManual(db, U.ED, c.P4, 'TM1', 'COR', 7, { cheie: k })],
+        ['revizie noua', U.ED, k => revizieNoua(db, U.ED, d?.document_id, { cheie: k })],
+        ['fila noua', U.ED, k => filaNoua(db, U.ED, df?.document_id, 2, { cheie: k })],
+        ['anexa noua', U.ED, k => anexaNoua(db, U.ED, d?.document_id, { cheie: k })],
+        ['import istoric', U.ADM, k => importa(db, U.ADM, c.P1, [{ sursa: 'excel_registru', sursa_id: 'R6-1', valori_originale: { cod: 'x' } }], { cheie: k })],
+        ['copiat', U.ED, k => copiat(db, U.ED, [rev], SNAP(), { cheie: k })],
+        ['confirmat', U.ED, k => confirma(db, U.ED, [rev], { cheie: k })],
+        ['anulare revizie', U.ADM, k => anuleaza(db, U.ADM, { rev: rev3, cheie: k })],
+        ['anulare document', U.ADM, k => anuleaza(db, U.ADM, { doc: d4?.document_id, cheie: k })],
+      ]
+      const drept = async uid => (await db.query(`SELECT (SELECT is_owner FROM public.profiles WHERE id = '${uid}') AS o,
+        (SELECT count(*)::int FROM public.user_module_access WHERE profile_id = '${uid}' AND module = 'executie_dcc') AS m`)).rows[0]
+      // drepturile de pornire, refăcute înaintea fiecărui caz: pe un mutant, retragerea din trigger se COMITE odată cu scrierea și ar refuza
+      // cazul următor la primul drept (înaintea claim-ului), ascunzând mutantul
+      const reface = () => db.exec(`UPDATE public.profiles SET is_owner = true WHERE id = '${U.OWNER}';
+        DELETE FROM public.user_module_access WHERE module = 'executie_dcc' AND profile_id IN ('${U.ED}', '${U.ADM}');
+        INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES ('${U.ED}', 'executie_dcc', 'editor'), ('${U.ADM}', 'executie_dcc', 'admin');`)
+      let n = 600
+      for (const [ce, uid, f] of cazuri) {
+        await reface()
+        const inainte = await numaraTot(db), dr = await drept(uid)
+        const k = K(n++)
+        await db.exec(`SELECT set_config('dcc_proba.retrage', 'scriere', false)`)
+        const r = await f(k)
+        await db.exec(`SELECT set_config('dcc_proba.retrage', '', false)`)
+        A.cod(r, '42501', `${ce}: drept retras în timpul scrierii`, { re: RE('DCC_FARA_DREPT') })
+        egal(A, await numaraTot(db), inainte, `${ce}: nimic scris`)
+        A.ok((await numar(db, 'dcc_intentii', `WHERE cheie = '${k}'`)) === 0, `${ce}: nicio intenție pentru cheie`)
+        egal(A, await drept(uid), dr, `${ce}: retragerea simulată s-a anulat odată cu tranzacția RPC-ului`)
+      }
+      // contra-proba: aceleași apeluri fără retragere trec (injecția nu strică drumul normal; aceleași ținte, în ordine)
+      await reface()
+      for (const [ce, , f] of cazuri) A.trece(await f(K(n++)), `${ce}: fără retragere (contra-proba)`)
     },
   },
 ]
