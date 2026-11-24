@@ -1,0 +1,7 @@
+# 20270111a: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase)
+constrangere	constrangere tabel public.ofertare_parteneri_documente.ofertare_parteneri_documente_categorie_check	schimbat
+functie	functie public.fn_ctc_autorizatie_ndt_fisier(bigint)	creat
+functie	functie public.fn_ctc_autorizatii_ndt()	creat
+functie	functie public.fn_ofertare_doc_cale_garda()	creat
+relatie	relatie public.ofertare_parteneri_documente_fisier_path_uq	creat
+trigger	trigger public.ofertare_parteneri_documente.trg_ofertare_doc_cale_garda	creat

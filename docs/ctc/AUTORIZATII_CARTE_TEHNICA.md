@@ -16,7 +16,53 @@ Piese: migrarea `supabase/migrations/20261222b_ctc_autorizatii_citire.sql` (reve
 Dosarul personal NU se deschide din CTC (nicio semnare în alt bucket). Când HR atașează fișierul la autorizație, rândul trece singur pe
 „Deschide”.
 
-Autorizațiile firmelor de control nedistructiv nu sunt încă în platformă.
+## Firmele de control nedistructiv (NDT) — 20270111a
+
+A doua secțiune a tab-ului, „🔬 Firme de control nedistructiv”: autorizațiile firmelor care fac radiografia, ultrasunetele etc., doar
+citire, fără acces la modulul Ofertare. Specificația: `docs/superpowers/specs/2026-11-25-ctc-autorizatii-ndt-design.md` (v4).
+Piese: migrarea `supabase/migrations/20270111a_ctc_autorizatii_ndt.sql` (revenirea în `supabase/revenire/`, lista obiectelor L15 în
+`supabase/tests/20270111a_ctc_autorizatii_ndt.l15.obiecte.tsv`, dry-run-ul pentru clonă în `supabase/tests/20270111a_ctc_autorizatii_ndt_dryrun.sql`),
+ramura `ndt_document_id` a funcției edge `ctc-autorizatie-fisier`, ecranele `src/ctc/CtcAutorizatii.jsx` și `src/OfertareParteneri.jsx`.
+Probe: `scripts/pglite/test_ctc_autorizatii_ndt_local.mjs`, `src/ctcAutorizatiiNdt.test.js`, `src/CtcAutorizatiiNdt.test.jsx`.
+
+- **Introducerea:** Ofertare → Parteneri → firma → „📎 Documente” → categoria „🔬 Autorizație control nedistructiv (NDT)”; câmpul
+  „Metoda (RT/UT/PT/MT/VT)”. Fișierul se urcă în `parteneri/<firmă>/ndt/`. Schimbarea categoriei unui document cu fișier (în sau din NDT)
+  cere un fișier nou („Pentru categoria nouă, încărcați din nou fișierul (se mută în dosarul potrivit)”); cel vechi se șterge după salvare.
+- **Garda din BD** (trigger pe `ofertare_parteneri_documente`, toate căile de scriere): NDT = exact `parteneri/<firma rândului>/ndt/<nume>`;
+  altă categorie = nu sub `ndt/`; fără segmente `.` / `..`, backslash, `%`, caractere de control, cale goală; o cale nu poate fi a două
+  documente (index unic).
+- **În CTC:** firma, CUI, nr., emitent, metoda, datele, starea (Valabilă / Expirată / Valabilitate necunoscută, după ziua din România) și
+  „Deschide scanul” doar când documentul are fișier. Calea, observațiile și contactul firmei NU ajung în CTC.
+- **Deschiderea:** RPC-ul dă calea doar pentru un document NDT cu calea în forma de mai sus (altfel 404, același răspuns pentru
+  „nu există” / „nu e NDT” / „fără fișier”); edge-ul reverifică forma și semnează 60 s în bucket-ul `ofertare`. Un nume de fișier cu alte
+  caractere decât `[A-Za-z0-9._-]` (posibil doar prin API, ecranul nu-l produce) e acceptat de BD, dar edge-ul nu-l semnează (422).
+
+### Ordinea livrării NDT (coordonatorul)
+
+1. **Proba pe clonă PG17**: manifestul `scripts/livrare_l15_manifest.sh --iesire` (trebuie să conțină exact obiectele din lista revizuită),
+   apoi apply → `supabase/tests/20270111a_ctc_autorizatii_ndt_dryrun.sql` (ROLLBACK, `DRY 20270111a TOTUL OK`) → revenire → re-apply.
+2. **Migrarea** pe producție: `scripts/livrare_migrare.sh … --plafon-tranzactie-ms 5000 --amprenta-globala <md5> --diferente-globale supabase/migrations/20270111a_ctc_autorizatii_ndt.l15.tsv`.
+3. **Funcția edge** `ctc-autorizatie-fisier` v2, cu `verify_jwt = true`. Probele după publicare:
+
+   | Cerere | Așteptat |
+   |---|---|
+   | `{ "autorizatie_id": <sudor cu scan> }`, cont CTC | 200 (neschimbat) |
+   | `{ "ndt_document_id": <NDT cu fișier> }`, cont CTC | 200 + `url` (60 s) |
+   | `{ "ndt_document_id": <document non-NDT> }`, cont CTC | 404 |
+   | `{ "ndt_document_id": … }`, cont fără CTC | 403 |
+   | `{ "autorizatie_id": 1, "ndt_document_id": 2 }` | 400 |
+
+4. **Merge** (aplicația). Test în ERP: un document NDT pe o firmă de test din Parteneri, apoi CTC → Autorizații → „Deschide scanul”.
+
+| Starea | Ecranul |
+|---|---|
+| merge FĂRĂ migrare | secțiunea NDT: „Secțiunea nu e încă activă…”; în Parteneri, categoria NDT e refuzată la salvare (CHECK-ul vechi), cu eroarea afișată |
+| migrare + merge, FĂRĂ edge-ul nou | lista apare; „Deschide scanul” răspunde 400 (edge-ul vechi nu cunoaște cheia), mesajul se afișează |
+| după revenire | ca „merge fără migrare”; edge-ul v2 răspunde 503 pe ramura NDT |
+
+**Revenirea NDT** (ordinea: UI → edge fără ramura NDT → BD): refuză dacă există documente NDT sau căi în dosare `ndt/` (se lămuresc întâi
+din Parteneri); verifică CHECK-ul, trigger-ul, indexul și detaliul complet al celor trei funcții; apoi CHECK-ul vechi, scoate trigger-ul,
+funcția gărzii, indexul și cele două RPC-uri, și verifică absența lor. Revenirea 20261222b (sudorii) refuză cât timp 20270111a e aplicată.
 
 ## Ordinea livrării (coordonatorul)
 

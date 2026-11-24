@@ -1,8 +1,11 @@
 // OfertareParteneri.jsx — tab „🤝 Parteneri” din Referințe financiare (24.09.2026, audit UI Ofertare #1)
 // Adăugare/editare parteneri (ofertare_parteneri) + documentele lor (ofertare_parteneri_documente,
 // fișiere în bucket 'ofertare' la parteneri/<id>/...). Orice scriere verifică error ȘI rândurile întoarse.
+// 20270111a (TKT-2026-0389): categoria „Autorizație control nedistructiv (NDT)” — fișierul ei stă în parteneri/<id>/ndt/ (garda din BD
+// refuză altă cale); schimbarea categoriei unui document cu fișier cere un fișier nou (regula în ofertareParteneriCale.js).
 import { useState, useEffect } from 'react'
 import { supabase } from './lib/supabase.js'
+import { CATEGORIE_NDT, MESAJ_CATEGORIE_NOUA, pregatesteSalvare, esecCert } from './ofertareParteneriCale.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -31,8 +34,11 @@ export const CATEGORII_DOC = {
   certificat_legal: '📄 Certificat legal',
   atestat:          '🎓 Atestat',
   etalonare:        '⚖️ Etalonare',
+  autorizatie_ndt:  '🔬 Autorizație control nedistructiv (NDT)',
   alta:             '📎 Altă',
 }
+// eticheta câmpului `domeniu`: la NDT ține metoda
+export const etichetaDomeniu = (categorie) => (categorie === CATEGORIE_NDT ? 'Metoda (RT/UT/PT/MT/VT)' : 'Domeniu')
 
 // Badge de valabilitate: expirat (roșu) / ≤30 zile (portocaliu) / ok (verde) / fără expirare
 export function badgeValabilitate(d) {
@@ -44,7 +50,6 @@ export function badgeValabilitate(d) {
   return { txt:`✅ valabil până ${d.data_valabilitate}`, color:G.green }
 }
 
-const sanitize = n => String(n || 'fisier').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9._-]+/g, '_').slice(-120)
 const nul = v => (v === '' || v === undefined) ? null : v
 
 export default function OfertareParteneri({ parteneri, showToast, onChange }) {
@@ -211,37 +216,44 @@ function DocumentePartener({ pid, docs, showToast, onChange }) {
   )
 }
 
-function FormDocument({ pid, d, showToast, onClose, onSaved }) {
+export function FormDocument({ pid, d, showToast, onClose, onSaved, client = supabase }) {
   const [f, setF] = useState({ categorie:d.categorie || 'autorizatie_isc', denumire:d.denumire || '', numar_document:d.numar_document || '', emitent:d.emitent || '',
     data_emitere:d.data_emitere || '', data_valabilitate:d.data_valabilitate || '', fara_expirare:!!d.fara_expirare, domeniu:d.domeniu || '', observatii:d.observatii || '' })
   const [file, setFile] = useState(null)
   const [busy, setBusy] = useState(false)
   const set = (k, v) => setF(x => ({ ...x, [k]: v }))
+  // categoria schimbată pe un document cu fișier: fără fișier nou, calea veche nu mai e în dosarul potrivit → salvarea e blocată, cu mesaj
+  const cereFisierNou = !file && !!d.fisier_path && pregatesteSalvare({ d, categorie: f.categorie, file: null, pid }).eroare === MESAJ_CATEGORIE_NOUA
   const salveaza = async () => {
     if (!f.denumire.trim()) { showToast?.('Denumirea e obligatorie', 'error'); return }
     if (file && !/^(application\/pdf|image\/)/.test(file.type)) { showToast?.('Doar PDF sau imagine', 'error'); return }
+    // calea (subdosarul după categorie) verificată ÎNAINTE de upload, cu aceeași regulă ca garda din BD
+    const plan = pregatesteSalvare({ d, categorie: f.categorie, file, pid, timp: Date.now() })
+    if (plan.eroare) { showToast?.(plan.eroare, 'error'); return }
     setBusy(true)
-    let fisier_path = d.fisier_path || null
-    if (file) {
-      const path = `parteneri/${pid}/${Date.now()}_${sanitize(file.name)}`
-      const { error: eUp } = await supabase.storage.from('ofertare').upload(path, file, { contentType: file.type })
+    const fisier_path = plan.cale
+    if (plan.urca) {
+      const { error: eUp } = await client.storage.from('ofertare').upload(fisier_path, file, { contentType: file.type })
       if (eUp) { setBusy(false); showToast?.('Upload eșuat: ' + eUp.message, 'error'); return }
-      fisier_path = path
     }
     const row = { partener_id:pid, categorie:f.categorie, denumire:f.denumire.trim(), numar_document:nul(f.numar_document.trim()), emitent:nul(f.emitent.trim()),
       data_emitere:nul(f.data_emitere), data_valabilitate: f.fara_expirare ? null : nul(f.data_valabilitate), fara_expirare:f.fara_expirare,
       domeniu:nul(f.domeniu.trim()), observatii:nul(f.observatii.trim()), fisier_path }
-    const { data, error } = d.id
-      ? await supabase.from('ofertare_parteneri_documente').update(row).eq('id', d.id).select('id')
-      : await supabase.from('ofertare_parteneri_documente').insert(row).select('id')
+    const rez = d.id
+      ? await client.from('ofertare_parteneri_documente').update(row).eq('id', d.id).select('id')
+      : await client.from('ofertare_parteneri_documente').insert(row).select('id')
+    const { data, error } = rez
     if (error || !data?.length) {
-      // fișierul nou nu rămâne orfan dacă rândul nu s-a scris
-      if (file && fisier_path) await supabase.storage.from('ofertare').remove([fisier_path])
-      setBusy(false); showToast?.(error ? 'Eroare: ' + error.message : 'Nu s-a salvat nimic (fără drept de scriere?)', 'error'); return
+      // fișierul nou nu rămâne orfan dacă rândul SIGUR nu s-a scris (4xx / 0 rânduri); la rețea / 5xx rezultatul e necunoscut (L05): rămâne
+      if (plan.urca && esecCert(rez)) await client.storage.from('ofertare').remove([fisier_path])
+      setBusy(false)
+      showToast?.(error ? (esecCert(rez) ? 'Eroare: ' + error.message : 'Rezultat necunoscut (conexiune): reîncarcă lista înainte să reîncerci. ' + error.message)
+        : 'Nu s-a salvat nimic (fără drept de scriere?)', 'error')
+      return
     }
-    // fișier înlocuit → îl scoatem pe cel vechi
-    if (file && d.fisier_path && d.fisier_path !== fisier_path) {
-      const { error: eRm } = await supabase.storage.from('ofertare').remove([d.fisier_path])
+    // fișier înlocuit (sau mutat în dosarul categoriei noi) → îl scoatem pe cel vechi, doar după salvarea reușită
+    if (plan.urca && d.fisier_path && d.fisier_path !== fisier_path) {
+      const { error: eRm } = await client.storage.from('ofertare').remove([d.fisier_path])
       if (eRm) showToast?.('Salvat, dar fișierul vechi a rămas în storage: ' + eRm.message, 'error')
     }
     setBusy(false); showToast?.(d.id ? 'Document actualizat' : 'Document adăugat', 'success'); onSaved()
@@ -261,13 +273,14 @@ function FormDocument({ pid, d, showToast, onClose, onSaved }) {
           <label style={{ fontSize:11.5, color:G.muted }}><input type="checkbox" checked={f.fara_expirare} onChange={e => set('fara_expirare', e.target.checked)} /> fără expirare</label></div>
       </div>
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(240px, 1fr))', gap:10, marginTop:10 }}>
-        <div><label style={S.lbl}>Domeniu</label><input style={S.input} placeholder="ex. DCVG, grad II, aderență" value={f.domeniu} onChange={e => set('domeniu', e.target.value)} /></div>
+        <div><label style={S.lbl}>{etichetaDomeniu(f.categorie)}</label><input style={S.input} placeholder={f.categorie === CATEGORIE_NDT ? 'ex. RT, UT' : 'ex. DCVG, grad II, aderență'} value={f.domeniu} onChange={e => set('domeniu', e.target.value)} /></div>
         <div><label style={S.lbl}>Observații</label><input style={S.input} value={f.observatii} onChange={e => set('observatii', e.target.value)} /></div>
         <div><label style={S.lbl}>Fișier (PDF / imagine){d.fisier_path ? ' — înlocuiește' : ''}</label>
           <input type="file" accept="application/pdf,image/*" style={{ fontSize:12, color:G.muted }} onChange={e => setFile(e.target.files?.[0] || null)} /></div>
       </div>
+      {cereFisierNou && <div role="alert" style={{ fontSize:12, color:G.orange, marginTop:8 }}>{MESAJ_CATEGORIE_NOUA}</div>}
       <div style={{ display:'flex', gap:8, marginTop:10 }}>
-        <button style={{ ...S.btnP, padding:'6px 14px', fontSize:12 }} disabled={busy} onClick={salveaza}>{busy ? 'Se salvează…' : '💾 Salvează'}</button>
+        <button style={{ ...S.btnP, padding:'6px 14px', fontSize:12 }} disabled={busy || cereFisierNou} onClick={salveaza}>{busy ? 'Se salvează…' : '💾 Salvează'}</button>
         <button style={{ ...S.btnS, padding:'6px 14px', fontSize:12 }} onClick={onClose}>Renunță</button>
       </div>
     </div>
