@@ -313,6 +313,8 @@ export default function HrRecomandari({ profile, employees = [], canEdit, showTo
       </div>
       <div style={{ fontSize:11.5, color:G.dim, marginBottom:10 }}>
         Recomandările sunt dovada de <b>experiență a persoanei</b> (manager de contract, șef de șantier, RTE…) cerută la licitații. Le urci aici, AI le citește, tu le verifici ✓ — motorul din Ofertare le propune singur pe cerințele de „experiență în proiect similar".
+        {/* TKT-2026-0375: recomandările pentru FIRMĂ nu stau aici, ci pe lucrarea din Ofertare */}
+        <div style={{ marginTop:4 }}>Recomandare pentru societate (de la un beneficiar)? Se urcă la <b>Ofertare → Experiență similară</b>, în fișa lucrării, la „Recomandare beneficiar (PDF)”.</div>
       </div>
       {load ? <div style={{ color:G.muted, padding:20 }}>Se încarcă…</div> : (
         <div style={{ ...S.card, overflowX:'auto' }}>
