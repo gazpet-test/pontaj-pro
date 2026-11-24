@@ -44,6 +44,35 @@ export function carduriDisponibile(alimentari) {
   return { carduri: carduri.map(({ card, nr }) => ({ card, nr })), faraCard }
 }
 
+// Lunile (YYYY-MM, cele mai noi întâi) și stațiile (alfabetic) din rândurile încărcate acum.
+export function luniDin(alimentari) {
+  const set = new Set()
+  for (const a of alimentari || []) if (a.data_alimentare) set.add(String(a.data_alimentare).slice(0, 7))
+  return Array.from(set).sort().reverse()
+}
+export function statiiDin(alimentari) {
+  const set = new Set()
+  for (const a of alimentari || []) if (a.statie_combustibil) set.add(a.statie_combustibil)
+  return Array.from(set).sort()
+}
+
+// Opțiunile unui filtru (lună / stație) + valoarea aleasă acum. Dacă valoarea aleasă nu mai e printre opțiuni
+// (ex. alt card, fără alimentări în luna aleasă), rămâne în listă, PRIMA, marcată faraRezultate: selectorul arată
+// filtrul aplicat de fapt, nu „Toate” peste un tabel gol (review #1184 r2). 'toate' / gol = fără filtru.
+export function optiuniFiltru(disponibile, aleasa) {
+  const lista = (disponibile || []).map(valoare => ({ valoare, faraRezultate: false }))
+  if (aleasa == null || aleasa === '' || aleasa === 'toate' || lista.some(o => o.valoare === aleasa)) return lista
+  return [{ valoare: aleasa, faraRezultate: true }, ...lista]
+}
+
+// Filtrele de lună / stație alese care nu mai au nicio opțiune în lista încărcată (pentru mesajul de sub tabel).
+export function filtreFaraOptiune(alimentari, { luna = 'toate', statie = 'toate' } = {}) {
+  const out = []
+  if (luna !== 'toate' && !luniDin(alimentari).includes(luna)) out.push('luna')
+  if (statie !== 'toate' && !statiiDin(alimentari).includes(statie)) out.push('statie')
+  return out
+}
+
 // filtre = { luna: 'toate'|'YYYY-MM', statie: 'toate'|nume, whatsapp: 'toate'|'cu_wa'|'fara_wa',
 //            card: 'toate'|FARA_CARD|card, vehicul: text }
 export function filtreazaAlimentari(alimentari, filtre = {}) {
@@ -75,6 +104,14 @@ export function selectieMasa(vizibile, siteId) {
   const out = {}
   if (!siteId) return out
   for (const a of vizibile || []) out[a.id] = siteId
+  return out
+}
+
+// După o salvare cu conflicte / erori: scot DOAR selecțiile trimise în acea salvare; ce a ales omul între timp
+// (ex. pe alt card, cât salvarea era în curs) rămâne.
+export function faraSelectiileSalvate(selections, trimise) {
+  const out = { ...(selections || {}) }
+  for (const s of trimise || []) delete out[s.id]
   return out
 }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { FARA_CARD, cheieCard, carduriDisponibile, filtreazaAlimentari, selectieMasa, selectiiDeSalvat } from './alimentariFaraSantierFiltru.js'
+import { FARA_CARD, cheieCard, carduriDisponibile, filtreazaAlimentari, selectieMasa, selectiiDeSalvat, luniDin, statiiDin, optiuniFiltru, filtreFaraOptiune, faraSelectiileSalvate } from './alimentariFaraSantierFiltru.js'
 
 // Fixture scrisă de mână (rezultatele așteptate sunt numărate pe fixture, nu din cod).
 const ALIM = [
@@ -84,5 +84,45 @@ describe('Mass: aplică toate — doar pe rândurile vizibile', () => {
     const viz2 = filtreazaAlimentari(ALIM, { card: 'GAZPET2' })
     expect(selectiiDeSalvat(selectii, viz2)).toEqual([{ id: 3, site_id: 9 }])
     expect(selectiiDeSalvat(selectii, filtreazaAlimentari(ALIM, { card: FARA_CARD }))).toEqual([])
+  })
+})
+
+// Review #1184 r2 (P2): un filtru de lună / stație ales pe alt set de rânduri rămâne vizibil ca „fără rezultate”.
+describe('opțiunile filtrelor de lună / stație cu valoarea aleasă păstrată', () => {
+  it('lunile (cele mai noi întâi) și stațiile (alfabetic) din rândurile încărcate', () => {
+    expect(luniDin(ALIM)).toEqual(['2026-11', '2026-10'])
+    expect(statiiDin(ALIM)).toEqual(['OMV', 'Rompetrol Buzău', 'Rompetrol Ploiești'])
+    expect(luniDin(null)).toEqual([])
+  })
+  it('valoarea aleasă prezentă = opțiunile neschimbate', () => {
+    expect(optiuniFiltru(['2026-11', '2026-10'], '2026-10')).toEqual([
+      { valoare: '2026-11', faraRezultate: false },
+      { valoare: '2026-10', faraRezultate: false },
+    ])
+    expect(optiuniFiltru(['2026-11'], 'toate')).toEqual([{ valoare: '2026-11', faraRezultate: false }])
+  })
+  it('scenariul din verdict: noiembrie pe GAZPET1, apoi GAZPET2 (doar octombrie) → noiembrie rămâne, prima, „fără rezultate”', () => {
+    const gazpet2 = [{ id: 7, data_alimentare: '2026-10-02', statie_combustibil: 'OMV', card_combustibil: 'GAZPET2' }]
+    expect(optiuniFiltru(luniDin(gazpet2), '2026-11')).toEqual([
+      { valoare: '2026-11', faraRezultate: true },
+      { valoare: '2026-10', faraRezultate: false },
+    ])
+    expect(optiuniFiltru(statiiDin(gazpet2), 'Rompetrol Buzău')).toEqual([
+      { valoare: 'Rompetrol Buzău', faraRezultate: true },
+      { valoare: 'OMV', faraRezultate: false },
+    ])
+    expect(filtreFaraOptiune(gazpet2, { luna: '2026-11', statie: 'Rompetrol Buzău' })).toEqual(['luna', 'statie'])
+    expect(filtreFaraOptiune(gazpet2, { luna: '2026-10', statie: 'toate' })).toEqual([])
+    // și lista goală: filtrul ales rămâne vizibil
+    expect(optiuniFiltru([], '2026-11')).toEqual([{ valoare: '2026-11', faraRezultate: true }])
+  })
+})
+
+describe('după o salvare cu conflicte / erori se scot doar selecțiile trimise', () => {
+  it('selecțiile făcute între timp (alt card) rămân', () => {
+    const prev = { 1: '17', 2: '17', 3: '18' }
+    expect(faraSelectiileSalvate(prev, [{ id: 1, site_id: 17 }, { id: 2, site_id: 17 }])).toEqual({ 3: '18' })
+    expect(faraSelectiileSalvate(prev, [])).toEqual(prev)
+    expect(prev).toEqual({ 1: '17', 2: '17', 3: '18' })   // nu modifică obiectul primit
   })
 })

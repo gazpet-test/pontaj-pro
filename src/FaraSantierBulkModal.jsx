@@ -17,7 +17,7 @@
 
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
-import { FARA_CARD, filtreazaAlimentari, selectieMasa, selectiiDeSalvat } from './alimentariFaraSantierFiltru.js'
+import { FARA_CARD, filtreazaAlimentari, selectieMasa, selectiiDeSalvat, luniDin, statiiDin, optiuniFiltru, filtreFaraOptiune, faraSelectiileSalvate } from './alimentariFaraSantierFiltru.js'
 import { citesteIndexCarduri, citesteAlimentariCard, citesteAlimentariRecente, salveazaAlocariBulk } from './alimentariAlocare.js'
 
 // Theme — paletă G identică cu Logistica.jsx
@@ -34,6 +34,14 @@ const fmtDate = (iso) => {
   if (!iso) return ''
   const d = new Date(iso)
   return d.toLocaleDateString('ro-RO', { day: '2-digit', month: '2-digit', year: 'numeric' })
+}
+
+// „YYYY-MM” → „noiembrie 2026”, fără new Date() pe text (L17); altă formă = textul brut
+const LUNI_RO = ['ianuarie', 'februarie', 'martie', 'aprilie', 'mai', 'iunie', 'iulie', 'august', 'septembrie', 'octombrie', 'noiembrie', 'decembrie']
+const numeLuna = (m) => {
+  const p = /^(\d{4})-(\d{2})$/.exec(m || '')
+  const i = p ? Number(p[2]) - 1 : -1
+  return i >= 0 && i < 12 ? `${LUNI_RO[i]} ${p[1]}` : String(m)
 }
 
 const fmtDateTime = (iso) => {
@@ -66,7 +74,12 @@ export default function FaraSantierBulkModal({ sites, profile, showToast, onClos
   const genRef = useRef(0)
   const showToastRef = useRef(showToast)
   showToastRef.current = showToast
-  useEffect(() => () => { genRef.current++ }, [])
+  // Cardul ales ACUM (nu cel din closure-ul unei salvări pornite mai demult): reîncărcarea de după salvare îl
+  // citește de aici (review #1184 r2). saveGenRef: rezultatul unei salvări se aplică doar cât modalul e deschis.
+  const filterCardRef = useRef(filterCard)
+  filterCardRef.current = filterCard
+  const saveGenRef = useRef(0)
+  useEffect(() => () => { genRef.current++; saveGenRef.current++ }, [])
 
   // Încărcare: (1) indexul cardurilor pe toate alimentările fără șantier (keyset, nu primele 500);
   // (2) fără card ales = cele mai noi 500 (+ totalul, pentru avertisment); cu card ales = TOATE rândurile
@@ -100,19 +113,12 @@ export default function FaraSantierBulkModal({ sites, profile, showToast, onClos
   useEffect(() => { loadAlim(filterCard) }, [loadAlim, filterCard])
   
   // Liste pentru filtre
-  const luniDisponibile = useMemo(() => {
-    const set = new Set()
-    alimentari.forEach(a => {
-      if (a.data_alimentare) set.add(a.data_alimentare.slice(0, 7))
-    })
-    return Array.from(set).sort().reverse()
-  }, [alimentari])
-  
-  const statiiDisponibile = useMemo(() => {
-    const set = new Set()
-    alimentari.forEach(a => { if (a.statie_combustibil) set.add(a.statie_combustibil) })
-    return Array.from(set).sort()
-  }, [alimentari])
+  // Luna / stația aleasă rămâne în listă ca „(fără rezultate)” dacă noul set de rânduri (alt card, reîncărcare) nu o
+  // mai are — altfel selectorul ar arăta „Toate” peste un tabel gol (review #1184 r2; alimentariFaraSantierFiltru.js).
+  const optiuniLuna = useMemo(() => optiuniFiltru(luniDin(alimentari), filterLuna), [alimentari, filterLuna])
+  const optiuniStatie = useMemo(() => optiuniFiltru(statiiDin(alimentari), filterStatie), [alimentari, filterStatie])
+  const filtreRamase = useMemo(() => filtreFaraOptiune(alimentari, { luna: filterLuna, statie: filterStatie }), [alimentari, filterLuna, filterStatie])
+  const resetFiltre = () => { setFilterLuna('toate'); setFilterStatie('toate'); setFilterWhatsApp('toate'); setFilterVehicul('') }
 
   // Opțiunile de card vin din index (toate alimentările fără șantier). Cardul ales rămâne în listă chiar dacă
   // între timp nu mai are rânduri (altfel dropdown-ul ar arăta alt card decât filtrul aplicat).
@@ -168,24 +174,30 @@ export default function FaraSantierBulkModal({ sites, profile, showToast, onClos
     }
     if (!confirm(`Confirmi alocarea a ${validSelections.length} alimentări la șantierele selectate?`)) return
     
+    const tok = ++saveGenRef.current
+    const trimise = validSelections
     setSaving(true)
     // CAS pe site_id IS NULL, în loturi de 30 (alimentariAlocare.js, cu teste): conflicte = rânduri care
     // primiseră deja șantier între timp; o eroare de server / rețea e eroare, nu conflict.
     let rez
     try {
-      rez = await salveazaAlocariBulk(supabase, validSelections, { profileId: profile?.id || null })
+      rez = await salveazaAlocariBulk(supabase, trimise, { profileId: profile?.id || null })
     } catch (e) {
       rez = { success: 0, conflicte: 0, errors: [{ id: null, msg: e?.message || String(e) }] }
     }
+    if (tok !== saveGenRef.current) return   // modalul s-a închis între timp
     const { success, conflicte, errors } = rez
 
     setSavedCount(success)
     setSaving(false)
 
+    // Reîncărcarea după conflict / eroare folosește filtrul de ACUM (filterCardRef), nu cel de la pornirea salvării;
+    // loadAlim ia o generație nouă, deci un răspuns mai vechi (ex. schimbarea de card făcută în timpul salvării) nu
+    // se mai aplică peste ea. Se scot doar selecțiile trimise; cele alese între timp rămân.
     if (conflicte > 0 && errors.length === 0) {
       showToast(`⚠️ ${success} salvate, ${conflicte} aveau deja șantier (alocate între timp) — lista s-a reîncărcat`, 'warn')
-      loadAlim(filterCard)
-      setSelections({})
+      setSelections(prev => faraSelectiileSalvate(prev, trimise))
+      loadAlim(filterCardRef.current)
     } else if (errors.length === 0) {
       showToast(`✅ ${success} alimentări alocate cu succes!`, 'success')
       // Auto-close după success complet (după 1 sec ca să se vadă toast-ul)
@@ -194,10 +206,13 @@ export default function FaraSantierBulkModal({ sites, profile, showToast, onClos
       showToast(`⚠️ ${success} salvate, ${errors.length} erori${conflicte ? `, ${conflicte} alocate între timp` : ''} (vezi console)`, 'warn')
       console.error('Erori save:', errors)
       // Refresh date ca să vadă ce s-a salvat
-      loadAlim(filterCard)
-      setSelections({})
+      setSelections(prev => faraSelectiileSalvate(prev, trimise))
+      loadAlim(filterCardRef.current)
     }
   }
+
+  // Cât salvarea e în curs modalul nu se închide (nici din fundal / ×), ca rezultatul să ajungă la utilizator.
+  const inchide = () => { if (!saving) onClose?.() }
   
   // ────────────────────────── RENDER ──────────────────────────
   
@@ -207,8 +222,8 @@ export default function FaraSantierBulkModal({ sites, profile, showToast, onClos
         position:'fixed', inset:0, background:'rgba(0,0,0,0.78)',
         zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center',
         padding:20
-      }} 
-      onClick={onClose}
+      }}
+      onClick={inchide}
     >
       <div 
         style={{
@@ -244,9 +259,9 @@ export default function FaraSantierBulkModal({ sites, profile, showToast, onClos
               </div>
             )}
           </div>
-          <button onClick={onClose} style={{
+          <button onClick={inchide} disabled={saving} style={{
             background:'transparent', border:'none', color:G.muted,
-            fontSize:24, cursor:'pointer', padding:'4px 12px'
+            fontSize:24, cursor: saving ? 'wait' : 'pointer', padding:'4px 12px'
           }}>×</button>
         </div>
         
@@ -268,8 +283,8 @@ export default function FaraSantierBulkModal({ sites, profile, showToast, onClos
               }}
             >
               <option value="toate">Toate lunile</option>
-              {luniDisponibile.map(m => (
-                <option key={m} value={m}>{new Date(m + '-01').toLocaleDateString('ro-RO', { month: 'long', year: 'numeric' })}</option>
+              {optiuniLuna.map(({ valoare: m, faraRezultate }) => (
+                <option key={m} value={m}>{numeLuna(m)}{faraRezultate ? ' (fără rezultate)' : ''}</option>
               ))}
             </select>
             
@@ -283,7 +298,7 @@ export default function FaraSantierBulkModal({ sites, profile, showToast, onClos
               }}
             >
               <option value="toate">Toate stațiile</option>
-              {statiiDisponibile.map(s => <option key={s} value={s}>{s}</option>)}
+              {optiuniStatie.map(({ valoare: s, faraRezultate }) => <option key={s} value={s}>{s}{faraRezultate ? ' (fără rezultate)' : ''}</option>)}
             </select>
 
             {/* Filtru card combustibil (TKT-2026-0383/0387) */}
@@ -296,8 +311,8 @@ export default function FaraSantierBulkModal({ sites, profile, showToast, onClos
               }}
             >
               <option value="toate">Toate cardurile</option>
-              {optiuniCard.map(c => <option key={c.card} value={c.card}>💳 {c.card} ({c.nr})</option>)}
-              {(faraCardNr > 0 || filterCard === FARA_CARD) && <option value={FARA_CARD}>Fără card ({faraCardNr})</option>}
+              {optiuniCard.map(c => <option key={c.card} value={c.card}>💳 {c.card} ({c.nr > 0 ? c.nr : 'fără rezultate'})</option>)}
+              {(faraCardNr > 0 || filterCard === FARA_CARD) && <option value={FARA_CARD}>Fără card ({faraCardNr > 0 ? faraCardNr : 'fără rezultate'})</option>}
             </select>
 
             {/* Filtru WhatsApp */}
@@ -410,7 +425,13 @@ export default function FaraSantierBulkModal({ sites, profile, showToast, onClos
             </div>
           ) : filtered.length === 0 ? (
             <div style={{padding:60, textAlign:'center', color:G.muted, fontSize:13}}>
-              Niciun rezultat cu filtrele curente. Încearcă să modifici filtrele.
+              Niciun rezultat cu filtrele curente.{' '}
+              {filtreRamase.length > 0
+                ? `${filtreRamase.map(f => (f === 'luna' ? `Luna aleasă (${numeLuna(filterLuna)})` : `Stația aleasă (${filterStatie})`)).join(' și ')} nu mai ${filtreRamase.length > 1 ? 'au' : 'are'} alimentări în lista încărcată acum.`
+                : 'Încearcă să modifici filtrele.'}
+              <div style={{marginTop:10}}>
+                <button onClick={resetFiltre} style={{background:'transparent', color:G.blue, border:`1px solid ${G.border2}`, borderRadius:6, padding:'4px 10px', fontSize:12, cursor:'pointer'}}>Resetează filtrele (lună, stație, WhatsApp, vehicul)</button>
+              </div>
             </div>
           ) : (
             <table style={{width:'100%', borderCollapse:'collapse', fontSize:12, marginTop:14}}>
