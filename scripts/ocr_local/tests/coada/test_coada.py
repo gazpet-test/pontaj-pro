@@ -88,15 +88,16 @@ class Modele:
 
 class Sistem:
     """Coada + procesul unic pe un folder temporar. `cititori[name](plan, banda) -> (text, rezultat)` se pot înlocui."""
-    def __init__(self, root, *, alive=None, modele=None, run_reader=None):
+    def __init__(self, root, *, alive=None, modele=None, run_reader=None, dir_coada='coada'):
         self.root = root
-        self.dir = root / 'coada'
+        self.dir = root / dir_coada
         self.lacat = root / 'paw' / 'gpu.lock'
         self.lacat.parent.mkdir(parents=True, exist_ok=True)
+        self.globale = Q.cai_globale(self.lacat)
         self.ceas, self.modele = Ceas(), modele or Modele()
         kw = {'alive': alive} if alive else {}
         self.lock = GpuLock(self.lacat, detinator=Q.DETINATOR, **kw)
-        self.coord = Coordinator(self.lock, self.modele, self.dir / 'modele.json')
+        self.coord = Coordinator(self.lock, self.modele, self.globale['modele'])
         self.hooks, self.citiri, self.somn = [], [], []
         self.coada = Q.Coada(self.dir, radacini=(root,))
         self.cititori = {'lighton': self.text_implicit, 'mineru': self.text_implicit}
@@ -260,7 +261,8 @@ class LucratorTests(unittest.TestCase):
             self.assertEqual(ordine, asteptat)
             self.assertEqual(s.modele.jurnal, [('start', 'lighton'), ('stop', 'lighton'), ('start', 'mineru'), ('stop', 'mineru')])
             self.assertFalse(s.lacat.exists())
-            self.assertEqual(json.loads((s.dir / 'modele.json').read_text()), {})
+            self.assertEqual(json.loads(s.globale['modele'].read_text()), {})
+            self.assertFalse((s.dir / 'modele.json').exists())  # nimic al plăcii în rădăcina cozii
             c1, c2 = s.coada.citeste('c000001'), s.coada.citeste('c000002')
             self.assertEqual((c1['stare'], c2['stare']), ('gata', 'gata'))
             self.assertGreaterEqual(c1['dezacorduri'], 1)
@@ -388,13 +390,12 @@ class LucratorTests(unittest.TestCase):
             self.assertTrue(vechi.claim())  # instanța căzută a cozii
             s = Sistem(root, alive=lambda pid: False)
             s.modele.running['lighton'] = [77]
-            s.dir.mkdir(parents=True)
-            (s.dir / 'modele.json').write_text(json.dumps({'cititor': 'lighton', 'vram_inainte': 1400}))
+            s.globale['modele'].write_text(json.dumps({'cititor': 'lighton', 'vram_inainte': 1400}))
             s.lucreaza()
             self.assertEqual(s.modele.jurnal, [('stop', 'lighton')])
             self.assertGreater(s.modele.mem, 0)
             self.assertFalse(s.lacat.exists())
-            self.assertEqual(json.loads((s.dir / 'modele.json').read_text()), {})
+            self.assertEqual(json.loads(s.globale['modele'].read_text()), {})
             self.assertEqual(len(s.ev('curatat_la_pornire')), 1)
 
     def test_cadere_in_pornire_lasa_obligatia_memoriei_pe_disc(self):
@@ -411,7 +412,7 @@ class LucratorTests(unittest.TestCase):
             s.modele.start = start
             with self.assertRaises(Cadere):
                 s.lucreaza()
-            self.assertEqual(json.loads((s.dir / 'modele.json').read_text())['cititor'], 'lighton')
+            self.assertEqual(json.loads(s.globale['modele'].read_text())['cititor'], 'lighton')
             # repornire: procesul vLLM a murit odată cu WSL-ul, dar memoria plăcii e încă ținută
             s.modele.running['lighton'], s.modele.ramasa_mb, s.modele.start = [], 6000, orig
             s2 = Sistem(root, alive=lambda pid: False, modele=s.modele)
@@ -465,15 +466,134 @@ class LucratorTests(unittest.TestCase):
             self.assertEqual(len(s.ev('memorie_tinuta')), 1)
             self.assertEqual(s.coada.citeste('c000001')['stare'], 'gata')
 
-    def test_instanta_unica(self):
+    def test_instanta_unica_pe_masina_oricare_radacina(self):
+        """Jakarinos #1190 r1 P1: instanța e a plăcii (lângă gpu.lock), nu a rădăcinii. O instanță VIE pe rădăcina A
+        (mutexul real, ținut de procesul A) -> B, cu altă rădăcină, refuză fără să atingă placa sau lacătul."""
+        with temporar() as root:
+            a = Sistem(root, dir_coada='coada_a')
+            a.coada.adauga([str(fa_plan(root, 'A', n=1))], 'chat')
+            b = Sistem(root, dir_coada='coada_b')
+            b.coada.adauga([str(fa_plan(root, 'B', n=1))], 'cowork')
+            rezultat = {}
+
+            def prea_mult():  # B a trecut de instanță și așteaptă lacătul lui A: oprit, altfel testul s-ar bloca
+                if len(b.somn) > 20:
+                    raise Q.Oprit()
+            b.hooks.append(prea_mult)
+
+            def in_timpul_lui_a(plan, banda, n):  # A citește (are mutexul, lacătul, modelul): pornim B
+                try:
+                    b.lucreaza()
+                    rezultat['cod'] = 'B a rulat langa A'
+                except E3Error as e:
+                    rezultat['cod'] = e.cod
+                return a.text_implicit(plan, banda, n)
+            a.cititori['lighton'] = in_timpul_lui_a
+            a.lucreaza()
+            self.assertEqual(rezultat['cod'], 'ocupat')
+            self.assertEqual(b.modele.mem, 0)  # B n-a citit memoria, n-a oprit nimic
+            self.assertEqual(b.modele.jurnal, [])
+            self.assertEqual(b.ev('pornire'), [])
+            self.assertEqual(b.coada.citeste('c000001')['stare'], 'asteapta')
+            self.assertEqual(a.coada.citeste('c000001')['stare'], 'gata')
+            # după A, B pornește normal (mutexul a fost eliberat) și vede aceeași placă
+            b.lucreaza()
+            self.assertEqual(b.coada.citeste('c000001')['stare'], 'gata')
+            self.assertEqual(json.loads(b.globale['info'].read_text())['root'], str(b.dir))
+
+    def test_obligatia_memoriei_e_a_placii_nu_a_radacinii(self):
+        """A (rădăcina coada_a) moare după pornirea vLLM; B pornește pe ALTĂ rădăcină: vede obligația lui A și nu
+        eliberează lacătul până la memoria confirmată."""
+        class Cadere(BaseException):
+            pass
+        with temporar() as root:
+            a = Sistem(root, dir_coada='coada_a')
+            a.coada.adauga([str(fa_plan(root, 'A', n=1))], 'chat')
+            orig = a.modele.start
+
+            def start(name):
+                orig(name)
+                raise Cadere()
+            a.modele.start = start
+            with self.assertRaises(Cadere):
+                a.lucreaza()
+            a.modele.running['lighton'], a.modele.ramasa_mb, a.modele.start = [], 6000, orig
+            b = Sistem(root, alive=lambda pid: False, modele=a.modele, dir_coada='coada_b')
+            vazut = []
+
+            def h():
+                vazut.append(b.lacat.exists())
+                if len(vazut) == 30:
+                    a.modele.ramasa_mb = 0
+            b.hooks.append(h)
+            mem0 = a.modele.mem
+            b.lucreaza()
+            self.assertTrue(vazut and all(vazut))
+            self.assertGreater(a.modele.mem, mem0)
+            self.assertEqual(b.ev('pauza')[0]['cod'], 'descarcare_neconfirmata')
+            self.assertFalse(b.lacat.exists())
+            self.assertEqual(json.loads(b.globale['modele'].read_text()), {})
+
+    def test_lacat_preluat_fara_fisierul_obligatiei_verifica_memoria(self):
+        """Proba lui Jakarinos: lacătul vechi al cozii, procesele vLLM dispărute, memoria încă ținută și fișierul
+        obligației LIPSĂ -> memoria se citește oricum, lacătul rămâne până la confirmare."""
+        with temporar() as root:
+            (root / 'paw').mkdir(parents=True)
+            self.assertTrue(GpuLock(root / 'paw' / 'gpu.lock', detinator=Q.DETINATOR).claim())  # instanța căzută
+            s = Sistem(root, alive=lambda pid: False)
+            self.assertFalse(s.globale['modele'].exists())
+            s.modele.ramasa_mb = 6000
+            vazut = []
+
+            def h():
+                vazut.append(s.lacat.exists())
+                if len(vazut) == 20:
+                    s.modele.ramasa_mb = 0
+            s.hooks.append(h)
+            s.lucreaza()
+            self.assertGreater(s.modele.mem, 0)
+            self.assertTrue(vazut and all(vazut))
+            self.assertEqual(len(s.ev('lacat_preluat_la_pornire')), 1)
+            self.assertEqual(s.ev('pauza')[0]['cod'], 'descarcare_neconfirmata')
+            self.assertFalse(s.lacat.exists())
+
+    def test_lacat_ilizibil_la_pornire_verifica_memoria(self):
+        """gpu.lock stricat (rămas de la o cădere) = deținător necunoscut: necunoscut ≠ liber, memoria se verifică."""
         with temporar() as root:
             s = Sistem(root)
-            s.dir.mkdir(parents=True)
-            with mutex(s.dir / 'instanta.lock'):
-                with self.assertRaises(E3Error) as e:
-                    s.lucreaza()
-                self.assertEqual(e.exception.cod, 'ocupat')
-            self.assertEqual(s.modele.mem, 0)  # a doua instanță nu atinge placa
+            s.lacat.write_text('{"detinator": "ocr_co')
+            s.modele.ramasa_mb = 6000
+            vazut = []
+
+            def h():
+                vazut.append(s.lacat.exists())
+                if len(vazut) == 20:
+                    s.modele.ramasa_mb = 0
+            s.hooks.append(h)
+            s.lucreaza()
+            self.assertTrue(vazut and all(vazut))
+            self.assertEqual(len(s.ev('lacat_preluat_la_pornire')), 1)
+            self.assertFalse(s.lacat.exists())
+
+    def test_lacat_liber_fara_obligatie_nu_tine_placa(self):
+        """Contraproba: lacăt liber + nicio obligație = curățenia nu ține lacătul pe memoria altcuiva (E3 / laborator)."""
+        with temporar() as root:
+            s = Sistem(root)
+            s.modele.strain_mb = 6000
+            s.lucreaza()
+            self.assertEqual(s.ev('pauza'), [])
+            self.assertEqual(s.ev('lacat_preluat_la_pornire'), [])
+            self.assertFalse(s.lacat.exists())
+
+    def test_coordonator_cu_stare_in_radacina_refuzat(self):
+        with temporar() as root:
+            s = Sistem(root)
+            for coord in (Coordinator(s.lock, s.modele, s.dir / 'modele.json'),
+                          Coordinator(GpuLock(root / 'alt.lock', detinator=Q.DETINATOR), s.modele, s.globale['modele']),
+                          Coordinator(GpuLock(s.lacat), s.modele, s.globale['modele'])):
+                with self.subTest(stare=str(coord.path), lacat=str(coord.lock.path), det=coord.lock.detinator):
+                    with self.assertRaisesRegex(ValueError, 'coordinatorul cozii'):
+                        Q.Lucrator(s.dir, coord, s.modele, gpu_lock_path=s.lacat, radacini=(root,))
 
     def test_plan_stricat_eroare_restul_continua(self):
         with temporar() as root:
@@ -579,6 +699,306 @@ class LucratorTests(unittest.TestCase):
             self.assertEqual(s2.citiri, [('mineru', 'A', 'p0001_b1'), ('mineru', 'A', 'p0001_b2')])
             self.assertEqual(s2.modele.started, ['mineru'])
             self.assertEqual(s2.coada.citeste('c000001')['stare'], 'gata')
+
+
+@contextlib.contextmanager
+def afara():
+    """Folder în AFARA rădăcinilor permise ale testelor (frate cu .tmp/coada-test): ținta legăturilor rău-intenționate."""
+    d = BASE / '.tmp' / 'coada-afara'
+    d.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=d) as tmp:
+        yield pathlib.Path(tmp)
+
+
+def junction(tinta, legatura):
+    import _winapi
+    _winapi.CreateJunction(str(tinta), str(legatura))
+
+
+class DestinatiiTests(unittest.TestCase):
+    """Jakarinos #1190 r1 P1: reparse / legături fizice pe DESTINAȚIILE scrierilor (nu doar pe intrări)."""
+
+    @unittest.skipUnless(os.name == 'nt', 'junction doar pe Windows')
+    def test_junction_la_folderul_rezultatelor_refuzat_nimic_scris_afara(self):
+        with temporar() as root, afara() as ext:
+            s = Sistem(root)
+            a, b = fa_plan(root, 'A'), fa_plan(root, 'B', n=1)
+            tinta = ext / 'tinta'; tinta.mkdir()
+            dest = a / 'page0001' / 'p0001_b0'; dest.mkdir(parents=True)
+            junction(tinta, dest / 'lighton')
+            try:
+                with self.assertRaisesRegex(ValueError, 'reparse point refuzat'):
+                    s.coada.adauga([str(a)], 'chat')  # refuz la adăugare
+                self.assertEqual(s.coada.ids(), [])
+                os.rmdir(dest / 'lighton')
+                s.coada.adauga([str(a)], 'chat')
+                s.coada.adauga([str(b)], 'chat')
+                junction(tinta, dest / 'lighton')  # legătura apare DUPĂ adăugare: refuz și înaintea citirii
+                s.lucreaza()
+                c1 = s.coada.citeste('c000001')
+                self.assertEqual(c1['stare'], 'eroare')
+                self.assertIn('reparse point refuzat', c1['motiv'])
+                self.assertEqual(list(tinta.iterdir()), [])  # nimic scris prin legătură
+                self.assertNotIn('A', {p for _, p, _ in s.citiri})
+                self.assertEqual(s.coada.citeste('c000002')['stare'], 'gata')
+            finally:
+                if (dest / 'lighton').exists():
+                    os.rmdir(dest / 'lighton')
+
+    @unittest.skipUnless(os.name == 'nt', 'junction doar pe Windows')
+    def test_junction_pe_folderul_benzii_sau_al_celuilalt_cititor(self):
+        # (o legătură pe folderul paginii o prinde deja load_plan: imaginile s-ar rezolva în afara planului)
+        with temporar() as root, afara() as ext:
+            q = Q.Coada(root / 'coada', radacini=(root,))
+            for i, rel in enumerate(('page0001/p0001_b1', 'page0001/p0001_b2/mineru')):
+                with self.subTest(rel=rel):
+                    a = fa_plan(root, 'P%d' % i)
+                    t = ext / ('t%d' % i); t.mkdir()
+                    (a / rel).parent.mkdir(parents=True, exist_ok=True)
+                    junction(t, a / rel)
+                    try:
+                        with self.assertRaisesRegex(ValueError, 'reparse point refuzat'):
+                            q.adauga([str(a)], 'chat')
+                    finally:
+                        os.rmdir(a / rel)
+            self.assertEqual(q.ids(), [])
+
+    def test_legatura_fizica_la_un_rezultat_refuzata(self):
+        with temporar() as root, afara() as ext:
+            s = Sistem(root)
+            a = fa_plan(root, 'A')
+            s.coada.adauga([str(a)], 'chat')
+            s.coada.adauga([str(fa_plan(root, 'B', n=1))], 'chat')
+            secret = ext / 'secret.txt'; secret.write_bytes(b'neatins')
+            d = a / 'page0001' / 'p0001_b0' / 'lighton'; d.mkdir(parents=True)
+            os.link(secret, d / 'raw.txt')  # raw.txt se scrie PE LOC (write_bytes): ar ajunge în fișierul de afară
+            s.lucreaza()
+            c1 = s.coada.citeste('c000001')
+            self.assertEqual(c1['stare'], 'eroare')
+            self.assertIn('legatura fizica refuzata', c1['motiv'])
+            self.assertEqual(secret.read_bytes(), b'neatins')
+            self.assertEqual(s.coada.citeste('c000002')['stare'], 'gata')
+            with self.assertRaisesRegex(ValueError, 'legatura fizica'):
+                Q.Coada(root / 'alta', radacini=(root,)).adauga([str(a)], 'chat')
+
+    def test_temporarele_lui_save_legate_fizic(self):
+        """client.save scrie `<nume>.tmp` PE LOC, apoi os.replace: un .tmp legat fizic ar scrie afară chiar dacă ținta
+        finală e curată. Plan, rădăcina cozii și fișierele de lângă gpu.lock."""
+        with temporar() as root, afara() as ext:
+            secret = ext / 'secret.txt'; secret.write_bytes(b'neatins')
+            q = Q.Coada(root / 'coada', radacini=(root,))
+            for i, rel in enumerate(('read_lighton.json.tmp', 'page0001/p0001_b1/mineru/result.json.tmp')):
+                with self.subTest(rel=rel):
+                    a = fa_plan(root, 'T%d' % i)
+                    (a / rel).parent.mkdir(parents=True, exist_ok=True)
+                    os.link(secret, a / rel)
+                    with self.assertRaisesRegex(ValueError, 'legatura fizica'):
+                        q.adauga([str(a)], 'chat')
+            s = Sistem(root, dir_coada='c2')
+            (s.dir / 'cereri').mkdir(parents=True)
+            for rel in ('stare.json.tmp', 'cereri/c000001.json.tmp'):
+                with self.subTest(rel=rel):
+                    os.link(secret, s.dir / rel)
+                    with self.assertRaisesRegex(ValueError, 'legatura fizica'):
+                        s.lucreaza()
+                    os.unlink(s.dir / rel)
+            for p in (pathlib.Path(str(s.globale['modele']) + '.tmp'), pathlib.Path(str(s.lacat) + '.pending'),
+                      pathlib.Path(str(s.lacat) + '.pending.tmp'), pathlib.Path(str(s.lacat) + '.coord')):
+                with self.subTest(p=p.name):
+                    os.link(secret, p)
+                    with self.assertRaisesRegex(ValueError, 'legatura fizica'):
+                        s.lucreaza()
+                    os.unlink(p)
+            self.assertEqual(s.modele.mem, 0)
+            self.assertEqual(secret.read_bytes(), b'neatins')
+            self.assertEqual(s.lucreaza(), 0)
+
+    def test_o_cerere_legata_fizic_nu_opreste_coada(self):
+        """Verificarea rădăcinii sare fișierele cererilor (le izolează Coada.citeste): o cerere nesigură = eroare pe ea,
+        restul merge, iar originalul mutat în invalide/ nu blochează pornirile următoare."""
+        with temporar() as root, afara() as ext:
+            s = Sistem(root)
+            m = s.coada.adauga([str(fa_plan(root, 'M', n=1))], 'chat')
+            secret = ext / 'cerere.json'; secret.write_bytes((s.coada.cereri / 'c000001.json').read_bytes())
+            os.unlink(s.coada.cereri / 'c000001.json')
+            os.link(secret, s.coada.cereri / 'c000001.json')
+            inainte = secret.read_bytes()
+            s.coada.adauga([str(fa_plan(root, 'B', n=1))], 'chat')
+            self.assertEqual(s.lucreaza(), 0)
+            self.assertEqual((m['id'], s.coada.citeste('c000001')['stare']), ('c000001', 'eroare'))
+            self.assertEqual(s.coada.citeste('c000002')['stare'], 'gata')
+            self.assertEqual(secret.read_bytes(), inainte)
+            self.assertEqual(len(list((s.coada.cereri / 'invalide').iterdir())), 1)
+            s.coada.adauga([str(fa_plan(root, 'C', n=1))], 'chat')
+            self.assertEqual(Sistem(root).lucreaza(), 0)
+            self.assertEqual(s.coada.citeste('c000003')['stare'], 'gata')
+
+    def test_intrare_disparuta_in_timpul_verificarii(self):
+        """Un `.tmp` al unui save din altă comandă (ex. `adauga` în paralel) dispare între listare și lstat: nu e o
+        destinație de scris, verificarea merge mai departe (și tot prinde o legătură fizică de alături)."""
+        with temporar() as root, afara() as ext:
+            d = root / 'coada'; (d / 'cereri').mkdir(parents=True)
+            (d / 'cereri' / 'c000001.json.tmp').write_text('{}')
+            reala = os.lstat
+
+            def lstat(p, *a, **k):
+                if str(p).endswith('c000001.json.tmp'):
+                    raise FileNotFoundError(p)
+                return reala(p, *a, **k)
+            with patch.object(Q.os, 'lstat', side_effect=lstat):
+                self.assertEqual(Q.verifica_radacina(d), d)
+                secret = ext / 's.txt'; secret.write_text('x')
+                # legătura stă în ACELAȘI folder cu intrarea dispărută: dispariția nu trebuie să oprească scanarea folderului
+                for nume in ('c000000.json.tmp', 'c000002.json.tmp', 'zzz.tmp'):
+                    with self.subTest(nume=nume):
+                        os.link(secret, d / 'cereri' / nume)
+                        with self.assertRaisesRegex(ValueError, 'legatura fizica'):
+                            Q.verifica_radacina(d)
+                        os.unlink(d / 'cereri' / nume)
+
+    def test_tipul_destinatiilor(self):
+        with temporar() as root:
+            q = Q.Coada(root / 'coada', radacini=(root,))
+            cazuri = {'comparatie.json': ('dir', 'folder in locul'), 'text_conv.txt': ('dir', 'folder in locul'),
+                      'page0001/p0001_b0/lighton/result.json': ('dir', 'folder in locul'),
+                      'page0001/p0001_b0': ('fisier', 'fisier in locul'), 'page0001/p0001_b2/mineru': ('fisier', 'fisier in locul')}
+            for i, (rel, (fel, motiv)) in enumerate(cazuri.items()):
+                with self.subTest(rel=rel):
+                    a = fa_plan(root, 'T%d' % i)
+                    p = a / rel
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.mkdir() if fel == 'dir' else p.write_text('x')
+                    with self.assertRaisesRegex(ValueError, motiv):
+                        q.adauga([str(a)], 'chat')
+            # contraproba: rezultate obișnuite de la o citire anterioară (reluare) trec
+            a = fa_plan(root, 'OK')
+            d = a / 'page0001' / 'p0001_b0' / 'lighton'; d.mkdir(parents=True)
+            (d / 'raw.txt').write_text('x'); (d / 'result.json').write_text('{}'); (a / 'read_lighton.json').write_text('{}')
+            self.assertEqual(q.adauga([str(a)], 'chat')['id'], 'c000001')
+
+    def test_radacina_cozii_si_fisierele_globale(self):
+        with temporar() as root, afara() as ext:
+            secret = ext / 'secret.txt'; secret.write_bytes(b'neatins')
+            # jurnal.jsonl se scrie cu open('a'): o legătură fizică l-ar scrie afară
+            s = Sistem(root)
+            s.dir.mkdir(parents=True)
+            os.link(secret, s.dir / 'jurnal.jsonl')
+            with self.assertRaisesRegex(ValueError, 'legatura fizica'):
+                s.lucreaza()
+            with self.assertRaisesRegex(ValueError, 'legatura fizica'):
+                Q.verifica_radacina(s.dir)
+            os.unlink(s.dir / 'jurnal.jsonl')
+            # obligația memoriei, lângă gpu.lock
+            os.link(secret, s.globale['modele'])
+            with self.assertRaisesRegex(ValueError, 'legatura fizica'):
+                s.lucreaza()
+            self.assertEqual(s.modele.mem, 0)
+            os.unlink(s.globale['modele'])
+            self.assertEqual(secret.read_bytes(), b'neatins')
+            self.assertEqual(s.lucreaza(), 0)
+
+    @unittest.skipUnless(os.name == 'nt', 'junction doar pe Windows')
+    def test_radacina_cu_cereri_legat_refuzata_in_linia_de_comanda(self):
+        with temporar() as root, afara() as ext, patch.object(Q, 'RADACINI', (root,)):
+            r = root / 'coada'; r.mkdir()
+            junction(ext, r / 'cereri')
+            try:
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    cod = Q.main(['adauga', str(fa_plan(root, 'A')), '--cine', 'chat', '--root', str(r)])
+                self.assertEqual(cod, 2)
+                self.assertIn('reparse', json.loads(out.getvalue())['eroare'])
+                self.assertEqual(list(ext.iterdir()), [])
+            finally:
+                os.rmdir(r / 'cereri')
+
+
+class CereriInvalideTests(unittest.TestCase):
+    """Jakarinos #1190 r1 P2: o cerere cu structură invalidă se izolează ca eroare, restul cozii continuă."""
+
+    def scrie_brut(self, q, id, text):
+        q.cereri.mkdir(parents=True, exist_ok=True)
+        (q.cereri / (id + '.json')).write_bytes(text.encode('utf-8') if isinstance(text, str) else text)
+
+    def valida(self, q, root, nume):
+        c = q.adauga([str(fa_plan(root, nume, n=1))], 'chat')
+        return json.loads((q.cereri / (c['id'] + '.json')).read_text())
+
+    def test_preia_lot_izoleaza_invalidele(self):
+        with temporar() as root:
+            q = Q.Coada(root / 'coada', radacini=(root,))
+            model = self.valida(q, root, 'M')  # c000001 valid
+            os.unlink(q.cereri / 'c000001.json')
+            gresite = {
+                'c000001': 'null', 'c000002': '[1, 2]', 'c000003': '42', 'c000004': '{"id": "c0000',
+                'c000005': json.dumps(dict(model, id='c000009')),  # id-ul altei cereri: scrie() ar suprascrie c000009
+                'c000006': json.dumps(dict(model, id='c000006', stare='citeste_altceva')),
+                'c000007': json.dumps(dict(model, id='c000007', planuri=[None])),
+                'c000008': json.dumps(dict(model, id='c000008', planuri='A')),
+                'c000010': json.dumps(dict(model, id='c000010', planuri=[dict(model['planuri'][0], incercari='2')])),
+                'c000011': json.dumps(dict(model, id='c000011', planuri=[dict(model['planuri'][0], plan_sha256=None)])),
+                'c000012': json.dumps(dict(model, id='c000012', cine=None)),
+                'c000013': json.dumps(dict(model, id='c000013', planuri=[])),
+                'c000014': b'\xff\xfe nu e utf-8',
+            }
+            for id, text in gresite.items():
+                self.scrie_brut(q, id, text)
+            ok = q.adauga([str(fa_plan(root, 'OK', n=1))], 'cowork')  # adauga merge cu invalidele de față
+            self.assertEqual(ok['id'], 'c000015')
+            st = q.stare()  # stare nu cade
+            self.assertEqual({c['id'] for c in st['cereri'] if c['stare'] == 'ilizibil'}, set(gresite))
+            originale = {id: (q.cereri / (id + '.json')).read_bytes() for id in gresite}
+            lot = q.preia_lot()
+            self.assertEqual([c['id'] for c in lot], ['c000015'])
+            for id in gresite:
+                with self.subTest(id=id):
+                    c = q.citeste(id)
+                    self.assertEqual(c['stare'], 'eroare')
+                    self.assertIn('cerere invalida', c['motiv'])
+                    self.assertEqual((root / 'coada' / c['original']).read_bytes(), originale[id])  # originalul păstrat
+                    self.assertEqual(c['original_sha256'], hashlib.sha256(originale[id]).hexdigest())
+            self.assertFalse((q.cereri / 'c000009.json').exists())
+            evs = [json.loads(l) for l in (root / 'coada' / 'jurnal.jsonl').read_text(encoding='utf-8').splitlines()]
+            self.assertEqual(sorted(e['cerere'] for e in evs if e['ev'] == 'cerere_invalida'), sorted(gresite))
+            self.assertEqual(q.preia_lot(), [dict(q.citeste('c000015'))])  # a doua oară: nimic de izolat
+            self.assertEqual(len([l for l in (root / 'coada' / 'jurnal.jsonl').read_text(encoding='utf-8').splitlines()
+                                  if '"cerere_invalida"' in l]), len(gresite))
+
+    def test_lucratorul_trece_peste_cererea_null(self):
+        with temporar() as root:
+            s = Sistem(root)
+            self.scrie_brut(s.coada, 'c000001', 'null')
+            s.coada.adauga([str(fa_plan(root, 'A', n=1))], 'chat')
+            self.assertEqual(s.lucreaza(), 0)
+            self.assertEqual(s.coada.citeste('c000001')['stare'], 'eroare')
+            self.assertEqual(s.coada.citeste('c000002')['stare'], 'gata')
+            self.assertEqual(s.ev('cadere'), [])
+            self.assertEqual([e['cerere'] for e in s.ev('cerere_invalida')], ['c000001'])
+
+    def test_citire_esuata_acum_nu_e_dovada_de_cerere_stricata(self):
+        with temporar() as root:
+            q = Q.Coada(root / 'coada', radacini=(root,))
+            q.adauga([str(fa_plan(root, 'A', n=1))], 'chat')
+            reala = Q.Coada.citeste
+            with patch.object(Q.Coada, 'citeste', side_effect=PermissionError('ocupat de antivirus')):
+                self.assertEqual(q.preia_lot(), [])
+            self.assertEqual(reala(q, 'c000001')['stare'], 'asteapta')  # nu s-a izolat
+            self.assertFalse((q.cereri / 'invalide').exists())
+            self.assertEqual([c['id'] for c in q.preia_lot()], ['c000001'])
+
+    def test_fisierul_cererii_legatura_fizica_izolat_tinta_neatinsa(self):
+        with temporar() as root, afara() as ext:
+            q = Q.Coada(root / 'coada', radacini=(root,))
+            m = self.valida(q, root, 'M')
+            os.unlink(q.cereri / 'c000001.json')
+            secret = ext / 'cerere.json'; secret.write_text(json.dumps(m))
+            os.link(secret, q.cereri / 'c000001.json')
+            inainte = secret.read_bytes()
+            self.assertEqual(q.preia_lot(), [])
+            c = q.citeste('c000001')
+            self.assertEqual(c['stare'], 'eroare')
+            self.assertIn('legatura fizica', c['motiv'])
+            self.assertEqual(secret.read_bytes(), inainte)
 
 
 class ProtocolTests(unittest.TestCase):

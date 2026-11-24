@@ -2,7 +2,12 @@
 Ele CER citirea unui plan (`coada adauga`); UN singur proces pe serverul AI (`coada lucreaza`) rulează cererile pe rând.
 
 Cererile = câte un fișier JSON în <root>/cereri/ (scriere atomică: temp + fsync + os.replace). Tranzițiile (adăugare,
-anulare, preluare în lot) se fac sub lacătul scurt <root>/coada.lock; procesul unic ține <root>/instanta.lock toată viața.
+anulare, preluare în lot) se fac sub lacătul scurt <root>/coada.lock. Instanța unică și obligația de recuperare sunt ale
+PLĂCII, nu ale rădăcinii (Jakarinos #1190 r1 P1): procesul ține toată viața `ocr_coada.instanta.lock`, iar obligația de a
+dovedi memoria eliberată stă în `ocr_coada.modele.json`, ambele lângă gpu.lock (cai_globale) -> două `--root` diferite nu
+pot rula două procese și oricare instanță nouă vede obligația celei căzute.
+O cerere ilizibilă / cu structură invalidă se izolează (originalul în <root>/cereri/invalide/, cererea = eroare cu motiv),
+restul cozii merge mai departe (r1 P2).
 
 Lotul = toate cererile active în clipa preluării, în ordinea numerelor. Pe lot:
   gpu.lock (deținător `ocr_coada`) -> pornește LightOn -> `citeste` pe toate planurile -> oprește LightOn (eliberare
@@ -15,7 +20,9 @@ La pornire: modelele rămase după o cădere se opresc (cu memoria confirmată) 
 (WSL, vLLM, memorie neconfirmată) = pauză crescătoare cu plafon (Pauza din e3_gpu), fără reîncercări în buclă rapidă.
 Un plan stricat / o citire oprită (termen, bandă întreruptă) = eroare pe acea cerere; restul cozii continuă.
 Nicio comandă de aici nu e derivată din conținutul OCR; căile vin doar de la sesiuni și se validează (sub paw-data,
-fără UNC / ADS / reparse points), la adăugare și din nou înainte de fiecare citire."""
+fără UNC / ADS / reparse points), la adăugare și din nou înainte de fiecare citire. La fel și DESTINAȚIILE scrierilor
+(r1 P1): tot arborele planului (benzi, rezultate, comparații), folderul cozii și fișierele de lângă gpu.lock — fără
+reparse points, fără legături fizice (st_nlink > 1), doar foldere și fișiere obișnuite."""
 import argparse
 import datetime as dt
 import hashlib
@@ -34,11 +41,14 @@ from .gpu_cedare import cerere_activa
 RADACINI = (pathlib.Path('C:/Users/Public/paw-data'),)
 ROOT = pathlib.Path('C:/Users/Public/paw-data/ocr_coada')
 DETINATOR = 'ocr_coada'
-VERSIUNE = 'coada-v1'
+VERSIUNE = 'coada-v2'
 READERS = ('lighton', 'mineru')
 ACTIVE = ('asteapta', 'citeste_lighton', 'citeste_mineru', 'compara')
 FINALE = ('gata', 'eroare', 'anulata')
 ID_RE = re.compile(r'^c(\d{6})$')
+SHA_RE = re.compile(r'^[0-9a-f]{64}$')
+# Fișierele scrise de citire / comparare / textul convocator direct în folderul planului (restul: sub page*/<banda>/<cititor>/)
+FISIERE_PLAN = ('read_lighton.json', 'read_mineru.json', 'comparatie.json', 'dezacorduri.jsonl', 'text_conv.txt')
 CINE_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,39}$')
 MAX_PLANURI = 200
 MAX_INCERCARI_PLAN = 3       # excepții neprevăzute pe același plan (nu termen / gardă): apoi eroare pe cerere, coada merge mai departe
@@ -87,18 +97,7 @@ def cale_sigura(p, radacini=None):
     full = os.path.abspath(p)
     if not sub_radacini(full, radacini):
         raise ValueError('in afara radacinilor permise: %s' % full)
-    cur = full
-    while True:
-        try:
-            st = os.lstat(cur)
-        except FileNotFoundError:
-            st = None
-        if st is not None and _reparse(st):
-            raise ValueError('reparse point refuzat: %s' % cur)
-        parinte = os.path.dirname(cur)
-        if parinte == cur:
-            break
-        cur = parinte
+    stramosi_fara_reparse(full)
     if not os.path.isdir(full):
         raise ValueError('director lipsa: %s' % full)
     pj = os.path.join(full, 'plan.json')
@@ -111,6 +110,114 @@ def cale_sigura(p, radacini=None):
     return pathlib.Path(full)
 
 
+def stramosi_fara_reparse(full):
+    """Calea însăși (dacă există) și fiecare strămoș până la rădăcina discului: niciun reparse point (symlink / junction)."""
+    cur = os.path.abspath(str(full))
+    while True:
+        try:
+            st = os.lstat(cur)
+        except FileNotFoundError:
+            st = None
+        if st is not None and _reparse(st):
+            raise ValueError('reparse point refuzat: %s' % cur)
+        parinte = os.path.dirname(cur)
+        if parinte == cur:
+            return
+        cur = parinte
+
+
+def _intrare_sigura(cale, st, *, dir_asteptat=None):
+    """O destinație de scriere existentă: folder sau fișier obișnuit, fără reparse point, fără legături fizice (o scriere
+    pe loc — write_bytes / open('w'|'a') — ar ajunge în celălalt nume al fișierului, oriunde ar fi el pe disc)."""
+    if _reparse(st):
+        raise ValueError('reparse point refuzat: %s' % cale)
+    if stat.S_ISDIR(st.st_mode):
+        if dir_asteptat is False:
+            raise ValueError('folder in locul unui fisier: %s' % cale)
+        return True
+    if not stat.S_ISREG(st.st_mode):
+        raise ValueError('nu e fisier obisnuit: %s' % cale)
+    if st.st_nlink > 1:
+        raise ValueError('legatura fizica refuzata: %s' % cale)
+    if dir_asteptat is True:
+        raise ValueError('fisier in locul unui folder: %s' % cale)
+    return False
+
+
+def verifica_arbore(d, max_intrari=200000, sari=None):
+    """Toate intrările de sub `d` (inclusiv `d`), fără a urma nimic (lstat + scandir): vezi _intrare_sigura. Prinde și
+    numele pe care nu le scrie nimeni direct, dar le scrie `client.save` PE LOC înainte de os.replace (`<nume>.tmp`) sau
+    GpuLock (`.pending`). Un folder lipsă = nimic de verificat (se creează la scriere, ca folder obișnuit).
+    `sari(cale)` = adevărat -> intrarea nu se verifică și nu se coboară în ea (fișierele cererilor: Coada.citeste)."""
+    try:
+        st = os.lstat(d)
+    except FileNotFoundError:
+        return 0
+    stiva, n = [(str(d), st)], 0
+    while stiva:
+        cale, st = stiva.pop()
+        n += 1
+        if n > max_intrari:
+            raise ValueError('prea multe intrari sub %s' % d)
+        if _intrare_sigura(cale, st):
+            try:
+                with os.scandir(cale) as it:
+                    nume = [e.path for e in it]
+            except FileNotFoundError:
+                continue  # folderul a dispărut între timp: nimic sub el
+            for x in nume:  # în afara try-ului de mai sus: o intrare dispărută nu ascunde restul folderului
+                if sari is None or not sari(x):
+                    try:
+                        stiva.append((x, os.lstat(x)))
+                    except FileNotFoundError:
+                        pass  # dispărută între listare și lstat (ex. `.tmp`-ul unui save din altă comandă): nimic de scris prin ea
+    return n
+
+
+def verifica_destinatii_plan(d, doc):
+    """Destinațiile scrierilor citirii (read.run_reader), comparării și textului convocator (Jakarinos #1190 r1 P1):
+    tot arborele planului fără reparse / legături fizice, iar căile scrise au tipul așteptat (folder / fișier)."""
+    d = pathlib.Path(d)
+    stramosi_fara_reparse(d)
+    verifica_arbore(d)
+
+    def tip(p, dir_asteptat):
+        try:
+            _intrare_sigura(str(p), os.lstat(p), dir_asteptat=dir_asteptat)
+        except FileNotFoundError:
+            pass
+    for nume in FISIERE_PLAN:
+        tip(d / nume, False)
+    for b in doc['bands']:
+        pag = d / ('page%04d' % b['page'])
+        tip(pag, True)
+        tip(pag / b['id'], True)
+        for r in READERS:
+            tip(pag / b['id'] / r, True)
+            for nume in ('raw.txt', 'result.json', 'request_started.json', 'layout.json'):
+                tip(pag / b['id'] / r / nume, False)
+
+
+def verifica_fisiere_globale(*cai):
+    """Fișierele cozii de lângă gpu.lock (instanța, obligația memoriei, gpu.lock cu .pending / .coord): strămoșii fără
+    reparse, fișierul (dacă există) obișnuit și fără legături fizice; la fel temporarul lui `client.save` (`<nume>.tmp`)."""
+    for p in cai:
+        p = pathlib.Path(p)
+        stramosi_fara_reparse(p)
+        for x in (p, p.with_name(p.name + '.tmp')):
+            try:
+                _intrare_sigura(str(x), os.lstat(x), dir_asteptat=False)
+            except FileNotFoundError:
+                pass
+
+
+def cai_globale(gpu_lock_path):
+    """Instanța unică și obligația de recuperare = ale plăcii (lângă gpu.lock), nu ale rădăcinii cozii (r1 P1)."""
+    g = pathlib.Path(gpu_lock_path)
+    return {'instanta': g.with_name(DETINATOR + '.instanta.lock'), 'modele': g.with_name(DETINATOR + '.modele.json'),
+            'info': g.with_name(DETINATOR + '.instanta.json')}  # info = ultima pornire (rădăcina, pid), doar pentru `stare`
+
+
 def cheie_cale(p):
     return os.path.normcase(os.path.abspath(str(p)))
 
@@ -120,23 +227,94 @@ def sha_fisier(p):
 
 
 def valideaza_plan(p, radacini=None):
-    """Calea sigură + planul complet și neschimbat (load_plan verifică id-urile, căile și sha-ul fiecărei imagini)."""
+    """Calea sigură + planul complet și neschimbat (load_plan verifică id-urile, căile și sha-ul fiecărei imagini)
+    + destinațiile scrierilor (verifica_destinatii_plan)."""
     from .plan import load_plan
     d = cale_sigura(p, radacini)
     try:
         doc = load_plan(d)
-    except (ValueError, KeyError, TypeError) as e:
+    except (ValueError, KeyError, TypeError, OSError) as e:
         raise ValueError('plan invalid (%s): %s' % (d, str(e)[:200])) from None
+    verifica_destinatii_plan(d, doc)
     nerez = sum(1 for x in doc.get('pages', []) if x.get('route') == 'orientare_nerezolvata')
     return d, doc, {'cale': str(d), 'plan_sha256': sha_fisier(d / 'plan.json'), 'benzi': len(doc['bands']),
                     'pagini_nerezolvate': nerez}
 
 
 # --- coada pe disc ----------------------------------------------------------------------------------------------------
+def _intreg(v):
+    return isinstance(v, int) and not isinstance(v, bool) and v >= 0
+
+
+def valideaza_cerere(c, id):
+    """Structura unei cereri citite de pe disc (Jakarinos #1190 r1 P2): orice abatere = ValueError cu motiv, ca nimic să
+    nu ajungă la `.get` pe un ne-obiect sau la un tip neașteptat în proces. id-ul din fișier = numele fișierului (altfel
+    scrie() ar scrie peste altă cerere). Cererile active au și `cine` + cel puțin un plan cu cale și sha256."""
+    if not isinstance(c, dict):
+        raise ValueError('structura: cererea nu e un obiect JSON (%s)' % type(c).__name__)
+    if c.get('id') != id:
+        raise ValueError('structura: id-ul din cerere (%r) nu e numele fisierului' % (c.get('id'),))
+    st = c.get('stare')
+    if st not in ACTIVE + FINALE:
+        raise ValueError('structura: stare necunoscuta %r' % (st,))
+    if not _intreg(c.get('versiune', 0)):
+        raise ValueError('structura: versiune invalida')
+    for k in ('motiv', 'creat_la', 'actualizat_la', 'preluat_la'):
+        if c.get(k) is not None and not isinstance(c[k], str):
+            raise ValueError('structura: %s nu e text' % k)
+    if c.get('dezacorduri') is not None and not _intreg(c['dezacorduri']):
+        raise ValueError('structura: dezacorduri invalid')
+    planuri = c.get('planuri')
+    if not isinstance(planuri, list) or len(planuri) > MAX_PLANURI or (st in ACTIVE and not planuri):
+        raise ValueError('structura: lista de planuri invalida')
+    if st in ACTIVE and not (isinstance(c.get('cine'), str) and CINE_RE.match(c['cine'])):
+        raise ValueError('structura: cine invalid')
+    if c.get('cine') is not None and not isinstance(c['cine'], str):
+        raise ValueError('structura: cine invalid')
+    for i, p in enumerate(planuri):
+        if not isinstance(p, dict):
+            raise ValueError('structura: planul %d nu e obiect' % i)
+        if not isinstance(p.get('cale'), str) or not p['cale'].strip():
+            raise ValueError('structura: planul %d fara cale' % i)
+        if not isinstance(p.get('plan_sha256'), str) or not SHA_RE.match(p['plan_sha256']):
+            raise ValueError('structura: planul %d fara plan_sha256' % i)
+        for k in READERS + ('eroare',):
+            if p.get(k) is not None and not isinstance(p[k], str):
+                raise ValueError('structura: planul %d, %s nu e text' % (i, k))
+        for k in ('incercari', 'dezacorduri', 'pagini_nerezolvate', 'benzi'):
+            if p.get(k) is not None and not _intreg(p[k]):
+                raise ValueError('structura: planul %d, %s invalid' % (i, k))
+    return c
+
+
+def verifica_radacina(root):
+    """Destinațiile din folderul cozii (r1 P1): strămoșii fără reparse, tot arborele (inclusiv temporarele `.tmp`) fără
+    reparse / legături fizice, iar folderele și fișierele scrise de coadă au tipul așteptat. Se sar DOAR fișierele
+    cererilor (le verifică Coada.citeste la fiecare citire și, dacă sunt nesigure, le izolează) și conținutul lui
+    cereri/invalide (originale mutate, nescrise niciodată): o singură cerere nesigură nu oprește coada (r1 P2)."""
+    root = pathlib.Path(root)
+    stramosi_fara_reparse(root)
+    cereri, inv = cheie_cale(root / 'cereri'), cheie_cale(root / 'cereri' / 'invalide')
+
+    def sari(cale):
+        parinte, nume = os.path.split(cheie_cale(cale))
+        return parinte == inv or (parinte == cereri and ID_RE.match(nume[:-5] if nume.endswith('.json') else '') is not None)
+    verifica_arbore(root, sari=sari)
+    for p, d in ((root, True), (root / 'cereri', True), (root / 'cereri' / 'invalide', True),
+                 (root / 'jurnal.jsonl', False), (root / 'stare.json', False), (root / 'coada.lock', False),
+                 (root / 'opreste', False)):
+        try:
+            _intrare_sigura(str(p), os.lstat(p), dir_asteptat=d)
+        except FileNotFoundError:
+            pass
+    return root
+
+
 class Coada:
     def __init__(self, root=ROOT, *, radacini=None, sleep=time.sleep, lacat_s=10.0):
         self.root, self.radacini, self.sleep, self.lacat_s = pathlib.Path(root), radacini, sleep, lacat_s
         self.cereri = self.root / 'cereri'
+        self._izolare_esuata = set()
 
     class _Tranzitie:
         """Lacătul scurt al tranzițiilor (mutex de OS, non-blocant) cu reîncercare la 0,1 s, cel mult `lacat_s`."""
@@ -175,9 +353,44 @@ class Coada:
         return sorted(out, key=lambda s: int(s[1:]))
 
     def citeste(self, id):
+        """Cererea validată (valideaza_cerere). ValueError = cerere invalidă (JSON stricat, structură, fișier nesigur);
+        OSError = citire eșuată acum (tranzitoriu)."""
         if not ID_RE.match(str(id)):
             raise ValueError('id invalid: %r' % id)
-        return json.loads((self.cereri / (id + '.json')).read_text(encoding='utf-8'))
+        p = self.cereri / (id + '.json')
+        st = os.lstat(p)
+        if _reparse(st) or not stat.S_ISREG(st.st_mode) or st.st_nlink > 1:
+            raise ValueError('fisierul cererii nu e un fisier obisnuit (reparse / legatura fizica)')
+        try:
+            c = json.loads(p.read_text(encoding='utf-8'))
+        except UnicodeDecodeError:
+            raise ValueError('JSON ilizibil (nu e UTF-8)') from None
+        except ValueError as e:
+            raise ValueError('JSON ilizibil: %s' % str(e)[:120]) from None
+        return valideaza_cerere(c, id)
+
+    def izoleaza(self, id, motiv):
+        """Cerere invalidă (r1 P2): originalul (orice ar fi, fără a-l urma) se mută în cereri/invalide/, iar în locul lui
+        rămâne o cerere `eroare` cu motivul și urma originalului. Se cheamă DOAR sub tranziție. Coada merge mai departe."""
+        p = self.cereri / (id + '.json')
+        inv = self.cereri / 'invalide'
+        inv.mkdir(exist_ok=True)
+        _intrare_sigura(str(inv), os.lstat(inv), dir_asteptat=True)
+        original_sha = None
+        try:
+            st = os.lstat(p)
+            if not _reparse(st) and stat.S_ISREG(st.st_mode) and st.st_nlink == 1:
+                original_sha = sha_fisier(p)
+        except OSError:
+            pass
+        dest = inv / ('%s_%s.json' % (id, dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')))
+        os.replace(p, dest)  # mută numele (link-ul însuși, nu ținta)
+        c = {'id': id, 'cine': None, 'creat_la': None, 'stare': 'eroare', 'motiv': ('cerere invalida: %s' % motiv)[:500],
+             'planuri': [], 'dezacorduri': None, 'versiune': 0,
+             'original': str(dest.relative_to(self.root)), 'original_sha256': original_sha}
+        self.scrie(c)
+        jurnal(self.root, 'cerere_invalida', cerere=id, motiv=c['motiv'], original=c['original'])
+        return c
 
     def scrie(self, c):
         c['actualizat_la'] = acum_iso()
@@ -190,8 +403,8 @@ class Coada:
         for id in self.ids():
             try:
                 out.append(self.citeste(id))
-            except (OSError, ValueError):
-                out.append({'id': id, 'stare': 'ilizibil'})
+            except (OSError, ValueError) as e:
+                out.append({'id': id, 'stare': 'ilizibil', 'motiv': str(e)[:200], 'planuri': []})
         return out
 
     def adauga(self, planuri, cine):
@@ -238,13 +451,24 @@ class Coada:
 
     def preia_lot(self):
         """Lotul = toate cererile active, în ordinea numerelor. Cele în așteptare trec în `citeste_lighton` sub lacăt
-        (CAS pe stare: o cerere anulată între timp nu intră). Cele rămase în lucru după o cădere se reiau."""
+        (CAS pe stare: o cerere anulată între timp nu intră). Cele rămase în lucru după o cădere se reiau.
+        O cerere invalidă (ValueError) se izolează ca eroare, cu motiv (r1 P2); o citire eșuată acum (OSError) se sare
+        în lotul acesta și se încearcă la următorul (nu e dovadă că cererea e stricată)."""
         with self.tranzitie():
             lot = []
             for id in self.ids():
                 try:
                     c = self.citeste(id)
-                except (OSError, ValueError):
+                except ValueError as e:
+                    try:
+                        self.izoleaza(id, str(e))
+                    except (OSError, ValueError) as e2:
+                        # nici izolarea n-a mers (ex. cereri/invalide nesigur): cererea rămâne pe loc, sărită, o linie în jurnal
+                        if id not in self._izolare_esuata:
+                            jurnal(self.root, 'izolare_esuata', cerere=id, motiv=str(e2)[:200])
+                        self._izolare_esuata.add(id)
+                    continue
+                except OSError:
                     continue
                 if c.get('stare') == 'asteapta':
                     c['stare'] = 'citeste_lighton'
@@ -327,6 +551,13 @@ class Lucrator:
         self.coada = Coada(self.root, radacini=radacini, sleep=sleep)
         self.c, self.models, self.lock = coordinator, models, coordinator.lock
         self.gpu_lock_path = pathlib.Path(gpu_lock_path)
+        self.globale = cai_globale(self.gpu_lock_path)
+        # Instanța și obligația memoriei sunt ale plăcii (r1 P1): un coordinator cu starea în altă parte (ex. în rădăcina
+        # cozii) sau cu alt lacăt / alt deținător ar reface exact defectul -> refuz la construire.
+        if (cheie_cale(coordinator.path) != cheie_cale(self.globale['modele'])
+                or cheie_cale(self.lock.path) != cheie_cale(self.gpu_lock_path) or self.lock.detinator != DETINATOR):
+            raise ValueError('coordinatorul cozii trebuie sa foloseasca %s, %s si detinatorul %s'
+                             % (self.gpu_lock_path, self.globale['modele'], DETINATOR))
         self.radacini, self.run_reader, self.compare, self.text = radacini, run_reader or _rr, compare or _cmp, text
         self.clock, self._sleep, self.pornire_max_s, self.poll_s = clock, sleep, pornire_max_s, poll_s
         self.pauza = pauza or Pauza(plafon=3600, baza=60)
@@ -405,16 +636,34 @@ class Lucrator:
                 return
             self.esec(cod)
 
+    def _lacat_existent(self):
+        """None = gpu.lock nu există; altfel tokenul din el ('' = ilizibil / fără token: tot preluare)."""
+        try:
+            old = json.loads(self.gpu_lock_path.read_text(encoding='utf-8'))
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError):
+            return ''
+        return str(old.get('token') or '') if isinstance(old, dict) else ''
+
     def curata_pornire(self):
         """Înainte de orice: dacă lacătul e liber sau e al unei instanțe moarte a cozii, modelele rămase se opresc
-        (memoria confirmată dacă există obligația pe disc, modele.json). Lacătul altuia (E3, laborator) nu se atinge."""
+        (memoria confirmată dacă există obligația pe disc, ocr_coada.modele.json, comună tuturor rădăcinilor). Lacătul
+        altuia (E3, laborator) nu se atinge. Lacătul preluat de la o instanță căzută (sau ilizibil) = memoria se verifică
+        ORICUM, chiar dacă fișierul obligației lipsește (Jakarinos #1190 r1 P1: necunoscut ≠ liber, L18)."""
+        preluat = False
         while True:
             try:
-                if not self.tin and not self.lock.claim():
-                    self.jurnal('pornire_lacat_altcuiva')
-                    return
+                if not self.tin:
+                    vechi = self._lacat_existent()
+                    if not self.lock.claim():
+                        self.jurnal('pornire_lacat_altcuiva')
+                        return
+                    preluat = vechi is not None and vechi != self.lock.token
+                    if preluat:
+                        self.jurnal('lacat_preluat_la_pornire')
                 self.tin = True
-                ok = self.c.descarca(None)
+                ok = self.c.descarca(None, verifica_memoria=preluat)
             except Exception as exc:
                 self.esec(cod_exceptie(exc))
                 continue
@@ -494,18 +743,21 @@ class Lucrator:
         self.jurnal('plan_eroare', cerere=c['id'], plan=p['cale'], motiv=p['eroare'])
 
     def _plan_dir(self, p):
+        """Înaintea fiecărei citiri și a comparării: calea, plan.json neschimbat, planul valid ȘI destinațiile scrierilor
+        (arborele planului fără reparse / legături fizice, r1 P1) -> (folder, plan)."""
+        from .plan import load_plan
         d = cale_sigura(p['cale'], self.radacini)
         if sha_fisier(d / 'plan.json') != p.get('plan_sha256'):
             raise ValueError('plan.json s-a schimbat dupa adaugare')
-        return d
+        doc = load_plan(d)
+        verifica_destinatii_plan(d, doc)
+        return d, doc
 
     def citeste_plan(self, c, p, reader):
         """'complete' | 'plan_eroare' | 'repornire' (plan în eroare + modelul se oprește, backend neconfirmat liber)
         | 'cedat_e3' | 'oprit' | 'infra' (excepție neprevăzută, se reîncearcă după pauză, cel mult MAX_INCERCARI_PLAN)."""
         try:
-            d = self._plan_dir(p)
-            from .plan import load_plan
-            load_plan(d)
+            d, _ = self._plan_dir(p)
         except (ValueError, OSError, KeyError, TypeError) as e:
             self._eroare_plan(c, p, 'plan: %s' % str(e)[:200])
             return 'plan_eroare'
@@ -578,15 +830,14 @@ class Lucrator:
                     self._eroare_plan(c, p, 'citire neterminata')
                 continue
             try:
-                d = self._plan_dir(p)
+                d, doc = self._plan_dir(p)
                 rez = self.compare(d)[0]
                 p['dezacorduri'], p['e_cantitate'] = rez.get('disagreements'), rez.get('e_cantitate')
             except Exception as e:
                 self._eroare_plan(c, p, 'compara: %s' % str(e)[:200])
                 continue
             try:
-                from .plan import load_plan
-                p['text_conv'] = self.text(d, load_plan(d))
+                p['text_conv'] = self.text(d, doc)
             except Exception as e:
                 p['text_conv'] = {'eroare': '%s: %s' % (type(e).__name__, str(e)[:160])}
             self.coada.scrie(c)
@@ -616,11 +867,19 @@ class Lucrator:
                 self.compara(c)
 
     def lucreaza(self, o_data=False):
-        """Procesul unic (instanta.lock, mutex de OS eliberat și la cădere). o_data = iese când coada e goală."""
+        """Procesul unic pe MAȘINĂ: mutex de OS (eliberat și la cădere) pe ocr_coada.instanta.lock de lângă gpu.lock,
+        oricare ar fi --root (r1 P1). Înainte: destinațiile din rădăcină și de lângă gpu.lock verificate (fără reparse /
+        legături fizice). o_data = iese când coada e goală."""
+        verifica_radacina(self.root)
+        verifica_fisiere_globale(self.globale['instanta'], self.globale['modele'], self.globale['info'],
+                                 # GpuLock: .coord = mutex (scriere pe loc), .pending (+ .tmp) = save înainte de rename;
+                                 # gpu.lock însuși nu (pe POSIX are un al doilea nume o clipă, os.link + unlink)
+                                 str(self.gpu_lock_path) + '.coord', str(self.gpu_lock_path) + '.pending')
         self.root.mkdir(parents=True, exist_ok=True)
-        with mutex(self.root / 'instanta.lock'):
+        with mutex(self.globale['instanta']):
             (self.root / 'opreste').unlink(missing_ok=True)
-            self.jurnal('pornire', pid=os.getpid(), versiune=VERSIUNE)
+            save(self.globale['info'], {'root': str(self.root), 'pid': os.getpid(), 'la': acum_iso(), 'versiune': VERSIUNE})
+            self.jurnal('pornire', pid=os.getpid(), versiune=VERSIUNE, radacina=str(self.root))
             self.stare('pornire')
             try:
                 self.curata_pornire()
@@ -667,12 +926,17 @@ def main(argv=None):
     x = p.parse_args(argv)
     try:
         # rădăcina cozii respectă aceleași reguli ca planurile (fără plan.json): sub paw-data, fără UNC / ADS / reparse
-        root = cale_radacina(str(x.root))
+        root = verifica_radacina(cale_radacina(str(x.root)))
         q = Coada(root)
         if x.cmd == 'adauga':
             res = q.adauga(x.planuri, x.cine)
         elif x.cmd == 'stare':
             res = q.stare(x.cine)
+            from .read import protocol
+            try:  # procesul unic e al mașinii: arată și pe ce rădăcină rulează (poate fi alta decât --root)
+                res['instanta'] = json.loads(cai_globale(protocol()['gpu_lock'])['info'].read_text(encoding='utf-8'))
+            except (OSError, ValueError, KeyError):
+                res['instanta'] = None
         elif x.cmd == 'anuleaza':
             res = q.anuleaza(x.id)
         elif x.cmd == 'opreste':
@@ -685,7 +949,7 @@ def main(argv=None):
             cfg, proto = json.loads(x.config.read_text(encoding='utf-8')), protocol()
             models = WslModels(cfg, proto)
             lock = GpuLock(proto['gpu_lock'], detinator=DETINATOR)
-            coord = Coordinator(lock, models, root / 'modele.json')
+            coord = Coordinator(lock, models, cai_globale(proto['gpu_lock'])['modele'])  # obligația = a plăcii (r1 P1)
             return Lucrator(root, coord, models, gpu_lock_path=proto['gpu_lock']).lucreaza(o_data=x.o_data)
     except (ValueError, E3Error) as e:
         print(json.dumps({'eroare': str(getattr(e, 'cod', None) or e)}, ensure_ascii=False))

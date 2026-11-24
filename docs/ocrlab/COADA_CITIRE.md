@@ -19,7 +19,9 @@ Toate comenzile rulează pe server, din `<clona>\scripts`, cu `<py>` = interpret
 
 - **Ce se acceptă:** un director cu `plan.json` complet (`plan_complete`, imaginile neschimbate), **sub `C:\Users\Public\paw-data\`**,
   cale absolută, fără UNC (`\\server`, `//server`, `\\?\`), fără ADS (`fișier:flux`), fără symlink / junction pe drum. Același plan
-  într-o cerere încă activă = refuz cu numărul cererii. Cel mult 200 de planuri pe cerere.
+  într-o cerere încă activă = refuz cu numărul cererii. Cel mult 200 de planuri pe cerere. **Și înăuntrul planului** (acolo se
+  scriu rezultatele): niciun symlink / junction, nicio legătură fizică (hard link), folderele benzilor = foldere, fișierele
+  rezultatelor = fișiere; verificat la adăugare și din nou înaintea fiecărei citiri (încălcat = `eroare` pe acea cerere).
 - **Stări:** `asteapta` → `citeste_lighton` → `citeste_mineru` → `compara` → `gata` / `eroare` (cu `motiv`) / `anulata`.
   `stare` arată și `dezacorduri` (total pe cerere), `pagini_nerezolvate` (pagini cu orientarea neconfirmată: NU se citesc —
   confirmi orientarea pe foaia de contact și refaci planul) și `proces` (faza procesului unic și ora ultimei scrieri).
@@ -28,18 +30,23 @@ Toate comenzile rulează pe server, din `<clona>\scripts`, cu `<py>` = interpret
   sha256), `text_conv.txt`. Dezacordurile se arbitrează de om (sau, cu „da”-ul lui Răzvan, prin pașii plătiți existenți).
 - **`eroare` pe o cerere nu oprește coada.** Motive tipice: plan schimbat după adăugare, imagine schimbată, citire oprită
   (`stopped_no_retry`: termen / transport), bandă întreruptă la o cădere (`interrupted_needs_review`: rămâne la om, ca până
-  acum — după verificare se șterge `request_started.json` al benzii și se adaugă din nou cererea).
+  acum — după verificare se șterge `request_started.json` al benzii și se adaugă din nou cererea), cerere invalidă (fișier
+  JSON stricat / cu structură greșită / care nu e un fișier obișnuit: originalul se mută în `cereri\invalide\`, motivul în `stare`).
 - **Ce NU faci:** nu pornești `vllm serve`, nu rulezi `citeste` de mână, nu atingi `gpu.lock` / `gpu.cerere`, nu scrii în
   `ocr_coada\`. Durata: o pagină durează zeci de secunde pe cititor; ziua, o lucrare Izometrie (E3) poate opri coada câteva
   minute (cedează după banda curentă și reia singură).
 
 ## Cum lucrează procesul unic
 
-- `instanta.lock` (mutex de OS, eliberat și la cădere) = o singură instanță; `coada.lock` = tranzițiile scurte (adăugare,
-  anulare, preluare în lot; o cerere anulată nu intră în lot).
+- **O singură instanță pe server, oricare ar fi `--root`:** mutex de OS (eliberat și la cădere) pe
+  `paw-data\ocr_coada.instanta.lock`, lângă `gpu.lock`; tot acolo obligația memoriei (`ocr_coada.modele.json`), ca orice
+  instanță nouă să vadă ce a lăsat cea căzută. `stare` arată și `instanta` (rădăcina și pid-ul ultimei porniri).
+  `<root>\coada.lock` = tranzițiile scurte (adăugare, anulare, preluare în lot; o cerere anulată nu intră în lot).
+- Înainte de pornire se verifică rădăcina cozii și fișierele de lângă `gpu.lock` (inclusiv temporarele `.tmp` / `.pending`):
+  fără symlink / junction / legături fizice; altfel procesul refuză să pornească (cod 2, motivul în ieșire).
 - Lotul = cererile active, în ordinea numerelor. Pentru fiecare cititor: așteaptă să nu existe cerere E3 și lacătul să fie liber
   → ia `gpu.lock` (deținător `ocr_coada`) → nu pornește dacă memoria plăcii e ținută fără lacăt (Ollama / Docling) → scrie
-  obligația în `modele.json` → pornește modelul → citește planurile → oprește modelul și eliberează lacătul **doar după memoria
+  obligația în `ocr_coada.modele.json` → pornește modelul → citește planurile → oprește modelul și eliberează lacătul **doar după memoria
   confirmată** (`Coordinator.descarca`, ca E3). Compararea și textul (CPU) se fac fără lacăt.
 - **E3 are prioritate:** `gpu.cerere` activă = citirea se oprește după banda curentă (`cedat_e3` în `read_<cititor>.json`),
   modelul se oprește cu dovadă, coada așteaptă până E3 termină și descarcă (lacătul liber), apoi reia; benzile gata se sar.
@@ -48,11 +55,14 @@ Toate comenzile rulează pe server, din `<clona>\scripts`, cu `<py>` = interpret
   3600 s, o linie de jurnal pe treaptă; pauza se resetează doar după un plan citit complet. O excepție neprevăzută pe același
   plan de 3 ori = eroare pe cerere, coada merge mai departe.
 - **Cădere:** la pornire, dacă lacătul e liber sau e al unei instanțe moarte a cozii, modelele rămase se opresc și lacătul se
-  eliberează după memoria confirmată (obligația din `modele.json` supraviețuiește căderii). Lacătul E3 / al laboratorului nu se
-  atinge. Cererile rămase în lucru se reiau din starea lor.
-- Fișiere în `C:\Users\Public\paw-data\ocr_coada\`: `cereri\c000NNN.json`, `jurnal.jsonl` (o linie pe eveniment: `pornire`,
-  `lot`, `incarcat`, `descarcat`, `cedat_e3`, `pauza`, `memorie_tinuta`, `plan_eroare`, `gata`, `eroare`, `oprit`, `cadere`),
-  `stare.json`, `modele.json`, `instanta.lock`, `coada.lock`, `opreste` (doar cât se cere oprirea).
+  eliberează după memoria confirmată (obligația din `ocr_coada.modele.json` supraviețuiește căderii; lacătul preluat de la o
+  instanță moartă a cozii sau ilizibil = memoria se verifică oricum, chiar dacă fișierul obligației lipsește). Lacătul E3 / al
+  laboratorului nu se atinge. Cererile rămase în lucru se reiau din starea lor.
+- Fișiere în `C:\Users\Public\paw-data\ocr_coada\`: `cereri\c000NNN.json`, `cereri\invalide\` (originalele cererilor izolate),
+  `jurnal.jsonl` (o linie pe eveniment: `pornire`, `lacat_preluat_la_pornire`, `lot`, `incarcat`, `descarcat`, `cedat_e3`,
+  `pauza`, `memorie_tinuta`, `plan_eroare`, `cerere_invalida`, `gata`, `eroare`, `oprit`, `cadere`), `stare.json`, `coada.lock`,
+  `opreste` (doar cât se cere oprirea). Lângă `gpu.lock` (în `paw-data\`): `ocr_coada.instanta.lock`, `ocr_coada.instanta.json`,
+  `ocr_coada.modele.json`.
 
 ## Instalare (o face chat-ul, cu „da”-ul lui Răzvan, după merge)
 
@@ -92,6 +102,9 @@ Notații ca în `docs/izometrie/RUNBOOK_GPU_LA_CERERE.md`: `<clona>`, `<py>`, `<
 ## Ce nu se poate dovedi fără server
 
 Durata reală a încărcării vLLM, oprirea în WSL și coborârea memoriei (pașii 4–6), comportamentul Task Scheduler la repornire,
-procesele de pe placă care nu folosesc lacătul. Testele offline (27, cu `run_reader` / `compare` / `GpuLock` / `Coordinator` reali
+procesele de pe placă care nu folosesc lacătul. Testele offline (44, cu `run_reader` / `compare` / `GpuLock` / `Coordinator` reali
 și WSL fals) dovedesc logica: ordinea, refuzurile, cedarea și reluarea fără benzi repetate, lacătul eliberat doar după memoria
-confirmată, curățenia la pornire, instanța unică, eroarea izolată pe o cerere.
+confirmată, curățenia la pornire (și pe altă rădăcină decât instanța căzută), instanța unică pe mașină, destinațiile cu junction /
+legături fizice refuzate (testele cu junction rulează doar pe Windows), cererile invalide izolate, eroarea izolată pe o cerere.
+Rămâne o fereastră între verificarea destinațiilor și scriere: cine poate scrie în `paw-data` chiar în timpul citirii poate pune
+o legătură după verificare (verificarea prinde tot ce există dinainte).
