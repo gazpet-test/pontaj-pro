@@ -63,6 +63,7 @@ import Integrari from './Integrari.jsx'
 import Cladire from './Cladire.jsx'
 import { oreLucratoareAngajat, oreNormaPeZi, oreSuplimentare } from './pontajOreSuplimentare.js'
 import { NORME_TOTAL_EXPORT, coloaneBrut, coloaneNet, antetTotaluriBrut, antetTotaluriNet, numaraNorme, totaluriBrutIntrare, totaluriNetIntrare } from './pontajExportColoane.js'
+import { NORME, NORME_LABELS, NORME_ORE, codNorma, optiuniSelectorNorma } from './pontajNorme.js'
 
 const AdministratorAlerte = lazy(() => import('./AdministratorAlerte.jsx'))
 const MonitorEgress = lazy(() => import('./MonitorEgress.jsx'))   // doar owner (docs/MONITOR_EGRESS.md)
@@ -189,8 +190,7 @@ function GraficLucrareRoute() {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const DEPARTMENTS = ['Execuție', 'Logistică', 'TESA']
-const NORME = ['BO','BP','AM','CO','CFP','CM','M','O','N','PRM','PRB','LL']
-const NORME_LABELS = { BO:'Boală Obișnuită', BP:'Boală Profesională', AM:'Accident de Muncă', CO:'Concediu Odihnă', CFP:'Concediu Fără Plată', CM:'Concediu Medical', M:'Maternitate', O:'Obligații Cetățenești', N:'Absențe Nemotivate', PRM:'Prog.Redus Maternitate', PRB:'Prog.Redus Boală', LL:'Liber Legal' }
+// NORME / NORME_LABELS / NORME_ORE: în pontajNorme.js (TKT-2026-0368 partea B: BO în loc de CM, IP în loc de O)
 
 // === Helper paginare pentru bypass PostgREST max-rows (1000) ===
 // Folosit la query-uri mari (raport lunar, export ITM, etc.) cand pot exista >1000 records.
@@ -1850,7 +1850,7 @@ function PontajRow({ emp, rec, valori, stareR, santierImpl, sites, selectedDate,
             <div><Lbl>Normă</Lbl>
               <select value={norma} onChange={e=>onEdit(emp,{norma:e.target.value})} style={{width:230}}>
                 <option value="">— Selectează —</option>
-                {NORME.map(n=><option key={n} value={n}>{n} — {NORME_LABELS[n]}</option>)}
+                {optiuniSelectorNorma(norma,selectedDate).map(n=><option key={n} value={n}>{n} — {NORME_LABELS[n]||'cod necunoscut'}</option>)}
               </select>
             </div>
           )}
@@ -2479,7 +2479,7 @@ function ReportsPage() {
       // Format identic cu brut: rândurile 1-7 antet, salariați de la r=8 cu pas 5 (r, r+1, r+2, r+3, r+4=separator)
       // Coloane: A=Nume, B=Functia, C=Program; D..(D+days-1) = zile; +TotalZile, +TotalOre
       // Identifică ultimul rând cu salariat
-      const NORME_SET = new Set(['BO','BP','AM','CO','CFP','CM','M','O','N','PRM','PRB','LL'])
+      const NORME_SET = new Set(NORME)
       const FIXED = 3
       const DATA_COL_START = FIXED  // 0-indexed: D = col 3
       const DATA_COL_END   = FIXED + days - 1  // ultima zi
@@ -2583,7 +2583,7 @@ function ReportsPage() {
       
       // Coloane finale: A=Nume, B=Funcție, C=Program, D..AG/AH/AI(zile), Total Zile, Total Ore (FĂRĂ ORE SUPL)
       // Plus etichetă „Zile lucr. lună:” + valoare pe rândul 4, după ultima coloană ZILE <normă> (Razvan a zis să le păstrăm ca info informativă)
-      // TKT-2026-0311 / 0368: totalul zilelor de CO / CM / BO / CFP / O per angajat (formule COUNTIF pe rândul Ora Intrare).
+      // TKT-2026-0311 / 0368: totalul zilelor de CO / CM / BO / CFP / O / IP per angajat (formule COUNTIF pe rândul Ora Intrare).
       // Pozițiile coloanelor vin din pontajExportColoane.js (aceeași socoteală ca în teste).
       const NORME_TOTAL  = NORME_TOTAL_EXPORT
       const { WD_LABEL_C, WD_VALUE_C } = coloaneNet(days)   // etichetă + valoare „Zile lucr. lună:"
@@ -2622,7 +2622,7 @@ function ReportsPage() {
         }
         // Total Zile + Total Ore = FORMULE (nu valori), pe rândul Ora Intrare (r)
         // COUNTIF / SUM pe rândul Ore Lucrate (r+3)
-        // Zile CO/CM/BO/CFP/O (TKT-2026-0311 / 0368): COUNTIF pe codurile de normă de pe rândul Ora Intrare (r)
+        // Zile CO/CM/BO/CFP/O/IP (TKT-2026-0311 / 0368): COUNTIF pe codurile de normă de pe rândul Ora Intrare (r)
         rCI.push(...totaluriNetIntrare({ days, excelRow }))
         const gol = ['', '', ...NORME_TOTAL.map(() => '')]
         rCO.push(...gol)
@@ -2636,7 +2636,7 @@ function ReportsPage() {
         {wch:26},{wch:16},{wch:22},
         ...dayNums.map(()=>({wch:5.5})),
         {wch:11}, {wch:11},
-        ...NORME_TOTAL.map(()=>({wch:9})),   // ZILE CO / CM / BO / CFP / O
+        ...NORME_TOTAL.map(()=>({wch:9})),   // ZILE CO / CM / BO / CFP / O / IP
         {wch:18}, {wch:11}
       ]
       
@@ -2672,7 +2672,7 @@ function ReportsPage() {
       let ri = 7  // 0-indexed (Excel rând 8)
       employees.forEach(emp => {
         for (let ro = 0; ro < 4; ro++) {
-          const TOTAL_C = WD_LABEL_C  // FĂRĂ ORE SUPL, cu zile CO/CM/BO/CFP/O (ultima coloană de norme = WD_LABEL_C − 1)
+          const TOTAL_C = WD_LABEL_C  // FĂRĂ ORE SUPL, cu zile CO/CM/BO/CFP/O/IP (ultima coloană de norme = WD_LABEL_C − 1)
           for (let c = 0; c < TOTAL_C; c++) {
             let s = {}
             if (c === 0) {
@@ -3216,7 +3216,7 @@ function ReportsPage() {
       // Per employee: aplic algoritmul Pontaj NET ca să determin zilele de pe ordin
       // Logica: ordinul reflectă zilele LUCR pe care angajatul a fost detașat după redistribuire
       // (WE/sărbătoare lucrate sunt mutate în locul LL-urilor de pe zile lucrătoare)
-      const NORME_LIST = ['BO','BP','AM','CO','CFP','CM','M','O','N','PRM','PRB','LL']
+      const NORME_LIST = NORME
       const sortedWorkDays = [...workDaySet].sort()
       // Alocare comună (diurneAlocare.js) — aceeași ca exportDiurne / savePayment / exportBancaDiurne
       const alocare = alocaDiurneTransa({ recsLuna: allRecs, df: periodFrom, dt: periodTo, legalSet, diurnaAmt: 0 })
@@ -4569,9 +4569,9 @@ function ReportsPage() {
             const dayNum=Number(hdr[ci]); if(!dayNum||dayNum<1||dayNum>days) continue
             const val=String(row[ci]||'').trim(); if(!val) continue
             const dateStr=`${y}-${String(m).padStart(2,'0')}-${String(dayNum).padStart(2,'0')}`
-            const normaCodes=['CO','CM','BO','BP','AM','CFP','M','O','N','PRM','PRB','LL']
-            if(normaCodes.includes(val.toUpperCase())){
-              records.push({employee_id:emp.id,date:dateStr,norma:val.toUpperCase(),check_in:null,check_out:null,lunch_break:false,diurna:false})
+            const cod=codNorma(val)   // toate codurile valide, inclusiv cele retrase din selector (CM, O) și IP
+            if(cod){
+              records.push({employee_id:emp.id,date:dateStr,norma:cod,check_in:null,check_out:null,lunch_break:false,diurna:false})
             } else {
               // Parse time: "08:00-16:00" or "08:00" or "8-16" 
               const timeMatch=val.match(/(\d{1,2})[:\.]?(\d{2})?\s*[-–]\s*(\d{1,2})[:\.]?(\d{2})?/)
@@ -4639,15 +4639,14 @@ function ReportsPage() {
       const isOff=(d)=>{ const dt=new Date(y,m-1,d); return {we:dt.getDay()===0||dt.getDay()===6, leg:legalSet.has(`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`)} }
 
       // Coloane dinamice (lățimea depinde de numărul de zile ale lunii)
-      // TOTAL ZILE (Apr: col 33=AH) | TOTAL ORE | ORE SUPL | ZILE CO/CM/BO/CFP/O | ORE NORME | TOTAL ORE LUNĂ | ORE LUCRĂTOARE | „Zile lucr. lună:”
+      // TOTAL ZILE (Apr: col 33=AH) | TOTAL ORE | ORE SUPL | ZILE CO/CM/BO/CFP/O/IP | ORE NORME | TOTAL ORE LUNĂ | ORE LUCRĂTOARE | „Zile lucr. lună:”
       // TKT-2026-0311 / 0368: totalul zilelor pe norme, după ORE SUPL; pozițiile vin din pontajExportColoane.js (aceeași socoteală ca în teste)
       const NORME_TOTAL  = NORME_TOTAL_EXPORT
       const { ORE_SUPL_C, NORME_C0, ORE_NORME_C, TOTAL_LUNA_C, ORE_LUCR_C, WD_LABEL_C, WD_VALUE_C } = coloaneBrut(days)
-      // TKT-2026-0314 (var. A): orele de normă plătite (h normă/zi pe CO, CM, BO, BP, AM, M, O — CFP, N, LL = 0 ore)
-      // și totalul lunii = TOTAL ORE (lucrate) + ORE NORME.
+      // TKT-2026-0314 (var. A): orele de normă plătite (h normă/zi pe CO, CM, BO, BP, AM, M, O, IP — CFP, N, LL = 0 ore)
+      // și totalul lunii = TOTAL ORE (lucrate) + ORE NORME. NORME_ORE vine din pontajNorme.js (TKT-2026-0368 B: + IP).
       // TKT-2026-0316: ORE SUPLIMENTARE = TOTAL ORE LUNĂ − ORE LUCRĂTOARE ale angajatului (normă redusă din procent_ocupare,
       // lună incompletă din hire_date / termination_date) — vezi pontajOreSuplimentare.js. Ziua de normă = 8h × procent.
-      const NORME_ORE    = ['CO','CM','BO','BP','AM','M','O']
       // „Zile lucr. lună:” (WD_VALUE_C) e informativ — ORE SUPL folosește ORE LUCRĂTOARE pe angajat
 
       // ── Build rows ──
@@ -4715,7 +4714,7 @@ function ReportsPage() {
         totalOreLunarSum += empOreLunar
         totalOreSuplSum  += empOreSupl
 
-        // TOTAL ZILE, TOTAL ORE, ORE SUPL (formulă MAX(0, TOTAL ORE LUNĂ − ORE LUCRĂTOARE)), ZILE CO/CM/BO/CFP/O,
+        // TOTAL ZILE, TOTAL ORE, ORE SUPL (formulă MAX(0, TOTAL ORE LUNĂ − ORE LUCRĂTOARE)), ZILE CO/CM/BO/CFP/O/IP,
         // ORE NORME, TOTAL ORE LUNĂ (formulă TOTAL ORE + ORE NORME), ORE LUCRĂTOARE — toate pe rândul Ora Intrare
         rCI.push(...totaluriBrutIntrare({ days, excelRow, totalZile: tz, totalOre: empOreLunar, normeCnt, oreNorme: empOreNorme, oreLucratoare: empOreLucr }))
 
@@ -4732,7 +4731,7 @@ function ReportsPage() {
         {wch:11},                  // TOTAL ZILE
         {wch:11},                  // TOTAL ORE
         {wch:30},                  // ORE SUPLIMENTARE (216px ≈ 30 char)
-        ...NORME_TOTAL.map(()=>({wch:9})),   // ZILE CO / CM / BO / CFP / O
+        ...NORME_TOTAL.map(()=>({wch:9})),   // ZILE CO / CM / BO / CFP / O / IP
         {wch:16},                  // ORE NORME (h normă/zi)
         {wch:15},                  // TOTAL ORE LUNĂ
         {wch:15},                  // ORE LUCRĂTOARE
@@ -4768,7 +4767,7 @@ function ReportsPage() {
       let ri=7
       data.forEach(emp=>{
         for(let ro=0;ro<4;ro++){
-          const TOTAL_C = ORE_LUCR_C + 1  // include ORE SUPL + zile CO/CM/BO/CFP/O + ORE NORME + TOTAL ORE LUNĂ + ORE LUCRĂTOARE
+          const TOTAL_C = ORE_LUCR_C + 1  // include ORE SUPL + zile CO/CM/BO/CFP/O/IP + ORE NORME + TOTAL ORE LUNĂ + ORE LUCRĂTOARE
           for(let c=0;c<TOTAL_C;c++){
             let s={}
             if(c===0){
@@ -4798,7 +4797,7 @@ function ReportsPage() {
                 ? {fill:{fgColor:{rgb:'D9E1F2'}}, font:{bold:true,sz:11,color:{rgb:'1F497D'}}, border:bd, alignment:alC}
                 : {fill:{fgColor:{rgb:'F5F5F5'}}, font:{sz:9}, border:bd, alignment:alC}
             } else if(c>=NORME_C0 && c<NORME_C0+NORME_TOTAL.length) {
-              // ZILE CO/CM/BO/CFP/O — galben pal pe rândul principal (aceeași culoare ca zilele cu normă)
+              // ZILE CO/CM/BO/CFP/O/IP — galben pal pe rândul principal (aceeași culoare ca zilele cu normă)
               s = ro===0
                 ? {fill:{fgColor:{rgb:'FFF2CC'}}, font:{bold:true,sz:10}, border:bd, alignment:alC}
                 : {fill:{fgColor:{rgb:'F5F5F5'}}, font:{sz:9}, border:bd, alignment:alC}
