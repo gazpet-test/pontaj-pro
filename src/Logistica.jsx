@@ -6,6 +6,7 @@ import { employeeFieldRead, withEmployeePersonal } from './employeesPersonal.js'
 import { removeLogisticaFiles } from './utils/logisticaStorage.js'
 import { recalculeazaPret, sursaBonComunValida } from './lib/logisticaPrB.js'
 import { confirmaCitiriAlimentari, confirmaAjustareManuala, incarcaSurseMaxime, textSursaValoriiActiv } from './lib/citiriBord.js'
+import { alocaFaraQr } from './alimentariAlocare.js'
 import { STATUS_DESCHIS, FILTRU_BLOCATE, esteTransportBlocat, incarcaTransporturi, filtreazaTransporturi } from './lib/logisticaTransporturi.js'
 import { ziBucuresti } from './adminAlerte.js'
 import { creeazaActiunePv, mesajRezultatPv } from './pvPredareAvizActiune.js'  // TKT-2026-0379 r2 (L24), mic și fără dependențe
@@ -9113,6 +9114,7 @@ function QrReconciliereTab({ profile, showToast }) {
   const [matchRunning, setMatchRunning] = useState(false)
   const [faraQr, setFaraQr] = useState([])
   const [fqLoading, setFqLoading] = useState(true)
+  const fqGenRef = useRef(0)   // L24: doar ultima încărcare „fără QR” se aplică (match + reîncărcare după conflict pot porni deodată)
   const [alocModal, setAlocModal] = useState(null)   // { alim, activeId, siteId }
   const [activeList, setActiveList] = useState([])
   const [siteList, setSiteList] = useState([])
@@ -9185,6 +9187,7 @@ function QrReconciliereTab({ profile, showToast }) {
   
   // Load alimentări „fără QR" (real_fara_qr) — din lista Rompetrol, fără QR corespunzător
   async function loadFaraQr() {
+    const gen = ++fqGenRef.current
     setFqLoading(true)
     try {
       const { data, error } = await supabase
@@ -9192,12 +9195,13 @@ function QrReconciliereTab({ profile, showToast }) {
         .select('id, data_alimentare, cantitate_litri, card_combustibil, pret_total, pret_per_litru, statie_combustibil, km_la_alimentare, site_id, sites(name)')
         .eq('qr_status', 'real_fara_qr')
         .order('data_alimentare', { ascending: false })
+      if (gen !== fqGenRef.current) return
       if (error) throw error
       setFaraQr(data || [])
     } catch (e) {
-      showToast?.('Eroare fără-QR: ' + e.message, 'error')
+      if (gen === fqGenRef.current) showToast?.('Eroare fără-QR: ' + e.message, 'error')
     } finally {
-      setFqLoading(false)
+      if (gen === fqGenRef.current) setFqLoading(false)
     }
   }
   useEffect(() => { loadFaraQr() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
@@ -9252,19 +9256,10 @@ function QrReconciliereTab({ profile, showToast }) {
     if (!(await confirmaCitiriAlimentari(supabase, [{ active_id: Number(alocModal.activeId), data_alimentare: alocModal.alim.data_alimentare, km_la_alimentare: alocModal.alim.km_la_alimentare }]))) { setProcessingId(null); return }
     try {
       // TKT-2026-0383/0387: șantierul deja pus (ex. din Bulk) vine precompletat; se scrie doar dacă s-a schimbat,
-      // cu CAS pe valoarea citită (și pe qr_status), ca să nu suprascrie o alocare făcută între timp.
-      const siteVechi = alocModal.alim.site_id || null
-      const siteNou = alocModal.siteId || null
-      const upd = { active_id: alocModal.activeId, qr_status: 'matched' }
-      if (siteNou !== siteVechi) {
-        upd.site_id = siteNou
-        upd.sursa_alocare_santier = siteNou ? 'manual' : null
-      } else if (!siteVechi) upd.sursa_alocare_santier = null
-      let q = supabase.from('logistica_alimentari').update(upd).eq('id', alocModal.alim.id).eq('qr_status', 'real_fara_qr')
-      q = siteVechi ? q.eq('site_id', siteVechi) : q.is('site_id', null)
-      const { data: scrise, error } = await q.select('id')
-      if (error) throw error
-      if (!scrise || scrise.length === 0) {
+      // cu CAS pe valoarea citită (și pe qr_status), ca să nu suprascrie o alocare făcută între timp
+      // (alocaFaraQr în alimentariAlocare.js, cu teste pe un tabel fals).
+      const stare = await alocaFaraQr(supabase, alocModal.alim, alocModal.activeId, alocModal.siteId || null)
+      if (stare === 'conflict') {
         showToast?.('Alimentarea a fost modificată între timp (alocată sau alt șantier) — lista s-a reîncărcat', 'warning')
         setAlocModal(null)
         loadFaraQr()

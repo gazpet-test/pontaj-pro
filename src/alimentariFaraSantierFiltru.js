@@ -12,19 +12,36 @@ export function cheieCard(card) {
   return t || null
 }
 
-// Cardurile prezente în listă, sortate, cu numărul de rânduri; fără card = la final.
-export function carduriDisponibile(alimentari) {
+// Indexul cardurilor din rânduri { id, card_combustibil }: pe fiecare card (după trim) numărul de rânduri și
+// variantele EXACTE din BD (cu spații), ca filtrul pe server să le prindă pe toate. Fără card = null / doar spații
+// (varianteFaraCard = textele doar din spații). Sortare naturală (GAZPET2 înainte de GAZPET10).
+export function indexCarduri(randuri) {
   const map = new Map()
   let faraCard = 0
-  for (const a of alimentari || []) {
-    const k = cheieCard(a?.card_combustibil)
-    if (k === null) { faraCard++; continue }
-    map.set(k, (map.get(k) || 0) + 1)
+  const goale = new Set()
+  for (const a of randuri || []) {
+    const brut = a?.card_combustibil
+    const k = cheieCard(brut)
+    if (k === null) {
+      faraCard++
+      if (typeof brut === 'string') goale.add(brut)
+      continue
+    }
+    const c = map.get(k) || { card: k, nr: 0, variante: new Set() }
+    c.nr++
+    c.variante.add(String(brut))
+    map.set(k, c)
   }
-  const carduri = Array.from(map.entries())
-    .sort((x, y) => x[0].localeCompare(y[0], 'ro', { numeric: true }))
-    .map(([card, nr]) => ({ card, nr }))
-  return { carduri, faraCard }
+  const carduri = Array.from(map.values())
+    .sort((x, y) => x.card.localeCompare(y.card, 'ro', { numeric: true }))
+    .map(c => ({ card: c.card, nr: c.nr, variante: Array.from(c.variante).sort() }))
+  return { carduri, faraCard, varianteFaraCard: Array.from(goale).sort(), total: (randuri || []).length }
+}
+
+// Cardurile prezente în listă, sortate, cu numărul de rânduri; fără card = la final (din indexCarduri).
+export function carduriDisponibile(alimentari) {
+  const { carduri, faraCard } = indexCarduri(alimentari)
+  return { carduri: carduri.map(({ card, nr }) => ({ card, nr })), faraCard }
 }
 
 // filtre = { luna: 'toate'|'YYYY-MM', statie: 'toate'|nume, whatsapp: 'toate'|'cu_wa'|'fara_wa',
