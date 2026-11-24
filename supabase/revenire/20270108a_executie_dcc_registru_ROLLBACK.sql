@@ -355,8 +355,49 @@ BEGIN
   v_ep := 'public.executie_proiecte'::regclass;
   -- DROP-urile, fără CASCADE: vederea, tabelele în ordinea inversă a cheilor străine, apoi funcțiile pe lista exactă
   DROP VIEW public.v_dcc_registru;
-  FOR v_f IN SELECT t FROM unnest(v_tabele) t LOOP EXECUTE format('DROP TABLE public.%I', v_f); END LOOP;
-  FOR v_f IN SELECT f FROM unnest(v_functii) f LOOP EXECUTE 'DROP FUNCTION public.' || v_f; END LOOP;
+  -- (statice, pe lista exactă: regula porților Izometrie refuză DROP-urile dinamice cu ținta necunoscută)
+  DROP TABLE public.dcc_legaturi;
+  DROP TABLE public.dcc_snapshot_revizii;
+  DROP TABLE public.dcc_mesaje;
+  DROP TABLE public.dcc_snapshoturi;
+  DROP TABLE public.dcc_istoric_aparitii;
+  DROP TABLE public.dcc_revizii;
+  DROP TABLE public.dcc_anexe;
+  DROP TABLE public.dcc_file;
+  DROP TABLE public.dcc_documente;
+  DROP TABLE public.dcc_serii;
+  DROP TABLE public.dcc_intentii;
+  DROP TABLE public.dcc_proiecte;
+  DROP TABLE public.dcc_contracte;
+  DROP TABLE public.dcc_ghid_intervale;
+  DROP TABLE public.dcc_ghid_valori;
+  DROP TABLE public.dcc_ghiduri;
+  DROP TABLE public.dcc_casute;
+  DROP FUNCTION public.fn_dcc_interval_e_canonic(text), public.fn_dcc_interval_canonic(text), public.fn_dcc_format_valid(jsonb),
+    public.fn_dcc_cod_text(jsonb, text, text, text, text, integer, integer, integer, integer, text), public.fn_dcc_titlu_scurt(text),
+    public.fn_dcc_nume_fisier(jsonb, text, text, text, text, integer, integer, integer, integer, text, text, text),
+    public.fn_dcc_hash_parametri(text, jsonb), public.fn_dcc_tranzitie_permisa(text, text),
+    public.fn_dcc_istoric_hash(text, text, integer, jsonb, text, text, text, text, integer, integer, integer, integer, text, text[]),
+    public.fn_dcc_snapshot_hash(text, text, text[], text[], text, text, text[], jsonb), public.fn_dcc_server(), public.fn_dcc_e_owner(),
+    public.fn_dcc_drept(bigint, text), public.fn_dcc_contract_vizibil(bigint), public.fn_dcc_are_modul(),
+    public.fn_dcc_intentie_reia(uuid, text, text), public.fn_dcc_intentie_revendica(uuid, text, text), public.fn_dcc_intentie_incheie(uuid, jsonb),
+    public.fn_dcc_ghid_compatibil_intern(bigint, bigint), public.fn_dcc_lock_contract(bigint, boolean),
+    public.fn_dcc_lock_cheie_serie(bigint, text, text, text, text), public.fn_dcc_ghid_garda(), public.fn_dcc_ghid_intervale_disjuncte(),
+    public.fn_dcc_contracte_garda(), public.fn_dcc_proiecte_garda(), public.fn_dcc_intentii_garda(), public.fn_dcc_serii_garda(),
+    public.fn_dcc_documente_garda(), public.fn_dcc_file_garda(), public.fn_dcc_anexe_garda(), public.fn_dcc_revizii_garda(),
+    public.fn_dcc_istoric_garda(), public.fn_dcc_snapshoturi_garda(), public.fn_dcc_snapshot_revizii_garda(), public.fn_dcc_mesaje_garda(),
+    public.fn_dcc_legaturi_garda(), public.fn_dcc_fara_stergere(), public.fn_dcc_fara_golire(), public.fn_dcc_config_permisa_intern(),
+    public.fn_dcc_valori_ghid_intern(bigint, text, text),
+    public.fn_dcc_coduri_intern(bigint, text, text, text, text, integer, integer, integer, integer, text), public.fn_dcc_ghid_creeaza(jsonb, uuid),
+    public.fn_dcc_contract_creeaza(text, text, text, text, uuid),
+    public.fn_dcc_proiect_seteaza(bigint, bigint, bigint, text, text, text, text[], jsonb, text, integer, integer, uuid),
+    public.fn_dcc_initializeaza_serie(bigint, text, text, text, text, integer, text, boolean, uuid),
+    public.fn_dcc_aloca(bigint, text, text, text, text, text, text, integer, uuid),
+    public.fn_dcc_aloca_manual(bigint, text, text, text, integer, text, text, integer, uuid),
+    public.fn_dcc_revizie_noua(bigint, bigint, bigint, text, text, uuid), public.fn_dcc_fila_noua(bigint, integer, text, text, uuid),
+    public.fn_dcc_anexa_noua(bigint, text, text, uuid), public.fn_dcc_anuleaza(bigint, bigint, text, uuid), public.fn_dcc_serii_proiect(bigint),
+    public.fn_dcc_lista_forma_intern(bigint[]), public.fn_dcc_lista_drept_intern(bigint[]), public.fn_dcc_istoric_importa(bigint, text, jsonb, uuid),
+    public.fn_dcc_marcheaza_copiat(bigint[], jsonb, uuid), public.fn_dcc_confirma_trimis_manual(bigint[], timestamptz, text, text, bigint, uuid);
   -- postcondiții: nimic rămas, lanțul de drept neschimbat
   IF EXISTS (SELECT 1 FROM pg_catalog.pg_class c WHERE c.relnamespace = 'public'::regnamespace AND (c.relname LIKE 'dcc\_%' OR c.relname = 'v_dcc_registru'))
      OR EXISTS (SELECT 1 FROM pg_catalog.pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_dcc\_%')

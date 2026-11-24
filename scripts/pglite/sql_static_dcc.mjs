@@ -98,7 +98,9 @@ for (const f of fisiere) {
   }
   if (!rele) da(`${corpuri} corpuri de funcții / blocuri DO parsate`)
   const interzise = dml.filter(([, r]) => TINTE.test(r))
-  if (interzise.length) nu(`DML pe app_modules / user_module_access: ${interzise.map(x => x.join(' ')).join(', ')}`)
+  // regula privește migrarea și revenirea; dry-run-ul clonei creează identități sintetice într-o tranzacție ANULATĂ (ROLLBACK), deci e raportat, nu refuzat
+  if (!/supabase[\\/](migrations|revenire)[\\/]/.test(f)) da(`fișier de probă (nu migrare / revenire): ${interzise.length} DML pe app_modules / user_module_access, în tranzacția lui anulată`)
+  else if (interzise.length) nu(`DML pe app_modules / user_module_access: ${interzise.map(x => x.join(' ')).join(', ')}`)
   else da(`fără DML pe app_modules / user_module_access (${dml.length} ținte DML verificate)`)
 }
 console.log(`\n${fisiere.length} fișiere, ${esec} refuzuri`)

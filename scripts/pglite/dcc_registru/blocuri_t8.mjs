@@ -93,6 +93,16 @@ const LOCK_R = '          LOCK TABLE public.executie_proiecte IN ACCESS EXCLUSIV
 
 export const BLOCURI_T8 = [
   {
+    // dry-run-ul clonei (supabase/tests/…_dryrun.sql + …_clona_istoric.sql) rulat întreg pe PGlite de validatorul lui, în proces separat
+    nume: 'dryrun_pglite', task: 8, cere: ['7'], fixtura: false, curat: true,
+    async fn(_db, A) {
+      const { spawnSync } = await import('node:child_process')
+      const r = spawnSync(process.execPath, [join(ROOT, 'scripts/pglite/dcc_registru/dryrun_pglite.mjs')], { cwd: ROOT, encoding: 'utf8', maxBuffer: 1024 * 1024 * 64 })
+      const out = (r.stdout || '') + (r.stderr || '')
+      A.ok(r.status === 0 && out.includes('DRYRUN_PGLITE_OK'), `validatorul dry-run-ului: ieșire ${r.status}; ${out.split('\n').filter(l => /NU |DRYRUN|t_.* ok|BLOCURI/.test(l)).slice(-4).join(' | ').slice(0, 300)}`)
+    },
+  },
+  {
     nume: 'l15_obiecte', task: 8, cere: ['7'], fixtura: false, curat: true,
     async fn(_db, A) {
       const gener = await obiecteGenerate()
