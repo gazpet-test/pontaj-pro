@@ -11,14 +11,15 @@
 --     VALIDATE după preflight), cantitățile (cantitate_primita, cantitate_intrata_stoc, intrare_reconciliata) NU mai pot fi scrise de client:
 --     dreptul UPDATE pe tabel al lui authenticated devine UPDATE doar pe celelalte coloane + trigger-ul trg_cfl_protectie (orice cale, și postgres /
 --     service_role) care cere marcajul de tranzacție pus DOAR de RPC-urile acestei migrări (SET LOCAL app.cf_cantitati); identitatea materialului
---     (denumire, um, comanda, iar pe liniile NULL și cantitatea) e înghețată de la prima dovadă de recepție.
+--     (denumire, um, comanda, iar pe liniile NULL și cantitatea) e înghețată de la prima dovadă de recepție; mutarea liniei în altă comandă e
+--     refuzată la orice urmă de recepție pe linie, pe comanda sursă SAU pe destinație, iar marcajul moștenirii se recalculează pentru destinație (r2).
 --   * tabele noi: comenzi_furnizor_retururi (retururi + anulări), comenzi_furnizor_receptii (jurnalul recepțiilor: sold inițial / recepție /
 --     corectură), comenzi_furnizor_retur_alocari (recepție → retur), comenzi_furnizor_intentii (cheile de idempotență ale tuturor RPC-urilor).
 --     RLS: citire pentru cine vede comanda; nicio scriere pentru clienți (doar RPC-urile); UPDATE / DELETE / TRUNCATE refuzate de trigger-e.
 --   * stocuri_miscari: tipurile retur_furnizor (delta < 0) și retur_furnizor_anulare (delta > 0), cu ref_tip = 'comanda_furnizor_retur';
 --     lock-ul pe cheia stocului la ORICE ieșire (trigger BEFORE INSERT WHEN delta < 0, din orice cale) și la ștergeri (mișcări și poziții);
 --     istoricul de achiziție / retur nu se mai poate șterge sau modifica; mișcările de achiziție / retur se scriu DOAR prin RPC (marcajul).
---   * RPC-uri SECURITY DEFINER (dreptul reverificat DUPĂ lock-uri, cheie de idempotență pe fiecare): fn_cf_receptie_adauga, fn_cf_intra_stoc,
+--   * RPC-uri SECURITY DEFINER (dreptul reverificat DUPĂ lock-uri și după ultima operație care poate aștepta, cheie de idempotență pe fiecare): fn_cf_receptie_adauga, fn_cf_intra_stoc,
 --     fn_cf_retur_inregistreaza, fn_cf_retur_anuleaza, fn_cf_retur_inchide_fara_inlocuire, fn_cf_reconciliaza_linie (owner), fn_stoc_sterge_pozitie (owner).
 -- Ce NU face: nu schimbă statusul comenzilor, nu atinge facturi / note de credit, nu trimite nimic, nu modifică niciun rând existent (în afara
 --   coloanei noi, false peste tot); atribuirea moștenirii (intrata_stoc din mișcările vechi) e DML separat: scripts/achizitii_retur_reconciliere_mostenire.sql
@@ -36,11 +37,18 @@
 --   * în plus: provenienta pe stocuri_miscari (mișcările de achiziție / retur doar prin RPC), UPDATE pe istoricul protejat refuzat, cantitățile
 --     cu mai mult de 3 zecimale refuzate (stocuri.cantitate e numeric(15,3): altfel s-ar rotunji în tăcere).
 -- ORDINEA LOCK-URILOR (L06), aceeași în toate RPC-urile și trigger-ele (scrisă și în fiecare funcție):
---   0 cheia de idempotență (pg_advisory_xact_lock) → 1 comenzi_furnizor FOR SHARE → 2 comenzi_furnizor_linii FOR UPDATE → 3 cheia de stoc
---   (pg_advisory_xact_lock, apoi rândul din stocuri FOR UPDATE) → 4 comenzi_furnizor_retururi FOR UPDATE în ordinea id-ului.
---   Implicite: FK la INSERT (KEY SHARE pe linie / comandă / mișcare, deja ținute mai tare); trigger-ul AFTER INSERT de pe stocuri_miscari
---   (UPDATE pe rândul din stocuri, după cheie); fn_transfer_executa (mișcările transferului: cheia sursei prin trigger, rândul destinației).
---   Trigger-ul de identitate al liniei ia doar pasul 1 (rândul liniei e deja blocat de UPDATE).
+--   0 cheia de idempotență (pg_advisory_xact_lock) → 1 comenzi_furnizor FOR SHARE → 2 comenzi_furnizor_linii FOR UPDATE → 3 cheile de stoc:
+--   TOATE cheile pe care operația le atinge (intrare SAU ieșire; la transportul direct sediul ȘI proiectul), ÎNAINTEA primei mișcări: întâi
+--   lock-urile consultative (pg_advisory_xact_lock) sortate crescător după fn_stoc_cheie, apoi rândurile din stocuri FOR UPDATE în aceeași ordine
+--   → 4 comenzi_furnizor_retururi FOR UPDATE în ordinea id-ului.
+--   Implicite, toate pe lock-uri deja ținute: FK la INSERT (KEY SHARE pe linie / comandă / mișcare / recepție); trigger-ul ieșirilor (cheia,
+--   re-intrant); trigger-ul AFTER INSERT de pe stocuri_miscari (UPDATE pe rândul din stocuri blocat la pasul 3); fn_transfer_executa (mișcările
+--   transferului, pe cele două chei luate la pasul 3: nicio cheie nouă după o mișcare — r2, inversarea rând → cheie față de cheie → rând).
+--   Trigger-ul de identitate al liniei ia doar pasul 1 (rândul liniei e deja blocat de UPDATE); la mutarea liniei, ambele comenzi FOR SHARE în
+--   ordinea id-ului.
+--   DREPTUL (L01): verificat după lock-uri și REVERIFICAT după ultima operație care poate aștepta, la închiderea intenției
+--   (fn_cf_intentie_inchide_intern, înaintea INSERT-ului intenției, care nu așteaptă: cheia ținută de la pasul 0, fără FK / trigger de inserare);
+--   fn_stoc_sterge_pozitie îl reverifică după ștergeri.
 -- Lock la aplicare (punct unic, NOWAIT, bugetul 1 s de la prima încercare, docs/LIVRARE_L15_V2.md §9): comenzi_furnizor SHARE ROW EXCLUSIVE (FK noi),
 --   comenzi_furnizor_linii ACCESS EXCLUSIVE, stocuri_miscari ACCESS EXCLUSIVE, stocuri SHARE ROW EXCLUSIVE (trigger nou), toate într-un sub-bloc
 --   (ocupat = lock-urile luate se eliberează, reîncercare la 50 ms).
@@ -461,9 +469,18 @@ BEGIN
   END IF;
   RETURN r.rezultat || jsonb_build_object('reluat', true);
 END $f$;
+-- închiderea intenției = ULTIMUL pas al fiecărui RPC cu cheie: dreptul se REVERIFICĂ aici, după ultima operație care poate aștepta (L01: rânduri
+-- din stocuri, FK-uri, trigger-e); INSERT-ul de mai jos nu așteaptă (cheia ținută de la pasul 0, fără FK, fără trigger de inserare). Reconcilierea = owner.
 CREATE FUNCTION public.fn_cf_intentie_inchide_intern(p_cheie uuid, p_rpc text, p_payload jsonb, p_rezultat jsonb) RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v_ok boolean;
 BEGIN
+  IF p_rpc = 'fn_cf_reconciliaza_linie' THEN
+    v_ok := public.fn_cf_este_owner_intern(auth.uid());
+  ELSE
+    v_ok := public.fn_cf_drept_achizitii_intern(auth.uid());
+  END IF;
+  IF NOT coalesce(v_ok, false) THEN RAISE EXCEPTION 'CF_DREPT: operatie nepermisa' USING ERRCODE = '42501'; END IF;
   INSERT INTO public.comenzi_furnizor_intentii (cheie, rpc, payload_hash, autor, rezultat)
   VALUES (p_cheie, p_rpc, md5(p_payload::text), auth.uid(), p_rezultat);
 END $f$;
@@ -586,7 +603,8 @@ BEGIN
   RETURN OLD;
 END $f$;
 -- trigger: protecția cantităților și a identității liniei, pe orice cale (spec §3.2b). Ordinea lock-urilor (L06): rândul liniei e deja blocat
--- de INSERT / UPDATE; trigger-ul ia doar pasul 1 (comenzi_furnizor FOR SHARE), ca o recepție concurentă să nu treacă printre verificare și redenumire.
+-- de INSERT / UPDATE; trigger-ul ia doar pasul 1 (comenzi_furnizor FOR SHARE; la mutare ambele comenzi, în ordinea id-ului), ca o recepție
+-- concurentă să nu treacă printre verificare și redenumire / mutare.
 CREATE FUNCTION public.fn_cfl_protectie() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
 DECLARE v_rpc boolean := current_setting('app.cf_cantitati', true) IS NOT DISTINCT FROM '1'; v_cf public.comenzi_furnizor;
@@ -606,7 +624,33 @@ BEGIN
                     OR NEW.intrare_reconciliata IS DISTINCT FROM OLD.intrare_reconciliata) THEN
     RAISE EXCEPTION 'CF_CLIENT_VECHI: cantitatile primite / intrate se scriu doar prin receptie si predare; reincarcati pagina' USING ERRCODE = 'P0001';
   END IF;
-  IF NEW.denumire IS DISTINCT FROM OLD.denumire OR NEW.um IS DISTINCT FROM OLD.um OR NEW.comanda_furnizor_id IS DISTINCT FROM OLD.comanda_furnizor_id
+  IF NEW.comanda_furnizor_id IS DISTINCT FROM OLD.comanda_furnizor_id THEN
+    -- mutarea liniei în altă comandă (§3.3b, L07, r2): pasul 1 pe AMBELE comenzi, FOR SHARE în ordinea id-ului (o recepție / un status schimbat pe
+    -- comandă nu trece printre verificare și mutare). Refuz dacă linia sau oricare dintre comenzi (sursa / destinația) are ORICE urmă de recepție:
+    -- dovada pe comandă, cantități pe vreo linie, jurnal, retururi, intrări vechi (doar pe comandă) sau pe linie — moștenirea ar deveni ambiguă.
+    -- Altfel marcajul moștenirii se RECALCULEAZĂ pentru destinație (ca la INSERT). Intrările vechi nu mai pot apărea (trg_stoc_miscari_provenienta).
+    PERFORM 1 FROM public.comenzi_furnizor c WHERE c.id IN (OLD.comanda_furnizor_id, NEW.comanda_furnizor_id) ORDER BY c.id FOR SHARE;
+    SELECT * INTO v_cf FROM public.comenzi_furnizor c WHERE c.id = OLD.comanda_furnizor_id;
+    IF public.fn_cf_dovada_receptie_intern(OLD, v_cf)
+       OR EXISTS (SELECT 1 FROM public.comenzi_furnizor_retururi t WHERE t.linie_id = OLD.id)
+       OR EXISTS (SELECT 1 FROM public.stocuri_miscari m WHERE m.ref_tip = 'comanda_furnizor_linie' AND m.ref_id = OLD.id)
+       OR EXISTS (SELECT 1 FROM public.comenzi_furnizor c
+                   WHERE c.id IN (OLD.comanda_furnizor_id, NEW.comanda_furnizor_id)
+                     AND (coalesce(c.receptie_mp_la IS NOT NULL OR c.receptie_achizitii_la IS NOT NULL OR c.status IN ('receptionata', 'in_stoc'), true)
+                          OR EXISTS (SELECT 1 FROM public.comenzi_furnizor_linii x WHERE x.comanda_furnizor_id = c.id
+                                        AND (x.cantitate_primita IS NOT NULL OR x.cantitate_intrata_stoc IS DISTINCT FROM 0))
+                          OR EXISTS (SELECT 1 FROM public.comenzi_furnizor_receptii r JOIN public.comenzi_furnizor_linii x ON x.id = r.linie_id
+                                      WHERE x.comanda_furnizor_id = c.id)
+                          OR EXISTS (SELECT 1 FROM public.comenzi_furnizor_retururi t WHERE t.comanda_furnizor_id = c.id)
+                          OR EXISTS (SELECT 1 FROM public.stocuri_miscari m WHERE m.tip = 'intrare_achizitie' AND m.ref_tip = 'comanda_furnizor' AND m.ref_id = c.id)
+                          OR EXISTS (SELECT 1 FROM public.stocuri_miscari m JOIN public.comenzi_furnizor_linii x ON x.id = m.ref_id
+                                      WHERE m.ref_tip = 'comanda_furnizor_linie' AND x.comanda_furnizor_id = c.id))) THEN
+      RAISE EXCEPTION 'CF_MUTARE_REFUZATA: reperul nu se muta in alta comanda: linia sau comanda (sursa / destinatia) are receptii, retururi sau intrari in stoc'
+        USING ERRCODE = 'P0001';
+    END IF;
+    NEW.intrare_reconciliata := NOT EXISTS (SELECT 1 FROM public.stocuri_miscari m
+                                             WHERE m.tip = 'intrare_achizitie' AND m.ref_tip = 'comanda_furnizor' AND m.ref_id = NEW.comanda_furnizor_id);
+  ELSIF NEW.denumire IS DISTINCT FROM OLD.denumire OR NEW.um IS DISTINCT FROM OLD.um
      OR (OLD.cantitate_primita IS NULL AND NEW.cantitate IS DISTINCT FROM OLD.cantitate) THEN
     SELECT * INTO v_cf FROM public.comenzi_furnizor c WHERE c.id = OLD.comanda_furnizor_id FOR SHARE;
     IF public.fn_cf_dovada_receptie_intern(OLD, v_cf) THEN
@@ -671,7 +715,8 @@ CREATE TRIGGER trg_cf_intentii_golire BEFORE TRUNCATE ON public.comenzi_furnizor
 -- 6.1 Recepția incrementală (spec §3.3.3): +N acoperă retururile care așteaptă înlocuire (de la cel mai vechi); -N (corectură) consumă
 --     recepțiile de la cea mai nouă: întâi partea nealocată, apoi alocările ei (de la cea mai nouă); retururile atinse se redeschid exact
 --     pentru partea inversată (renunțarea rămâne renunțare). CAS pe valoarea BRUTĂ citită de ecran (p_primita_citita, NULL = necompletată).
---     Ordinea lock-urilor (L06): 0 cheia → 1 comanda FOR SHARE → 2 linia FOR UPDATE → 4 retururile liniei FOR UPDATE (ordinea id-ului).
+--     Ordinea lock-urilor (L06): 0 cheia → 1 comanda FOR SHARE → 2 linia FOR UPDATE → 4 retururile liniei FOR UPDATE (ordinea id-ului); fără
+--     mișcări de stoc. Dreptul: după pasul 4 și din nou la închiderea intenției (FK-ul corecturii pe recepție poate aștepta).
 CREATE FUNCTION public.fn_cf_receptie_adauga(p_cheie uuid, p_linie_id bigint, p_cantitate numeric, p_primita_citita numeric) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
 DECLARE
@@ -770,12 +815,15 @@ BEGIN
 END $f$;
 -- 6.2 Predarea în stoc (spec §3.3.4 / §3.3b): mișcarea intrare_achizitie legată de LINIE + intrata_stoc += N, într-o tranzacție; cu
 --     p_transfer_proiect = transportul direct: intrare la sediu + fn_transfer_executa spre proiect, în aceeași tranzacție.
---     Ordinea lock-urilor (L06): 0 cheia → 1 comanda FOR SHARE → 2 linia FOR UPDATE → 3 cheia de stoc (prin trigger-ul ieșirilor, la transfer).
+--     Ordinea lock-urilor (L06): 0 cheia → 1 comanda FOR SHARE → 2 linia FOR UPDATE → 3 TOATE cheile de stoc atinse (locația intrării; la
+--     transportul direct sediul ȘI proiectul), ÎNAINTEA primei mișcări: lock-urile consultative sortate după fn_stoc_cheie, apoi rândurile din
+--     stocuri FOR UPDATE (r2: altfel intrarea ține rândul sediului și transferul cere cheia lui = deadlock cu un retur care ține cheia și așteaptă
+--     rândul). Dreptul: după pasul 3 și din nou la închiderea intenției (după ultima operație care poate aștepta).
 CREATE FUNCTION public.fn_cf_intra_stoc(p_cheie uuid, p_linie_id bigint, p_cantitate numeric, p_transfer_proiect boolean DEFAULT false) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
 DECLARE
   v_uid uuid := auth.uid(); v_payload jsonb; v_rez jsonb; v_p record; v_l public.comenzi_furnizor_linii; v_cf public.comenzi_furnizor;
-  v_transfer boolean := coalesce(p_transfer_proiect, false); v_loc_tip text; v_loc_id bigint; v_mid bigint; v_tr bigint;
+  v_transfer boolean := coalesce(p_transfer_proiect, false); v_loc_tip text; v_loc_id bigint; v_loc_err text; v_mid bigint; v_tr bigint; k record;
 BEGIN
   IF v_uid IS NULL THEN RAISE EXCEPTION 'CF_DREPT: operatie nepermisa' USING ERRCODE = '42501'; END IF;
   v_payload := jsonb_build_object('linie', p_linie_id, 'cantitate', trim_scale(p_cantitate), 'transfer_proiect', v_transfer);
@@ -784,6 +832,32 @@ BEGIN
   SELECT * INTO v_p FROM public.fn_cf_linie_pregateste_intern(p_linie_id, true);
   v_l := v_p.linie;
   SELECT * INTO v_cf FROM public.comenzi_furnizor c WHERE c.id = v_l.comanda_furnizor_id;
+  -- locația intrării (refuzul vine după verificarea dreptului)
+  IF v_transfer THEN
+    IF v_cf.proiect_id IS NULL THEN
+      v_loc_err := 'CF_LOCATIE_INVALIDA: comanda nu are proiect pentru transportul direct';
+    ELSIF v_l.denumire IS DISTINCT FROM btrim(v_l.denumire) THEN
+      v_loc_err := 'CF_DENUMIRE_NECANONICA: transportul direct cere denumirea reperului fara spatii la capete';
+    END IF;
+    v_loc_tip := 'sediu'; v_loc_id := NULL;
+  ELSIF v_cf.livrare_tip = 'sediu' THEN
+    v_loc_tip := 'sediu'; v_loc_id := NULL;
+  ELSIF v_cf.proiect_id IS NOT NULL THEN
+    v_loc_tip := 'proiect'; v_loc_id := v_cf.proiect_id;
+  ELSE
+    v_loc_err := 'CF_LOCATIE_INVALIDA: comanda cu livrare pe santier fara proiect';
+  END IF;
+  -- pasul 3: toate cheile atinse, ÎNAINTEA primei mișcări (lock-urile consultative sortate, apoi rândurile, în aceeași ordine)
+  IF v_loc_err IS NULL THEN
+    FOR k IN SELECT x.t, x.i FROM (VALUES (v_loc_tip, v_loc_id, true), ('proiect'::text, v_cf.proiect_id, v_transfer)) x(t, i, atinsa)
+              WHERE x.atinsa ORDER BY public.fn_stoc_cheie(x.t, x.i, v_l.denumire) LOOP
+      PERFORM public.fn_stoc_cheie_lock(k.t, k.i, v_l.denumire);
+    END LOOP;
+    FOR k IN SELECT x.t, x.i FROM (VALUES (v_loc_tip, v_loc_id, true), ('proiect'::text, v_cf.proiect_id, v_transfer)) x(t, i, atinsa)
+              WHERE x.atinsa ORDER BY public.fn_stoc_cheie(x.t, x.i, v_l.denumire) LOOP
+      PERFORM public.fn_stoc_blocheaza(k.t, k.i, v_l.denumire);
+    END LOOP;
+  END IF;
   IF NOT public.fn_cf_drept_achizitii_intern(v_uid) THEN RAISE EXCEPTION 'CF_DREPT: operatie nepermisa' USING ERRCODE = '42501'; END IF;
   IF NOT v_l.intrare_reconciliata THEN
     RAISE EXCEPTION 'CF_NERECONCILIATA: receptie veche nereconciliata: reconciliati intai' USING ERRCODE = 'P0001';
@@ -795,19 +869,7 @@ BEGIN
     RAISE EXCEPTION 'CF_PESTE_PRIMIT: se pot preda in stoc cel mult % (primit, neintrat)',
       trim_scale(greatest(v_l.cantitate_primita - v_l.cantitate_intrata_stoc, 0)) USING ERRCODE = 'P0001';
   END IF;
-  IF v_transfer THEN
-    IF v_cf.proiect_id IS NULL THEN RAISE EXCEPTION 'CF_LOCATIE_INVALIDA: comanda nu are proiect pentru transportul direct' USING ERRCODE = 'P0001'; END IF;
-    IF v_l.denumire IS DISTINCT FROM btrim(v_l.denumire) THEN
-      RAISE EXCEPTION 'CF_DENUMIRE_NECANONICA: transportul direct cere denumirea reperului fara spatii la capete' USING ERRCODE = 'P0001';
-    END IF;
-    v_loc_tip := 'sediu'; v_loc_id := NULL;
-  ELSIF v_cf.livrare_tip = 'sediu' THEN
-    v_loc_tip := 'sediu'; v_loc_id := NULL;
-  ELSIF v_cf.proiect_id IS NOT NULL THEN
-    v_loc_tip := 'proiect'; v_loc_id := v_cf.proiect_id;
-  ELSE
-    RAISE EXCEPTION 'CF_LOCATIE_INVALIDA: comanda cu livrare pe santier fara proiect' USING ERRCODE = 'P0001';
-  END IF;
+  IF v_loc_err IS NOT NULL THEN RAISE EXCEPTION '%', v_loc_err USING ERRCODE = 'P0001'; END IF;
   SET LOCAL app.cf_cantitati = '1';
   INSERT INTO public.stocuri_miscari (locatie_tip, locatie_id, material_denumire, um, delta, tip, motiv, ref_tip, ref_id, created_by, pret_unitar)
   VALUES (v_loc_tip, v_loc_id, v_l.denumire, v_l.um, p_cantitate, 'intrare_achizitie', 'Predare în stoc ' || v_cf.numar_comanda,
@@ -826,7 +888,8 @@ BEGIN
 END $f$;
 -- 6.3 Returul (spec §3.3.1): returnabil maxim = primita efectivă; partea din stoc între max(0, q - (primita - intrata)) și min(q, intrata)
 --     (implicit maximul); stocul locației alese (sediul sau proiectul comenzii) >= partea din stoc, citit SUB lock-ul cheii (pasul 3).
---     Ordinea lock-urilor (L06): 0 cheia → 1 comanda FOR SHARE → 2 linia FOR UPDATE → 3 cheia de stoc + rândul din stocuri.
+--     Ordinea lock-urilor (L06): 0 cheia → 1 comanda FOR SHARE → 2 linia FOR UPDATE → 3 cheia de stoc + rândul din stocuri (singura cheie atinsă,
+--     înaintea mișcării). Dreptul: după pasul 3 și din nou la închiderea intenției.
 CREATE FUNCTION public.fn_cf_retur_inregistreaza(p_cheie uuid, p_linie_id bigint, p_cantitate numeric, p_din_stoc numeric, p_locatie_tip text,
   p_locatie_id bigint, p_motiv text, p_pv_path text, p_asteapta_inlocuire boolean) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
@@ -898,7 +961,8 @@ BEGIN
   RETURN v_rez;
 END $f$;
 -- 6.4 Anularea returului (spec §3.3.2): o singură dată, refuzată după înlocuire; pune la loc exact din_stoc, pe cheia SALVATĂ pe retur.
---     Ordinea lock-urilor (L06): 0 cheia → 1 comanda → 2 linia → 3 cheia de stoc salvată → 4 returul FOR UPDATE.
+--     Ordinea lock-urilor (L06): 0 cheia → 1 comanda → 2 linia → 3 cheia de stoc salvată (singura atinsă, înaintea mișcării) → 4 returul FOR UPDATE.
+--     Dreptul: după pasul 4 și din nou la închiderea intenției.
 CREATE FUNCTION public.fn_cf_retur_anuleaza(p_cheie uuid, p_retur_id bigint, p_motiv text) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
 DECLARE
@@ -956,7 +1020,8 @@ BEGIN
   RETURN v_rez;
 END $f$;
 -- 6.5 Închide fără înlocuire (spec §3.3.5): renunțarea = restul neînlocuit; nicio corectură de recepție nu o anulează.
---     Ordinea lock-urilor (L06): 0 cheia → 1 comanda → 2 linia → 4 returul FOR UPDATE.
+--     Ordinea lock-urilor (L06): 0 cheia → 1 comanda → 2 linia → 4 returul FOR UPDATE; fără mișcări de stoc. Dreptul: după pasul 4 și din nou la
+--     închiderea intenției.
 CREATE FUNCTION public.fn_cf_retur_inchide_fara_inlocuire(p_cheie uuid, p_retur_id bigint, p_motiv text) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
 DECLARE
@@ -990,7 +1055,7 @@ BEGIN
   RETURN v_rez;
 END $f$;
 -- 6.6 Reconcilierea manuală a unei linii vechi (spec §3.3b), DOAR owner: intrata_stoc atribuit de un om + marcajul. O singură dată pe linie.
---     Ordinea lock-urilor (L06): 0 cheia → 1 comanda → 2 linia.
+--     Ordinea lock-urilor (L06): 0 cheia → 1 comanda → 2 linia; fără mișcări de stoc. Dreptul (owner): după pasul 2 și din nou la închiderea intenției.
 CREATE FUNCTION public.fn_cf_reconciliaza_linie(p_cheie uuid, p_linie_id bigint, p_intrata_stoc numeric, p_motiv text) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
 DECLARE
@@ -1023,7 +1088,8 @@ BEGIN
   RETURN v_rez;
 END $f$;
 -- 6.7 Ștergerea unei poziții de stoc (Magazie, „Șterge poziția”), DOAR owner (ca azi): mișcările neprotejate + poziția, într-o tranzacție, sub lock.
---     Ordinea lock-urilor (L06): 3 cheia de stoc → rândul din stocuri FOR UPDATE (apoi trigger-ele de ștergere, pe aceeași cheie).
+--     Ordinea lock-urilor (L06): 3 cheia de stoc → rândul din stocuri FOR UPDATE (apoi trigger-ele de ștergere, pe aceeași cheie). Dreptul: după
+--     lock-uri și din nou după ștergeri.
 CREATE FUNCTION public.fn_stoc_sterge_pozitie(p_stoc_id bigint) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
 DECLARE v_uid uuid := auth.uid(); v_k record; v_s public.stocuri; v_n bigint;
@@ -1046,6 +1112,8 @@ BEGIN
    WHERE m.locatie_tip = v_s.locatie_tip AND m.locatie_id IS NOT DISTINCT FROM v_s.locatie_id AND m.material_denumire = v_s.material_denumire;
   GET DIAGNOSTICS v_n = ROW_COUNT;
   DELETE FROM public.stocuri s WHERE s.id = p_stoc_id;
+  -- reverificarea FINALĂ a dreptului, după ultima operație care poate aștepta (ștergerea mișcărilor: rânduri ținute de alte tranzacții)
+  IF NOT public.fn_cf_este_owner_intern(v_uid) THEN RAISE EXCEPTION 'CF_DREPT: operatie nepermisa' USING ERRCODE = '42501'; END IF;
   RETURN jsonb_build_object('stoc_id', p_stoc_id, 'material', v_s.material_denumire, 'miscari_sterse', v_n);
 END $f$;
 -- drepturile: nimic pentru PUBLIC / anon / service_role; EXECUTE pentru authenticated DOAR pe RPC-urile ecranului
@@ -1206,9 +1274,9 @@ BEGIN
          'fn_stoc_sterge_pozitie')
   ) x;
   -- AMPRENTA_20270110a_SFARSIT
-  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '0375c10450825f19574047add1fcd670' THEN
+  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM 'a1f187b8c1d25c4f81d434cb04eff23d' THEN
     RAISE NOTICE 'AMPRENTA_20270110a_TEXT %', v_amp;
-    RAISE EXCEPTION '20270110a post: AMPRENTA obiectelor % (asteptat 0375c10450825f19574047add1fcd670)', md5(coalesce(v_amp, ''));
+    RAISE EXCEPTION '20270110a post: AMPRENTA obiectelor % (asteptat a1f187b8c1d25c4f81d434cb04eff23d)', md5(coalesce(v_amp, ''));
   END IF;
   IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20270110a_achizitii_retur_furnizor:' || txid_current() THEN
     RAISE EXCEPTION '20270110a: garda final invalida';

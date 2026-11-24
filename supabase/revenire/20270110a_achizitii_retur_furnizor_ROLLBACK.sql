@@ -128,9 +128,9 @@ BEGIN
          'fn_stoc_sterge_pozitie')
   ) x;
   -- AMPRENTA_20270110a_SFARSIT
-  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '0375c10450825f19574047add1fcd670' THEN
+  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM 'a1f187b8c1d25c4f81d434cb04eff23d' THEN
     RAISE NOTICE 'AMPRENTA_20270110a_TEXT %', v_amp;
-    RAISE EXCEPTION '20270110a revenire: AMPRENTA obiectelor migrarii % (asteptat 0375c10450825f19574047add1fcd670): starea nu e cea din 20270110a; nimic schimbat',
+    RAISE EXCEPTION '20270110a revenire: AMPRENTA obiectelor migrarii % (asteptat a1f187b8c1d25c4f81d434cb04eff23d): starea nu e cea din 20270110a; nimic schimbat',
       md5(coalesce(v_amp, ''));
   END IF;
 END $pre$;

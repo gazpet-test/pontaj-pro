@@ -54,9 +54,11 @@
 4. **Ordinea globală a lock-urilor** (L06), aceeași în toate RPC-urile și trigger-ele:
    1. `comenzi_furnizor` rândul comenzii `FOR SHARE`;
    2. `comenzi_furnizor_linii` rândul liniei `FOR UPDATE`;
-   3. cheia de stoc (advisory);
+   3. cheile de stoc: **toate** cheile pe care operația le atinge (intrare sau ieșire; la transportul direct sediul **și** proiectul), luate **înaintea primei mișcări de stoc**: întâi lock-urile advisory, sortate crescător după valoarea cheii (`fn_stoc_cheie`), apoi rândurile din `stocuri` `FOR UPDATE`, în aceeași ordine (actualizat în runda 2 a review-ului: transportul direct ținea rândul sediului și cerea abia apoi cheia lui, deci se putea bloca reciproc cu un retur care ținea cheia și aștepta rândul);
    4. rândurile de retur `FOR UPDATE`, în ordinea id-ului.
-   - Trigger-ul de identitate pe linie ia doar pasul 1.
+   - Pasul 0, înaintea tuturor: lock-ul advisory pe cheia de idempotență.
+   - Trigger-ul de identitate pe linie ia doar pasul 1; la mutarea liniei în altă comandă, ambele comenzi `FOR SHARE`, în ordinea id-ului.
+   - Dreptul se verifică după lock-uri și **se reverifică după ultima operație care poate aștepta** (la închiderea intenției; ștergerea poziției, după ștergeri).
 
 ## Review Focus
 

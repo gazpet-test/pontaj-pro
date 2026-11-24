@@ -5,9 +5,11 @@
 // Secțiuni (--sectiune t0,t1,…; implicit toate):
 //   t0  validatorul runnerului, refuzurile migrării, livrarea L15 v2 (manifestul = lista revizuită), blocul AMPRENTA identic în migrare și revenire
 //   t1  tabelele noi: RLS, drepturi, CHECK-urile (tip / sens / intrata <= primita), reaplicarea
-//   t2  lock-ul pe stoc (ieșiri, ștergeri), istoricul protejat, ștergerea poziției, clientul vechi, identitatea, cheia exactă
+//   t2  lock-ul pe stoc (ieșiri, ștergeri), istoricul protejat, ștergerea poziției, clientul vechi, identitatea, mutarea liniei (r2), cheia exactă,
+//       ordinea cheilor de stoc la predare / transport direct (r2)
 //   t3  recepția incrementală (CAS), soldul inițial, dovada pe NULL, predarea atomică, transportul direct, moștenirea nereconciliată
-//   t4  returul, anularea, închiderea, compensarea cronologică, zecimalele, comenzile invalide, dreptul (non-owner, retras), idempotența,
+//   t4  returul, anularea, închiderea, compensarea cronologică, zecimalele, comenzile invalide, dreptul (non-owner, retras; r2: retras la ultima
+//       operație care poate aștepta), idempotența,
 //       cererile interne neschimbate, test de proprietate (200 de secvențe)
 //   t5  porțile care au blocat livrări pe clonă: GATE 0e (scripts/control_0e.sql, verbatim) și poarta Izometrie E2 (blocul din 20261230a)
 //   t6  revenirea: refuzuri (marcaj, istoric nou, amprentă), aplicare → revenire → reaplicare, starea de dinainte
@@ -288,6 +290,68 @@ async function verifica(db, { doar = null } = {}) {
     await db.exec(`DROP FUNCTION public.fn_stoc_cheie_lock(text, bigint, text); ALTER FUNCTION public.fn_stoc_cheie_lock_orig(text, bigint, text) RENAME TO fn_stoc_cheie_lock; DROP TABLE public.t_jurnal_lock;`)
     tine(!t.err && jr.length >= 1 && jr[0].adancime === 0 && jr[0].cheie === 'sediu|0|MAT_LOCK2', `returul: primul lock pe cheie e al RPC-ului (înaintea citirii stocului): ${JSON.stringify(jr)}`)
   }
+  if (are('ordine_chei')) {
+    // c_ordine_chei (r2, L06): predarea și transportul direct iau lock-urile consultative pe TOATE cheile atinse (sediul ȘI proiectul), la nivelul
+    // RPC-ului, sortate după fn_stoc_cheie, ÎNAINTEA primei mișcări / scrieri în stocuri; după prima mișcare nu se mai cere nicio cheie nouă
+    // (r1: intrarea ținea rândul sediului, iar transferul cerea abia apoi cheia lui = deadlock cu un retur care ține cheia și așteaptă rândul)
+    await db.exec(`RESET ROLE; CREATE TABLE public.t_jurnal_ord (id serial, ev text, adancime int, cheie text);
+      ALTER FUNCTION public.fn_stoc_cheie_lock(text, bigint, text) RENAME TO fn_stoc_cheie_lock_orig;
+      CREATE FUNCTION public.fn_stoc_cheie_lock(p_locatie_tip text, p_locatie_id bigint, p_denumire text) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+      BEGIN INSERT INTO public.t_jurnal_ord (ev, adancime, cheie) VALUES ('lock', pg_trigger_depth(), p_locatie_tip || '|' || coalesce(p_locatie_id, 0) || '|' || p_denumire);
+        PERFORM public.fn_stoc_cheie_lock_orig(p_locatie_tip, p_locatie_id, p_denumire); END $f$;
+      CREATE FUNCTION public.t_ord_scriere() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+      BEGIN INSERT INTO public.t_jurnal_ord (ev, adancime, cheie) VALUES (TG_TABLE_NAME, pg_trigger_depth(), NEW.locatie_tip || '|' || coalesce(NEW.locatie_id, 0) || '|' || NEW.material_denumire); RETURN NEW; END $f$;
+      CREATE TRIGGER t_ord_miscari BEFORE INSERT ON public.stocuri_miscari FOR EACH ROW EXECUTE FUNCTION public.t_ord_scriere();
+      CREATE TRIGGER t_ord_stocuri BEFORE INSERT OR UPDATE ON public.stocuri FOR EACH ROW EXECUTE FUNCTION public.t_ord_scriere();`)
+    const cf = await comanda(db, { status: 'ajunsa', livrare_tip: 'santier', proiect_id: P2 }); const l = await linie(db, cf, { denumire: 'MAT_ORD', cantitate: 6 })
+    await R(db, U.ACH, { linie: l, n: 6, citita: null })
+    const jurnalOrd = async () => (await db.query('SELECT ev, adancime, cheie FROM public.t_jurnal_ord ORDER BY id')).rows
+    await db.exec('TRUNCATE public.t_jurnal_ord')
+    const a = await INTRA(db, U.ACH, { linie: l, n: 4, transfer: true }); const ja = await jurnalOrd()
+    await db.exec('TRUNCATE public.t_jurnal_ord')
+    const b = await INTRA(db, U.ACH, { linie: l, n: 2 }); const jb = await jurnalOrd()
+    const sortat = (await db.query(`SELECT v.t || '|' || coalesce(v.i, 0) || '|MAT_ORD' AS k FROM (VALUES ('sediu'::text, NULL::bigint), ('proiect', $1::bigint)) v(t, i)
+      ORDER BY public.fn_stoc_cheie(v.t, v.i, 'MAT_ORD')`, [P2])).rows.map(r => r.k)
+    const sp = await stoc(db, 'proiect', P2, 'MAT_ORD'), ss = await stoc(db, 'sediu', null, 'MAT_ORD')
+    await db.exec(`RESET ROLE; DROP TRIGGER t_ord_miscari ON public.stocuri_miscari; DROP TRIGGER t_ord_stocuri ON public.stocuri; DROP FUNCTION public.t_ord_scriere();
+      DROP FUNCTION public.fn_stoc_cheie_lock(text, bigint, text); ALTER FUNCTION public.fn_stoc_cheie_lock_orig(text, bigint, text) RENAME TO fn_stoc_cheie_lock; DROP TABLE public.t_jurnal_ord;`)
+    const ordonat = (j, chei) => {
+      const prima = j.findIndex(e => e.ev !== 'lock')
+      const inainte = [...new Set(j.slice(0, prima < 0 ? j.length : prima).filter(e => e.adancime === 0).map(e => e.cheie))]
+      return prima > 0 && JSON.stringify(inainte) === JSON.stringify(chei) && j.slice(prima).every(e => chei.includes(e.cheie))
+    }
+    tine(!a.err && !b.err && ordonat(ja, sortat) && ordonat(jb, [`proiect|${P2}|MAT_ORD`]) && sp === 6 && ss === 0,
+      `c_ordine_chei: transportul direct ${a.cod || 'ok'} [${ja.map(e => `${e.ev}@${e.adancime}:${e.cheie}`).join(' ')}] (sortat: ${sortat.join(' < ')}); predarea pe proiect ${b.cod || 'ok'} [${jb.map(e => `${e.ev}@${e.adancime}:${e.cheie}`).join(' ')}]; stoc proiect ${sp}, sediu ${ss}`)
+  }
+  if (are('mutare')) {
+    // t2_mutare (r2, §3.3b / L07): mutarea liniei în altă comandă (comanda_furnizor_id schimbat) e refuzată dacă linia sau oricare dintre comenzi are
+    // urme de recepție / jurnal / intrări vechi; altfel e permisă, iar marcajul moștenirii se recalculează pentru destinație
+    const veche = (cf, den) => caServer(db, `INSERT INTO public.stocuri_miscari (locatie_tip, material_denumire, um, delta, tip, motiv, ref_tip, ref_id) VALUES ('sediu', $1, 'buc', 10, 'intrare_achizitie', 'vechi', 'comanda_furnizor', $2)`, [den, cf])
+    const nou = async cf => Number((await caRol(db, 'authenticated', U.ACH, `INSERT INTO public.comenzi_furnizor_linii (comanda_furnizor_id, denumire, um, cantitate) VALUES ($1, 'MAT_MUT', 'buc', 10) RETURNING id`, [cf])).rows?.[0]?.id)
+    const muta = (l, cf) => caRol(db, 'authenticated', U.ACH, 'UPDATE public.comenzi_furnizor_linii SET comanda_furnizor_id = $2 WHERE id = $1', [l, cf])
+    const unde = async l => JSON.stringify(await q1(db, 'SELECT comanda_furnizor_id::text AS cf, intrare_reconciliata AS rec, cantitate_primita::text AS p FROM public.comenzi_furnizor_linii WHERE id = $1', [l]))
+    const cfA = await comanda(db, { status: 'emisa' }); const lA = await nou(cfA); const uA = await unde(lA)
+    // (a) scenariul review-ului: linie nouă (reconciliată) mutată într-o comandă recepționată cu intrări vechi ambigue (+ o linie veche nereconciliată)
+    const cfB = await comanda(db, { status: 'receptionata' }); await veche(cfB, 'MAT_MUT'); await linie(db, cfB, { denumire: 'MAT_MUT', cantitate: 10, primita: 10, rec: false })
+    const a = await muta(lA, cfB)
+    // (b) destinația recepționată fără intrări vechi; (c) destinația emisă, cu o altă linie recepționată (jurnal); (d) destinația emisă cu intrări vechi
+    const cfC = await comanda(db, { status: 'receptionata' })
+    const cfD = await comanda(db, { status: 'emisa' }); const lD = await linie(db, cfD, { denumire: 'MAT_MUT_D', cantitate: 5 }); await R(db, U.ACH, { linie: lD, n: 5, citita: null })
+    const cfE = await comanda(db, { status: 'emisa' }); await veche(cfE, 'MAT_MUT_E')
+    const b = await muta(lA, cfC), c = await muta(lA, cfD), d = await muta(lA, cfE)
+    // (e) linia sursă are recepție → refuz (martor: refuzat și înainte de r2)
+    const cfF = await comanda(db, { status: 'emisa' }); const lF = await linie(db, cfF, { denumire: 'MAT_MUT_F', cantitate: 5 }); await R(db, U.ACH, { linie: lF, n: 2, citita: null })
+    const e = await muta(lF, await comanda(db, { status: 'emisa' }))
+    tine([a, b, c, d, e].every(x => x.cod === 'CF_MUTARE_REFUZATA') && await unde(lA) === uA && JSON.parse(uA).rec === true,
+      `t2_mutare refuzată: (a) recepționată + intrări vechi ${a.cod || 'TRECE'}, (b) recepționată ${b.cod || 'TRECE'}, (c) jurnal pe altă linie ${c.cod || 'TRECE'}, (d) intrări vechi ${d.cod || 'TRECE'}, (e) linie recepționată ${e.cod || 'TRECE'}; linia neschimbată ${await unde(lA)}`)
+    // (f) mutare permisă: linie veche nereconciliată, fără nicio urmă, între două comenzi curate → marcajul recalculat (true); predarea cere recepție
+    const cfH = await comanda(db, { status: 'draft' }); const lH = await linie(db, cfH, { denumire: 'MAT_MUT_H', cantitate: 5, rec: false })
+    const cfI = await comanda(db, { status: 'emisa' })
+    const f = await muta(lH, cfI); const uH = JSON.parse(await unde(lH))
+    const f2 = await INTRA(db, U.ACH, { linie: lH, n: 1 })
+    tine(!f.err && f.n === 1 && uH.cf === String(cfI) && uH.rec === true && f2.cod === 'CF_FARA_RECEPTIE',
+      `t2_mutare permisă între comenzi curate: ${f.cod || f.n} ${JSON.stringify(uH)}; predarea fără recepție ${f2.cod}`)
+  }
   if (are('receptie')) {
     // t3_receptie_incrementala + CAS
     const cf = await comanda(db, { status: 'emisa' }); const l = await linie(db, cf)
@@ -509,6 +573,46 @@ async function verifica(db, { doar = null } = {}) {
       ALTER FUNCTION public.fn_cf_linie_pregateste_intern_orig(bigint, boolean) RENAME TO fn_cf_linie_pregateste_intern; UPDATE public.profiles SET can_process_achizitii = true WHERE id = '${U.ACH}';`)
     tine(!tr.err && inj.every(x => x.err === '42501') && st2 === st, `c_drept_retras (injecție după lock-uri): ${inj.map(x => x.err || x.cod || 'TRECE').join(',')}; nimic scris ${st2 === st}`)
   }
+  if (are('drept_final')) {
+    // c_drept_dupa_ultima_asteptare (r2, L01): dreptul retras EXACT la operațiile care pot aștepta DUPĂ verificarea de după lock-uri (injecție prin
+    // trigger-e de probă pe rândul din stocuri, jurnalul recepțiilor, linie, retururi, ștergerea mișcărilor; PGlite are o sesiune: retragerea
+    // „comisă cât RPC-ul așteaptă” se simulează în aceeași tranzacție, exact în acel punct) → 42501 pe fiecare RPC de scriere, nimic scris.
+    // Proba cu două sesiuni reale (barieră pe rândul din stocuri / pe recepție): supabase/tests/…_concurenta.sh C8 / C9.
+    const cf = await comanda(db, { status: 'ajunsa', livrare_tip: 'santier', proiect_id: P2 }); const l = await linie(db, cf, { denumire: 'MAT_DF', cantitate: 30 })
+    await R(db, U.ACH, { linie: l, n: 30, citita: null }); await INTRA(db, U.ACH, { linie: l, n: 10 })
+    const tr = await RET(db, U.ACH, { linie: l, n: 2, din: 0 })
+    const lr = await linie(db, cf, { denumire: 'MAT_DF2', cantitate: 5, primita: 5, rec: false }); await R(db, U.ACH, { linie: lr, n: 1, citita: 5 })
+    await ajustare(db, U.OWN, 'sediu', null, 'MAT_DF_DEL', 3)
+    const sid = await val(db, `SELECT id FROM public.stocuri WHERE material_denumire = 'MAT_DF_DEL'`)
+    await db.exec(`RESET ROLE; CREATE TABLE public.t_revoca_activ (x int);
+      CREATE FUNCTION public.t_revoca() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+      BEGIN IF EXISTS (SELECT 1 FROM public.t_revoca_activ) THEN
+        UPDATE public.profiles SET can_process_achizitii = false, can_create_comenzi = false, is_owner = false WHERE id = auth.uid(); END IF; RETURN NULL; END $f$;
+      CREATE TRIGGER t_revoca_stocuri AFTER INSERT OR UPDATE ON public.stocuri FOR EACH ROW EXECUTE FUNCTION public.t_revoca();
+      CREATE TRIGGER t_revoca_receptii AFTER INSERT ON public.comenzi_furnizor_receptii FOR EACH ROW EXECUTE FUNCTION public.t_revoca();
+      CREATE TRIGGER t_revoca_linii AFTER UPDATE ON public.comenzi_furnizor_linii FOR EACH ROW EXECUTE FUNCTION public.t_revoca();
+      CREATE TRIGGER t_revoca_retururi AFTER INSERT OR UPDATE ON public.comenzi_furnizor_retururi FOR EACH ROW EXECUTE FUNCTION public.t_revoca();
+      CREATE TRIGGER t_revoca_miscari AFTER DELETE ON public.stocuri_miscari FOR EACH ROW EXECUTE FUNCTION public.t_revoca();
+      INSERT INTO public.t_revoca_activ VALUES (1);`)
+    const st = await stareLinie(db, l), stR = await stareLinie(db, lr)
+    const ops = []
+    ops.push(['receptie', await R(db, U.ACH, { linie: l, n: 1, citita: 28 })])
+    ops.push(['corectura', await R(db, U.ACH, { linie: l, n: -1, citita: 28 })])
+    ops.push(['predare', await INTRA(db, U.ACH, { linie: l, n: 1 })])
+    ops.push(['transport', await INTRA(db, U.ACH, { linie: l, n: 1, transfer: true })])
+    ops.push(['retur', await RET(db, U.ACH, { linie: l, n: 1, din: 1, loc: 'proiect', locId: P2 })])
+    ops.push(['anulare', await ANUL(db, U.ACH, { retur: tr.r?.retur_id })])
+    ops.push(['inchidere', await INCH(db, U.ACH, { retur: tr.r?.retur_id })])
+    ops.push(['reconciliere', await RECON(db, U.OWN, { linie: lr, n: 0 })])
+    ops.push(['stergere', await rpc(db, U.OWN, 'fn_stoc_sterge_pozitie', { p_stoc_id: sid })])
+    await db.exec('RESET ROLE; TRUNCATE public.t_revoca_activ')
+    const nimic = await stareLinie(db, l) === st && await stareLinie(db, lr) === stR && Number(await val(db, 'SELECT count(*)::int FROM public.stocuri WHERE id = $1', [sid])) === 1
+    await db.exec(`RESET ROLE; UPDATE public.profiles SET can_process_achizitii = true WHERE id = '${U.ACH}'; UPDATE public.profiles SET is_owner = true WHERE id = '${U.OWN}';
+      DROP TRIGGER t_revoca_stocuri ON public.stocuri; DROP TRIGGER t_revoca_receptii ON public.comenzi_furnizor_receptii; DROP TRIGGER t_revoca_linii ON public.comenzi_furnizor_linii;
+      DROP TRIGGER t_revoca_retururi ON public.comenzi_furnizor_retururi; DROP TRIGGER t_revoca_miscari ON public.stocuri_miscari; DROP FUNCTION public.t_revoca(); DROP TABLE public.t_revoca_activ;`)
+    tine(!tr.err && ops.every(([, r]) => r.err === '42501') && nimic,
+      `c_drept_dupa_ultima_asteptare: ${ops.map(([n, r]) => n + ' ' + (r.err || 'TRECE')).join(', ')}; nimic scris ${nimic}`)
+  }
   if (are('idempotenta')) {
     // c_reluare_cheie / proba 4: aceeași cheie + același payload = rezultatul comis, fără efect dublu; alt payload / alt autor = refuz
     const cf = await comanda(db, { status: 'emisa' }); const l = await linie(db, cf, { denumire: 'MAT_ID', cantitate: 50 })
@@ -709,8 +813,8 @@ const S_INAINTE = await STARE_INAINTE(DB)
 
 if (ruleaza('t1') || ruleaza('t2') || ruleaza('t3') || ruleaza('t4')) {
   console.log('t1–t4. comportamentul după migrare (ca authenticated / service_role / postgres)')
-  const pe = { t1: ['tabele'], t2: ['client_vechi', 'identitate', 'cheie_exacta', 'stergere', 'lock'], t3: ['receptie', 'sold', 'null_dovada', 'predare', 'transport', 'nereconciliata'],
-    t4: ['retur', 'anulare', 'renuntare', 'cronologic', 'zecimale', 'comanda_invalida', 'drept', 'idempotenta', 'cereri'] }
+  const pe = { t1: ['tabele'], t2: ['client_vechi', 'identitate', 'mutare', 'cheie_exacta', 'stergere', 'lock', 'ordine_chei'], t3: ['receptie', 'sold', 'null_dovada', 'predare', 'transport', 'nereconciliata'],
+    t4: ['retur', 'anulare', 'renuntare', 'cronologic', 'zecimale', 'comanda_invalida', 'drept', 'drept_final', 'idempotenta', 'cereri'] }
   const doar = Object.entries(pe).filter(([s]) => ruleaza(s)).flatMap(([, v]) => v)
   const ab = await verifica(DB, { doar })
   ok(ab.length === 0, `toate verificările de comportament (${doar.length} grupuri)` + (ab.length ? ':\n       - ' + ab.join('\n       - ') : ''))
@@ -795,9 +899,19 @@ if (ruleaza('t7')) {
   const MUTANTI = [
     ['fără lock de stoc la retur (citire simplă a stocului)', [['    v_stoc := public.fn_stoc_blocheaza(p_locatie_tip, p_locatie_id, v_l.denumire);',
       '    SELECT coalesce(sum(s.cantitate), 0) INTO v_stoc FROM public.stocuri s WHERE s.locatie_tip = p_locatie_tip AND s.locatie_id IS NOT DISTINCT FROM p_locatie_id AND s.material_denumire = v_l.denumire;']], ['lock']],
-    ['fără reverificarea dreptului după lock (verificat înaintea pregătirii liniei)', [
+    // (r2) cu reverificarea finală prezentă, dreptul citit înaintea lock-urilor e prins tot de ea: mutantul le scoate pe amândouă (starea dinainte de r1)
+    ['dreptul verificat înaintea lock-urilor, fără reverificarea finală', [
       ["  SELECT * INTO v_p FROM public.fn_cf_linie_pregateste_intern(p_linie_id, false);\n  v_l := v_p.linie;\n  PERFORM 1 FROM public.comenzi_furnizor_retururi t0 WHERE t0.linie_id = p_linie_id AND t0.tip = 'retur' ORDER BY t0.id FOR UPDATE;\n  IF NOT public.fn_cf_drept_achizitii_intern(v_uid) THEN RAISE EXCEPTION 'CF_DREPT: operatie nepermisa' USING ERRCODE = '42501'; END IF;",
-       "  IF NOT public.fn_cf_drept_achizitii_intern(v_uid) THEN RAISE EXCEPTION 'CF_DREPT: operatie nepermisa' USING ERRCODE = '42501'; END IF;\n  SELECT * INTO v_p FROM public.fn_cf_linie_pregateste_intern(p_linie_id, false);\n  v_l := v_p.linie;\n  PERFORM 1 FROM public.comenzi_furnizor_retururi t0 WHERE t0.linie_id = p_linie_id AND t0.tip = 'retur' ORDER BY t0.id FOR UPDATE;"]], ['drept']],
+       "  IF NOT public.fn_cf_drept_achizitii_intern(v_uid) THEN RAISE EXCEPTION 'CF_DREPT: operatie nepermisa' USING ERRCODE = '42501'; END IF;\n  SELECT * INTO v_p FROM public.fn_cf_linie_pregateste_intern(p_linie_id, false);\n  v_l := v_p.linie;\n  PERFORM 1 FROM public.comenzi_furnizor_retururi t0 WHERE t0.linie_id = p_linie_id AND t0.tip = 'retur' ORDER BY t0.id FOR UPDATE;"],
+      ["  IF NOT coalesce(v_ok, false) THEN RAISE EXCEPTION 'CF_DREPT: operatie nepermisa' USING ERRCODE = '42501'; END IF;\n", '']], ['drept']],
+    ['fără reverificarea finală a dreptului (la închiderea intenției)', [["  IF NOT coalesce(v_ok, false) THEN RAISE EXCEPTION 'CF_DREPT: operatie nepermisa' USING ERRCODE = '42501'; END IF;\n", '']], ['drept_final']],
+    ['fără reverificarea finală la ștergerea poziției', [["  IF NOT public.fn_cf_este_owner_intern(v_uid) THEN RAISE EXCEPTION 'CF_DREPT: operatie nepermisa' USING ERRCODE = '42501'; END IF;\n  RETURN jsonb_build_object('stoc_id'",
+      "  RETURN jsonb_build_object('stoc_id'"]], ['drept_final']],
+    ['cheile de stoc luate după prima mișcare (r1: predarea / transportul direct)', [['  IF v_loc_err IS NULL THEN\n    FOR k IN', '  IF false THEN\n    FOR k IN']], ['ordine_chei']],
+    ['mutarea liniei: doar comanda sursă verificată (r1: destinația ignorată)', [['WHERE c.id IN (OLD.comanda_furnizor_id, NEW.comanda_furnizor_id)\n                     AND (coalesce',
+      'WHERE c.id IN (OLD.comanda_furnizor_id)\n                     AND (coalesce']], ['mutare']],
+    ['mutarea liniei: marcajul moștenirii nerecalculat', [["    NEW.intrare_reconciliata := NOT EXISTS (SELECT 1 FROM public.stocuri_miscari m\n                                             WHERE m.tip = 'intrare_achizitie' AND m.ref_tip = 'comanda_furnizor' AND m.ref_id = NEW.comanda_furnizor_id);\n  ELSIF",
+      '  ELSIF']], ['mutare']],
     ['fără CAS pe p_primita_citita', [['  IF v_p.primita_bruta IS DISTINCT FROM p_primita_citita THEN', '  IF false THEN']], ['receptie']],
     ['fără garda de reconciliere la fn_cf_intra_stoc', [["  IF NOT v_l.intrare_reconciliata THEN\n    RAISE EXCEPTION 'CF_NERECONCILIATA: receptie veche nereconciliata: reconciliati intai' USING ERRCODE = 'P0001';\n  END IF;\n  IF NOT public.fn_cf_cantitate_valida_intern(p_cantitate) OR p_cantitate <= 0 THEN\n    RAISE EXCEPTION 'CF_CANTITATE_INVALIDA: cantitatea predata",
       "  IF NOT public.fn_cf_cantitate_valida_intern(p_cantitate) OR p_cantitate <= 0 THEN\n    RAISE EXCEPTION 'CF_CANTITATE_INVALIDA: cantitatea predata"]], ['nereconciliata']],

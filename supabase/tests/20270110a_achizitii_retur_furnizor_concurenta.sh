@@ -39,8 +39,19 @@
 #                                      așteaptă; dreptul lui B e retras și comis cât așteaptă; după COMMIT-ul lui A → 42501, nimic scris de B.
 #   C7 c_reluare_cheie                 A: retur cu cheia K. B: aceeași cheie, același payload → așteaptă cheia; după COMMIT → rezultatul comis (reluat),
 #                                      un singur retur cu K.
+#   C8 c_drept_retras_bariera_stoc     (r2) A (postgres) ține RÂNDUL din stocuri al sediului (FOR UPDATE). B (achiziții): predarea în stoc → așteaptă
+#                                      rândul; dreptul lui B e retras și comis cât așteaptă; după COMMIT-ul lui A → 42501, linia și stocul neschimbate.
+#   C9 c_drept_retras_bariera_fk       (r2) A (postgres) ține o RECEPȚIE a liniei (FOR UPDATE). B: corectura -3 → verifică dreptul, apoi FK-ul corecturii
+#                                      pe recepție așteaptă (ultima așteptare, după verificarea de după lock-uri); dreptul retras și comis; după ROLLBACK-ul
+#                                      lui A → 42501 (reverificarea finală), linia neschimbată.
+#   C10 c_transport_vs_retur           (r2) același material la sediu. A ține lock-ul consultativ 4242010 (bariera de probă: un trigger de probă AFTER INSERT
+#                                      pe stocuri_miscari îl cere după intrarea la sediu a transportului). B: transport direct pe L1 → se oprește în
+#                                      barieră. B2: retur 10 din sediu pe L2 → așteaptă (cheia sediului). A COMMIT → ambele termină (00000), fără deadlock;
+#                                      stocul sediului 0, al proiectului 8.
 # MUTANȚI (fiecare TREBUIE să pice scenariul lui): M1 fără FOR UPDATE pe linie (C1); M2 fără lock de stoc la retur (C2, C3, C5); M3 fără CAS pe
-#   p_primita_citita (C4); M4 dreptul citit înaintea lock-urilor (C6, returul); M5 fără lock pe cheia de idempotență (C7).
+#   p_primita_citita (C4); M4 dreptul citit înaintea lock-urilor, fără reverificarea finală (C6, returul); M5 fără lock pe cheia de idempotență (C7);
+#   M6 starea r1 a predării: cheile de stoc după prima mișcare + fără reverificarea finală (C8); M7 fără reverificarea finală (C9); M8 cheile de stoc
+#   după prima mișcare (C10: deadlock detectat, 40P01).
 set -u
 set -o pipefail
 
@@ -68,7 +79,7 @@ esac
 D="$(mktemp -d -t retur_concurenta_XXXXXX)"
 DDL="$D/ddl.sql"; A_OUT="$D/A.stdout.log"; A_ERR="$D/A.stderr.log"; B_LOG="$D/B.log"; B_TOT="$D/B.toate.log"
 : > "$A_ERR"; : > "$B_TOT"
-BAZE_CREATE=(); A_DESCHIS=0; esec=0; B_PID=''
+BAZE_CREATE=(); A_DESCHIS=0; esec=0; B_PID=''; B2_PID=''; B2_LOG="$D/B2.log"
 ROLURI=(anon authenticated service_role supabase_auth_admin)
 ROLURI_CREATE=()
 curatenie() {
@@ -80,6 +91,7 @@ curatenie() {
   fi
   if [ "$A_DESCHIS" = 1 ]; then { printf '%s\n' 'ROLLBACK;' '\q' >&"$A_IN"; } 2>/dev/null || true; wait "$A_PID_C" 2>/dev/null || true; fi
   if [ -n "$B_PID" ]; then kill "$B_PID" 2>/dev/null || true; wait "$B_PID" 2>/dev/null || true; fi
+  if [ -n "$B2_PID" ]; then kill "$B2_PID" 2>/dev/null || true; wait "$B2_PID" 2>/dev/null || true; fi
   local b r
   for b in ${BAZE_CREATE[@]+"${BAZE_CREATE[@]}"}; do
     if "${PSM[@]}" -c "DROP DATABASE \"$b\" WITH (FORCE)" > /dev/null; then echo "  OK  curatenie: DROP DATABASE $b"; else echo "  NU  curatenie: DROP DATABASE $b a esuat (de sters manual)"; cod=1; fi
@@ -138,11 +150,23 @@ asteaptaB() {
   B_COD="$(sed -n 's/^B_MSG \(CF_[A-Z_]*\):.*/\1/p' "$B_LOG" | tail -n 1)"; [ -n "$B_COD" ] || B_COD='-'
   B_R="$(sed -n 's/^B_R //p' "$B_LOG" | tail -n 1)"
 }
-# observatorul: B e blocat pe un lock (pg_stat_activity), plafon 10 s
+# a doua sesiune în fundal (C10), aceeași formă: rezultatul în B2_STARE / B2_COD
+pornesteB2() {   # <uid> <instructiunea SELECT … AS r>
+  printf '%s\n' "SET lock_timeout = '20s';" "BEGIN;" "$(ca "$1")" "$2 \\gset" "\\echo B_REZ :SQLSTATE" "\\echo B_MSG :LAST_ERROR_MESSAGE" "\\echo B_R :r" "COMMIT;" > "$D/B2.sql"
+  PGAPPNAME=retur_B2 psql -X -q -w -v ON_ERROR_STOP=0 -d "$CUR" -f "$D/B2.sql" > "$B2_LOG" 2>&1 &
+  B2_PID=$!
+}
+asteaptaB2() {
+  wait "$B2_PID" 2>/dev/null; B2_PID=''
+  { echo "── B2 ($CUR) ──"; cat "$B2_LOG"; } >> "$B_TOT"
+  B2_STARE="$(sed -n 's/^B_REZ //p' "$B2_LOG" | tail -n 1)"; [ -n "$B2_STARE" ] || B2_STARE='FARA_MARCAJ'
+  B2_COD="$(sed -n 's/^B_MSG \(CF_[A-Z_]*\):.*/\1/p' "$B2_LOG" | tail -n 1)"; [ -n "$B2_COD" ] || B2_COD='-'
+}
+# observatorul: sesiunea cu application_name dat (implicit retur_B) e blocată pe un lock (pg_stat_activity), plafon 10 s
 bariera() {
-  local r
-  r="$(psql -X -q -w -d "$CUR" -tAc "DO \$o\$ DECLARE i int := 0; BEGIN LOOP EXIT WHEN EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND application_name = 'retur_B' AND wait_event_type = 'Lock'); i := i + 1; IF i > 500 THEN RAISE EXCEPTION 'B nu asteapta pe niciun lock'; END IF; PERFORM pg_sleep(0.02); END LOOP; END \$o\$; SELECT 'BARIERA_OK';" 2>&1)"
-  astept BARIERA_OK "$r" "observatorul: B asteapta pe un lock (wait_event_type = Lock)"
+  local r app="${1:-retur_B}"
+  r="$(psql -X -q -w -d "$CUR" -tAc "DO \$o\$ DECLARE i int := 0; BEGIN LOOP EXIT WHEN EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND application_name = '$app' AND wait_event_type = 'Lock'); i := i + 1; IF i > 500 THEN RAISE EXCEPTION '$app nu asteapta pe niciun lock'; END IF; PERFORM pg_sleep(0.02); END LOOP; END \$o\$; SELECT 'BARIERA_OK';" 2>&1)"
+  astept BARIERA_OK "$r" "observatorul: $app asteapta pe un lock (wait_event_type = Lock)"
 }
 retur_sql() { printf "SELECT public.fn_cf_retur_inregistreaza('%s', %s, %s, %s, '%s', %s, 'reper neconform', NULL, %s) AS r" "$1" "$2" "$3" "$4" "$5" "$6" "$7"; }
 cheie() { q "SELECT gen_random_uuid()"; }
@@ -274,6 +298,63 @@ C7() {
   inchideA
   astept "1|40.000" "$(q "SELECT count(*) || '|' || (SELECT cantitate FROM public.stocuri WHERE locatie_tip = 'sediu' AND material_denumire = 'MAT_C7') FROM public.comenzi_furnizor_retururi WHERE cheie = '$K'")" "un retur cu K, stocul scazut o data"
 }
+# starea liniei + a stocului ei (pentru „nimic scris de B”)
+stare_l() { q "SELECT md5(row_to_json(l)::text) || '|' || coalesce((SELECT string_agg(s.locatie_tip || ':' || s.cantitate, ',' ORDER BY s.id) FROM public.stocuri s WHERE s.material_denumire = l.denumire), '-') || '|' || (SELECT count(*) FROM public.comenzi_furnizor_receptii r WHERE r.linie_id = l.id) FROM public.comenzi_furnizor_linii l WHERE l.id = $1"; }
+C8() {
+  local L inainte
+  q "UPDATE public.profiles SET can_process_achizitii = true WHERE id = '$UID_ACH'" > /dev/null
+  L="$(q "SELECT public.t_linie('MAT_C8', 50, 0, 50)")"; inainte="$(stare_l "$L")"
+  deschideA
+  pasA C8a "BEGIN;" "SELECT 1 FROM public.stocuri WHERE locatie_tip = 'sediu' AND locatie_id IS NULL AND material_denumire = 'MAT_C8' FOR UPDATE;"
+  astept 00000 "$A_STARE" "A: tine randul din stocuri al sediului (FOR UPDATE, necomis)"
+  pornesteB $UID_ACH "SELECT public.fn_cf_intra_stoc('$(cheie)', $L, 10, false) AS r"
+  bariera
+  q "UPDATE public.profiles SET can_process_achizitii = false WHERE id = '$UID_ACH'" > /dev/null
+  pasA C8b "COMMIT;"; astept 00000 "$A_STARE" "A: COMMIT (randul eliberat)"
+  asteaptaB; astept 42501 "$B_STARE" "B: predarea, dreptul retras cat astepta randul din stocuri"
+  inchideA
+  q "UPDATE public.profiles SET can_process_achizitii = true WHERE id = '$UID_ACH'" > /dev/null
+  astept "$inainte" "$(stare_l "$L")" "B: linia si stocul neschimbate"
+}
+C9() {
+  local L X R inainte
+  q "UPDATE public.profiles SET can_process_achizitii = true WHERE id = '$UID_ACH'" > /dev/null
+  L="$(q "SELECT public.t_linie('MAT_C9', 50, 0, 0)")"
+  R="$(psql -X -q -w -d "$CUR" -tAc "BEGIN; $(ca $UID_OWN) SELECT public.fn_cf_receptie_adauga('$(cheie)', $L, 5, 50); COMMIT;" 2>&1 | tail -n 1)"
+  X="$(q "SELECT max(id) FROM public.comenzi_furnizor_receptii WHERE linie_id = $L AND tip = 'receptie'")"
+  astept 1 "$([ -n "$X" ] && echo 1 || echo "0 ($R)")" "fixtura: receptia +5 (primita 55)"
+  inainte="$(stare_l "$L")"
+  deschideA
+  pasA C9a "BEGIN;" "SELECT 1 FROM public.comenzi_furnizor_receptii WHERE id = ${X:-0} FOR UPDATE;"
+  astept 00000 "$A_STARE" "A: tine receptia +5 (FOR UPDATE, necomis)"
+  pornesteB $UID_ACH "SELECT public.fn_cf_receptie_adauga('$(cheie)', $L, -3, 55) AS r"
+  bariera
+  q "UPDATE public.profiles SET can_process_achizitii = false WHERE id = '$UID_ACH'" > /dev/null
+  pasA C9b "ROLLBACK;"; astept 00000 "$A_STARE" "A: ROLLBACK (receptia eliberata)"
+  asteaptaB; astept 42501 "$B_STARE" "B: corectura, dreptul retras cat astepta FK-ul pe receptie (dupa verificarea de dupa lock-uri)"
+  inchideA
+  q "UPDATE public.profiles SET can_process_achizitii = true WHERE id = '$UID_ACH'" > /dev/null
+  astept "$inainte" "$(stare_l "$L")" "B: linia si jurnalul neschimbate"
+}
+C10() {
+  local L1 L2
+  q "UPDATE public.profiles SET can_process_achizitii = true WHERE id = '$UID_ACH'" > /dev/null
+  L1="$(q "SELECT public.t_linie('MAT_C10', 8, 0, 0, 'santier', 9)")"; L2="$(q "SELECT public.t_linie('MAT_C10', 10, 10, 10)")"
+  # bariera de probă (doar în baza de unică folosință): după intrarea la sediu a transportului, trigger-ul cere lock-ul 4242010 ținut de A
+  q "CREATE FUNCTION public.t_bariera_c10() RETURNS trigger LANGUAGE plpgsql AS \$f\$ BEGIN IF NEW.material_denumire = 'MAT_C10' AND NEW.tip = 'intrare_achizitie' THEN PERFORM pg_advisory_xact_lock(4242010); END IF; RETURN NEW; END \$f\$; CREATE TRIGGER zz_t_bariera_c10 AFTER INSERT ON public.stocuri_miscari FOR EACH ROW EXECUTE FUNCTION public.t_bariera_c10();" > /dev/null
+  deschideA
+  pasA C10a "BEGIN;" "SELECT pg_advisory_xact_lock(4242010);"; astept 00000 "$A_STARE" "A: tine bariera 4242010"
+  pornesteB $UID_ACH "SELECT public.fn_cf_intra_stoc('$(cheie)', $L1, 8, true) AS r"
+  bariera retur_B
+  pornesteB2 $UID_ACH "$(retur_sql "$(cheie)" "$L2" 10 10 sediu NULL false)"
+  bariera retur_B2
+  pasA C10b "COMMIT;"; astept 00000 "$A_STARE" "A: COMMIT (bariera eliberata)"
+  asteaptaB; asteaptaB2
+  astept 00000 "$B_STARE" "B: transportul direct (fara deadlock)"; astept 00000 "$B2_STARE" "B2: returul din sediu (fara deadlock)"
+  inchideA
+  astept "0.000|8.000" "$(q "SELECT (SELECT cantitate FROM public.stocuri WHERE locatie_tip = 'sediu' AND material_denumire = 'MAT_C10') || '|' || (SELECT cantitate FROM public.stocuri WHERE locatie_tip = 'proiect' AND locatie_id = 9 AND material_denumire = 'MAT_C10')")" "stocul: sediu 10 + 8 - 8 - 10, proiect 8"
+  q "DROP TRIGGER zz_t_bariera_c10 ON public.stocuri_miscari; DROP FUNCTION public.t_bariera_c10();" > /dev/null
+}
 
 echo "0. bazele de unica folosinta: scheletul + DDL-ul migrarii (sectiunile 2-6) + fixtura"
 EXISTENTE=" $("${PSM[@]}" -tAc "SELECT string_agg(rolname, ' ') FROM pg_roles WHERE rolname IN ('anon', 'authenticated', 'service_role', 'supabase_auth_admin')") "
@@ -286,7 +367,7 @@ CUR="$BAZA"
 creeaza_baza "$BAZA" "$DDL"; ok $? "baza $BAZA: schelet + DDL + fixtura"
 
 echo "1. scenariile pe migrarea corecta (fiecare: 0 abateri)"
-for s in C1 C2 C3 C4 C5 C6 C7; do
+for s in C1 C2 C3 C4 C5 C6 C7 C8 C9 C10; do
   nesec=0; echo "   $s"; "$s"; ok "$nesec" "$s: toate asteptarile ($nesec abateri)"
 done
 
@@ -315,11 +396,21 @@ mutant 2 "fara lock de stoc la retur" "C2 C3 C5" \
   '    SELECT coalesce(sum(s.cantitate), 0) INTO v_stoc FROM public.stocuri s WHERE s.locatie_tip = p_locatie_tip AND s.locatie_id IS NOT DISTINCT FROM p_locatie_id AND s.material_denumire = v_l.denumire;'
 mutant 3 "fara CAS pe p_primita_citita" "C4" \
   '  IF v_p.primita_bruta IS DISTINCT FROM p_primita_citita THEN' '  IF false THEN'
-mutant 4 "dreptul citit inaintea lock-urilor (retur)" "C6" \
+# (r2) reverificarea finală (la închiderea intenției) o prinde și pe cea citită prea devreme: M4 le scoate pe amândouă (starea dinainte de r1)
+FINAL_DIN=$'  IF NOT coalesce(v_ok, false) THEN RAISE EXCEPTION \'CF_DREPT: operatie nepermisa\' USING ERRCODE = \'42501\'; END IF;\n'
+mutant 4 "dreptul citit inaintea lock-urilor, fara reverificarea finala (retur)" "C6" \
   '  v_loc_ok boolean; v_stoc numeric;' '  v_loc_ok boolean; v_drept boolean := public.fn_cf_drept_achizitii_intern(auth.uid()); v_stoc numeric;' \
   $'    v_stoc := public.fn_stoc_blocheaza(p_locatie_tip, p_locatie_id, v_l.denumire);\n  END IF;\n  IF NOT public.fn_cf_drept_achizitii_intern(v_uid) THEN' \
-  $'    v_stoc := public.fn_stoc_blocheaza(p_locatie_tip, p_locatie_id, v_l.denumire);\n  END IF;\n  IF NOT v_drept THEN'
+  $'    v_stoc := public.fn_stoc_blocheaza(p_locatie_tip, p_locatie_id, v_l.denumire);\n  END IF;\n  IF NOT v_drept THEN' \
+  "$FINAL_DIN" ''
 mutant 5 "fara lock pe cheia de idempotenta" "C7" \
   $'  PERFORM pg_advisory_xact_lock(hashtextextended(\'cf_intentie|\' || p_cheie::text, 0));\n' ''
+mutant 6 "starea r1 a predarii: cheile de stoc dupa prima miscare + fara reverificarea finala" "C8" \
+  $'  IF v_loc_err IS NULL THEN\n    FOR k IN' $'  IF false THEN\n    FOR k IN' \
+  "$FINAL_DIN" ''
+mutant 7 "fara reverificarea finala a dreptului" "C9" \
+  "$FINAL_DIN" ''
+mutant 8 "cheile de stoc luate dupa prima miscare (transportul direct)" "C10" \
+  $'  IF v_loc_err IS NULL THEN\n    FOR k IN' $'  IF false THEN\n    FOR k IN'
 
 [ "$esec" = 0 ] && echo "TOTUL OK" || echo "ESEC: $esec"
