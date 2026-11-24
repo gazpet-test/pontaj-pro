@@ -20,26 +20,31 @@ function esec(r, cod) {
   })
 }
 
-// ramura 'haiku' = fallback-ul B4 prin izo-e3-ocr-local (rămâne pe Haiku: rezerva lui e fixată în BD la 0,05 USD);
-// ramura 'sonnet' = citirea directă aviz_e3 (ocr-packing-list, Sonnet 5.5 din 27.10.2026) pornită automat de UI.
-// Indicatorul `haiku:true` din citesteLocal înseamnă „citire directă în cloud” (numele a rămas din B4).
+// Din 24.11.2026 (decizia Răzvan) avizele se citesc întâi local, iar dacă citirea locală nu reușește → Sonnet 5.5; Haiku nu mai citește.
+// sursa.ramura: 'fallback' = citirea Sonnet prin izo-e3-ocr-local după eșecul local; 'sonnet' = citirea directă aviz_e3 (ocr-packing-list)
+// pornită automat de UI când serviciul local nu poate primi cererea; 'haiku' = rezultatele vechi (fallback-ul de dinainte, pe Haiku).
+// Numele modelului afișat vine din `model` (ce a citit efectiv), nu din ramură. Indicatorul `haiku:true` din citesteLocal înseamnă
+// „citire directă în cloud” (numele a rămas din B4).
+const numeModel = model => String(model).includes('sonnet') ? 'Sonnet' : 'Haiku'
 export function descrieSursaOCR(meta) {
   if (!meta) return ''
   if (meta.sursa?.ramura === 'haiku') return 'Haiku (fallback local)'
+  if (meta.sursa?.ramura === 'fallback') return `${numeModel(meta.model)} (fallback local)`
   if (meta.sursa?.ramura === 'sonnet') return 'Sonnet (citire directă, automat)'
   if (String(meta.model).startsWith('ocr_local:')) {
     return String(meta.model).includes('+claude-')
-      ? `Local + Haiku pe ${meta.sursa?.dezacorduri ?? '?'} celule` : 'Local LightOn+MinerU'
+      ? `Local + ${numeModel(meta.model)} pe ${meta.sursa?.dezacorduri ?? '?'} celule` : 'Local LightOn+MinerU'
   }
-  return String(meta.model).includes('sonnet') ? 'Sonnet (citire directă)' : 'Haiku (citire directă)'
+  return `${numeModel(meta.model)} (citire directă)`
 }
-// cui îi aparține costul afișat (P2 r2): fallback-ul local e pe Haiku, citirea directă pe Sonnet
+// cui îi aparține costul afișat (P2 r2). Ordinea contează: modelul local arbitrat („ocr_local:…+claude-sonnet-5-5”) conține și el
+// „sonnet”, deci prefixul ocr_local se verifică ÎNAINTEA citirii directe.
 export function costEticheta(meta) {
   if (!meta) return ''
   if (meta.sursa?.ramura === 'haiku') return 'Haiku, fallback local'
-  if (String(meta.model).includes('sonnet')) return 'Sonnet, citire directă'
-  if (String(meta.model).startsWith('ocr_local:')) return String(meta.model).includes('+claude-') ? 'Haiku, arbitraj local' : 'local'
-  return 'Haiku, citire directă'
+  if (meta.sursa?.ramura === 'fallback') return `${numeModel(meta.model)}, fallback local`
+  if (String(meta.model).startsWith('ocr_local:')) return String(meta.model).includes('+claude-') ? `${numeModel(meta.model)}, arbitraj local` : 'local'
+  return `${numeModel(meta.model)}, citire directă`
 }
 
 // E9: cauza eșecului local spusă simplu, înainte de citirea de rezervă. Codurile vin de la serverul local
@@ -118,7 +123,7 @@ export async function citesteLocal({ pdf_base64, proiect_id, depozit_id, sablon,
       platit = true // înainte de transport: nici răspunsul pierdut nu permite al doilea apel.
       termen = timers.now() + fallback + marja
       ultimaStare = false; delay = polling
-      anunta(`${cauzaOCRLocal(motiv)} — citesc cu Haiku`)
+      anunta(`${cauzaOCRLocal(motiv)} — citesc cu Sonnet`)
       try { return await apel({ op:'fallback', cerere_id:id }, termen) }
       catch (e) {
         if (e === ABANDON) throw e
@@ -138,6 +143,7 @@ export async function citesteLocal({ pdf_base64, proiect_id, depozit_id, sablon,
       if (platit && d?.termen_fallback) termen = pana(d.termen_fallback, termen)
       if (r?.error && !(platit && (r.status >= 500 || r.status === 409 && d?.eroare === 'in_curs'))) throw esec(r)
       if (['esuata', 'expirata'].includes(d?.stare)) {
+        // ramura 'haiku' din BD = eticheta ISTORICĂ a ramurii plătite (CHECK din 20261108a), indiferent de model (azi Sonnet)
         if (platit || d.ramura === 'haiku' || d.eroare === 'pdf_invalid') throw esec(r, d.eroare || 'citire_esuata')
         r = await pornesteFallback(d.eroare); continue
       }

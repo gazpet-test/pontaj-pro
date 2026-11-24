@@ -108,25 +108,30 @@ describe('E9 — flux local fără efecte asupra formularului', () => {
     expect(operatii(invoke)).toEqual(['cere', 'stare'])
   })
   // E9: codurile noi ale serverului local. Textele sunt scrise aici, independent de modul (L25).
+  // 24.11.2026 (decizia Răzvan): după eșecul local se citește cu Sonnet, niciodată cu Haiku (inclusiv codul „garda”, cel din jurnalul serverului).
   it.each([
-    ['retea', 'Serverul local a pierdut legătura — citesc cu Haiku'],
-    ['model_indisponibil', 'Serverul local nu e pregătit — citesc cu Haiku'],
-    ['timeout', 'Citirea locală a durat prea mult — citesc cu Haiku'],
-    ['pdf_corupt', 'Serverul local nu a putut deschide documentul — citesc cu Haiku'],
-    ['oprit', 'Serverul local s-a oprit — citesc cu Haiku'],
-    ['intern', 'Citirea locală nu a reușit — citesc cu Haiku'],
-    ['cod_viitor', 'Citirea locală nu a reușit — citesc cu Haiku'],
-    ['structura_incerta', 'Cititoarele nu s-au înțeles — citesc cu Haiku'],
+    ['retea', 'Serverul local a pierdut legătura — citesc cu Sonnet'],
+    ['model_indisponibil', 'Serverul local nu e pregătit — citesc cu Sonnet'],
+    ['timeout', 'Citirea locală a durat prea mult — citesc cu Sonnet'],
+    ['pdf_corupt', 'Serverul local nu a putut deschide documentul — citesc cu Sonnet'],
+    ['oprit', 'Serverul local s-a oprit — citesc cu Sonnet'],
+    ['intern', 'Citirea locală nu a reușit — citesc cu Sonnet'],
+    ['garda', 'Citirea locală nu a reușit — citesc cu Sonnet'],
+    ['cod_viitor', 'Citirea locală nu a reușit — citesc cu Sonnet'],
+    ['structura_incerta', 'Cititoarele nu s-au înțeles — citesc cu Sonnet'],
   ])('esuata %s → exact un fallback, cu cauza spusă simplu', async (eroare, text) => {
     const progres = vi.fn()
     const invoke = vi.fn().mockResolvedValueOnce(ceruta())
       .mockResolvedValueOnce(ok({ success:true, stare:'esuata', ramura:'locala', eroare }))
-      .mockResolvedValueOnce(ok({ ...propunere, sursa:{ ramura:'haiku' } }))
+      .mockResolvedValueOnce(ok({ ...propunere, model:'claude-sonnet-5-5', sursa:{ ramura:'fallback' } }))
     const p = start(invoke, { progres })
     await vi.advanceTimersByTimeAsync(1500)
-    expect((await p).raspuns.sursa.ramura).toBe('haiku')
+    const rez = await p
+    expect(rez.raspuns.sursa.ramura).toBe('fallback')
+    expect(descrieSursaOCR(rez.raspuns)).toBe('Sonnet (fallback local)')
     expect(operatii(invoke)).toEqual(['cere', 'stare', 'fallback'])
     expect(progres).toHaveBeenLastCalledWith(text)
+    expect(progres.mock.calls.flat().join(' ')).not.toMatch(/Haiku/)
   })
   it('cauzele noi nu numesc AI-ul și nu ies din lista cunoscută', () => {
     expect(Object.keys(CAUZE_OCR_LOCAL).sort()).toEqual(['model_indisponibil', 'oprit', 'pdf_corupt', 'retea', 'structura_incerta', 'timeout'])
@@ -169,6 +174,18 @@ it('afișează cele trei proveniențe din contractul B2', () => {
   expect(costEticheta({ sursa:{ ramura:'sonnet' }, model:'claude-sonnet-5-5' })).toBe('Sonnet, citire directă')
   expect(costEticheta({ model:'ocr_local:lighton+mineru+claude-haiku-5-5' })).toBe('Haiku, arbitraj local')
   expect(costEticheta({ model:'ocr_local:lighton+mineru' })).toBe('local')
+})
+it('24.11.2026: fallback-ul și arbitrajul local sunt pe Sonnet; eticheta vine din modelul efectiv, rezultatele vechi rămân Haiku', () => {
+  const fallback = { ...propunere, model:'claude-sonnet-5-5', sursa:{ ramura:'fallback' } }
+  expect(descrieSursaOCR(fallback)).toBe('Sonnet (fallback local)')
+  expect(costEticheta(fallback)).toBe('Sonnet, fallback local')
+  const arbitrat = { ...propunere, model:'ocr_local:lighton+mineru+claude-sonnet-5-5', sursa:{ dezacorduri:2 } }
+  expect(descrieSursaOCR(arbitrat)).toBe('Local + Sonnet pe 2 celule')
+  // modelul arbitrat conține „sonnet”: costul e al arbitrajului local, nu al unei citiri directe
+  expect(costEticheta(arbitrat)).toBe('Sonnet, arbitraj local')
+  // istoric: rezultatele salvate înainte de schimbare păstrează eticheta Haiku
+  expect(descrieSursaOCR({ sursa:{ ramura:'haiku' }, model:'claude-haiku-5-5' })).toBe('Haiku (fallback local)')
+  expect(descrieSursaOCR({ ...propunere, model:'ocr_local:lighton+mineru+claude-haiku-5-5', sursa:{ dezacorduri:1 } })).toBe('Local + Haiku pe 1 celule')
 })
 it('503 cu răspuns JSON de la edge la cere → Haiku direct; eroare de transport fără status → fără Haiku (Copilot B4 P1)', async () => {
     const a = vi.fn(async () => refuz(503, 'storage_indisponibil'))

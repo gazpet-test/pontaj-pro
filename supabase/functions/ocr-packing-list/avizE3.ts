@@ -1,9 +1,14 @@
 import { HAIKU_55, PRETURI_HAIKU, costApel, jsonDinText } from '../_shared/haiku55.ts'
 
-// MODEL_E3 (Haiku) rămâne pentru izo-e3-ocr-local (arbitraj + fallback B4): rezerva lui e fixată la 0,05 USD în BD
-// (ocr_local_config.rezerva_usd CHECK = 0.05, migrarea 20261108a) — Sonnet acolo cere întâi schimbarea rezervei în BD.
+// MODEL_E3 (Haiku) rămâne doar ca tarif de referință pentru REZERVA_E3 (0,05 USD) și pentru clienții vechi; NICIO citire de aviz
+// nu mai rulează pe el (decizia Răzvan 24.11.2026: Haiku a citit greșit seria pe Lot 2).
 export const MODEL_E3 = HAIKU_55
 export const MODELE_E3 = { haiku:HAIKU_55, sonnet:'claude-sonnet-5-5' }
+// izo-e3-ocr-local (fallback-ul după citirea locală + arbitrajul celulelor): Sonnet 5.5, fără alegere de model (24.11.2026).
+// Rezerva din BD (ocr_local_config.rezerva_usd) trebuie să acopere costMaximE3(MODEL_LOCAL_E3) = 0,196 → 0,20 (migrarea 20270109a);
+// edge-ul verifică suma rezervată înaintea apelului plătit și refuză (fără apel) dacă BD are încă 0,05.
+export const MODEL_LOCAL_E3 = MODELE_E3.sonnet
+export const REZERVA_LOCAL_E3 = 0.2
 // Decizia Răzvan 27.10.2026: citirea directă aviz_e3 (ocr-packing-list) rulează pe Sonnet 5.5, gândirea oprită (faraGandire →
 // between_tools), rezerva 0,20 USD (rezervaE3). Restul ocr-packing-list rămâne pe modelParsare (Haiku).
 export const MODEL_AVIZ_E3 = MODELE_E3.sonnet
@@ -12,7 +17,7 @@ export const MODEL_AVIZ_E3 = MODELE_E3.sonnet
 // intrarea = numărarea gratuită count_tokens pe tot corpul (PDF/imagini + system + schema), refuz peste limită → 422
 // pdf_prea_multi_tokeni fără generare; ieșirea ≤ max_tokens (MAX_TOKENS_E3, include și gândirea). Fără cache_control → fără
 // tokeni de cache. Pe Sonnet limita de intrare e 46.000 (nu 48.000): costul maxim 0,196 ≤ rezerva 0,20 și rămân ~2.000 de tokeni
-// de intrare rezervă pentru o eventuală diferență numărare ↔ usage. Haiku (izo-e3-ocr-local) păstrează 48.000 → 0,01 ≤ 0,05.
+// de intrare rezervă pentru o eventuală diferență numărare ↔ usage. Aceeași limită și în izo-e3-ocr-local (Sonnet din 24.11.2026).
 export const MAX_INPUT_SONNET_E3 = 46000
 export const limitaInputE3 = (model: string) => model === MODELE_E3.sonnet ? MAX_INPUT_SONNET_E3 : MAX_INPUT_E3
 export const costMaximE3 = (model: string) => costApel(model, { input_tokens: limitaInputE3(model), output_tokens: MAX_TOKENS_E3 })

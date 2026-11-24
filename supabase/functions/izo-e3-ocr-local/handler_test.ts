@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import { handle } from './handler.ts'
-import { apelPlatitE3 } from './haiku.ts'
+import { apelPlatitE3, costMaximApelE3, TERMENE_PLATIT_E3 } from './apelPlatit.ts'
 import { ANTET_IZO_OCR, SECRET_IZO_OCR } from '../_shared/izoOcrLocal.ts'
 import { ANTET_COMUN, ANTET_SPECIFIC, EroareE3, normalizeazaE3, RAND_NUMAR, RAND_TEXT, validaStructuraE3, valideazaBrutLocalE3, type SablonE3 } from '../ocr-packing-list/avizE3.ts'
 import { valideazaCelule, valideazaDecizii } from './contract.ts'
@@ -22,8 +22,10 @@ function fixture() {
   const events: string[] = [], calls: { fn: string; args: Record<string, unknown> }[] = []
   const c: ContextCerere = { id: ID, creat_de: USER, proiect_id: 1, depozit_id: 2, sablon: 'aviz_teava', drept_platit_de: null, apel_faza: null, apel_raspuns: null, rezervare_id: null, cost_usd: null }
   let admitted = 'admisa', admissionError = 'limita_active', owner = true, access = true, expired = false, jwt = true, goodSecret = true, tokenGood = true, uploadError = false, quota = false, rowState = 'preluata', paid = false
+  // suma rezervată de B1 = ocr_local_config.rezerva_usd: 0,20 după migrarea 20270109a, 0,05 înainte (numeric(12,6) în BD → text în PostgREST)
+  let rezervaBD: unknown = '0.200000'
   const q = (t: string) => {
-    const data = t === 'profiles' ? { is_owner: owner } : t === 'user_module_access' ? access ? [{ access_level: 'editor' }] : [] : t === 'izo_atribuiri' ? [{ projet: 1, proiect_id: 1, depozit_id: 2, rol: 'gestionar', activ: true, valabil_de: null, valabil_pana: expired ? '2000-01-01' : null }] : t === 'ai_plafon_rezervari' ? { luna: '2026-10-01' } : { cheie: 'izo_e3_ocr:1', luna: '2026-10-01', plafon_usd: 10, consumat_usd: 0, rezervat_usd: .05 }
+    const data = t === 'profiles' ? { is_owner: owner } : t === 'user_module_access' ? access ? [{ access_level: 'editor' }] : [] : t === 'izo_atribuiri' ? [{ projet: 1, proiect_id: 1, depozit_id: 2, rol: 'gestionar', activ: true, valabil_de: null, valabil_pana: expired ? '2000-01-01' : null }] : t === 'ai_plafon_rezervari' ? { luna: '2026-10-01', suma_rezervata: rezervaBD } : { cheie: 'izo_e3_ocr:1', luna: '2026-10-01', plafon_usd: 10, consumat_usd: 0, rezervat_usd: .05 }
     const result = { data, error: null }
     const builder = { select: () => builder, eq: () => builder, in: () => builder, limit: () => builder, maybeSingle: () => Promise.resolve(result), single: () => Promise.resolve(result), then: (resolve: (r: unknown) => unknown) => Promise.resolve(result).then(resolve) }
     return builder
@@ -85,6 +87,7 @@ function fixture() {
     admitted = String(v.admitted ?? admitted); admissionError = String(v.admissionError ?? admissionError)
     owner = Boolean(v.owner ?? owner); access = Boolean(v.access ?? access); expired = Boolean(v.expired ?? expired); jwt = Boolean(v.jwt ?? jwt)
     goodSecret = Boolean(v.goodSecret ?? goodSecret); tokenGood = Boolean(v.tokenGood ?? tokenGood); uploadError = Boolean(v.uploadError ?? uploadError); quota = Boolean(v.quota ?? quota)
+    if (Object.hasOwn(v, 'rezervaBD')) rezervaBD = v.rezervaBD
   } }
 }
 const cere = () => ({ op: 'cere', proiect_id: 1, depozit_id: 2, sablon: 'aviz_teava', pdf_base64: btoa('%PDF-test') })
@@ -223,12 +226,15 @@ Deno.test('arbitraj: numai câmpuri nestructurale, exact setul și tipurile, fă
   assert.equal(valideazaDecizii({ celule: [d] }, celule).arbitraj, 'ok')
 })
 
-function transport(o: { timeout?: boolean; countError?: boolean; jsonInvalid?: boolean; truncated?: boolean; noUsage?: boolean } = {}, events: string[] = []) {
+// Modelul așteptat e scris aici, independent de avizE3.ts (L25): decizia Răzvan 24.11.2026, Haiku nu mai citește avize.
+const SONNET = 'claude-sonnet-5-5'
+function transport(o: { timeout?: boolean; countError?: boolean; jsonInvalid?: boolean; truncated?: boolean; noUsage?: boolean; tokeni?: number } = {}, events: string[] = [], payloads: Record<string, unknown>[] = []) {
   return (async (url: string | URL | Request, init?: RequestInit) => {
     const count = String(url).endsWith('count_tokens'), payload = JSON.parse(String(init!.body))
-    events.push(count ? 'count' : 'send')
-    assert.equal(payload.model, 'claude-haiku-5-5')
-    if (count) return o.countError ? new Response('', { status: 503 }) : Response.json({ input_tokens: 1000 })
+    events.push(count ? 'count' : 'send'); payloads.push(payload)
+    assert.equal(payload.model, SONNET)
+    assert.deepEqual(payload.thinking, { type: 'between_tools' })
+    if (count) return o.countError ? new Response('', { status: 503 }) : Response.json({ input_tokens: o.tokeni ?? 1000 })
     if (o.timeout) throw new DOMException('timeout', 'TimeoutError')
     return Response.json({ usage: o.noUsage ? undefined : { input_tokens: 1000, output_tokens: 100 }, stop_reason: o.truncated ? 'max_tokens' : 'end_turn', content: [{ type: 'text', text: o.jsonInvalid ? '{' : JSON.stringify({ celule: [{ rand: 1, camp: 'lungime_doc', valoare: '12.50', sigur: true }] }) }] })
   }) as typeof fetch
@@ -370,6 +376,100 @@ Deno.test('fixture-uri brute B3 reale: schema → normalizare → prefill → ra
     else assert.equal(Number(ed.antet.total_net_kg), 9920)
   }
 })
+// ── 24.11.2026: fallback + arbitraj pe Sonnet 5.5; rezerva din BD trebuie să acopere costul maxim Sonnet ─────────────────────────
+// Valorile așteptate sunt calculate aici din tariful public Sonnet 5.5 (2 / 10 USD pe 1M) și limita de intrare 46.000, nu din cod (L25).
+const COST_MAXIM_FALLBACK = 46000 * 2 / 1e6 + 10400 * 10 / 1e6   // 0,196
+const fallbackCu = (f: ReturnType<typeof fixture>, raspuns: unknown, o: { tokeni?: number } = {}, sent: string[] = [], payloads: Record<string, unknown>[] = []) => {
+  Object.assign(f.d, { transport: (async (url: string | URL | Request, init?: RequestInit) => {
+    const count = String(url).endsWith('count_tokens'), payload = JSON.parse(String(init!.body))
+    payloads.push(payload); assert.equal(payload.model, SONNET)
+    if (count) return Response.json({ input_tokens: o.tokeni ?? 1000 })
+    sent.push('send')
+    return Response.json({ usage: { input_tokens: 1000, output_tokens: 100 }, stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify(raspuns) }] })
+  }) as typeof fetch })
+  return f.call({ op: 'fallback', cerere_id: ID })
+}
+Deno.test('Sonnet: fallback-ul citește cu Sonnet 5.5, fără gândire, max_tokens 10400; rezultatul poartă modelul și costul Sonnet', async () => {
+  const f = fixture(), sent: string[] = [], payloads: Record<string, unknown>[] = []
+  const r = await fallbackCu(f, brut(), {}, sent, payloads)
+  assert.equal(r.status, 200)
+  const b = await r.json()
+  assert.equal(b.model, SONNET); assert.deepEqual(b.sursa, { ramura: 'fallback' })
+  assert.ok(Math.abs(b.cost_usd - (1000 * 2 / 1e6 + 100 * 10 / 1e6)) < 1e-12, String(b.cost_usd))   // 0,003, nu tariful Haiku (0,00015)
+  assert.deepEqual(payloads.map(p => [p.model, JSON.stringify(p.thinking), p.max_tokens ?? null]),
+    [[SONNET, '{"type":"between_tools"}', null], [SONNET, '{"type":"between_tools"}', 10400]])
+  assert.equal(JSON.stringify(payloads).includes('haiku'), false)
+  assert.equal(sent.length, 1)
+})
+Deno.test('Sonnet: arbitrajul celulelor tot pe Sonnet; rezultatul local arbitrat poartă modelul Sonnet', async () => {
+  const f = fixture(), sent: string[] = [], payloads: Record<string, unknown>[] = []
+  Object.assign(f.d, { transport: transport({}, sent, payloads) })
+  assert.deepEqual(await (await f.call(arb(), true)).json(), { arbitraj: 'ok', celule: [{ rand: 1, camp: 'lungime_doc', valoare: '12.50', sigur: true }] })
+  assert.deepEqual(payloads.map(p => p.model), [SONNET, SONNET])
+  assert.equal(payloads[1].max_tokens, 260)
+  assert.equal((await f.call(rezultat(), true)).status, 200)
+  const salvat = f.calls.find(c => c.fn === 'fn_ocr_local_rezultat')!.args.p_rezultat as Record<string, unknown>
+  assert.equal(salvat.model, 'ocr_local:lighton+mineru+claude-sonnet-5-5')
+})
+Deno.test('Sonnet: rezerva din BD sub costul maxim (0,05 = BD fără 20270109a) → niciun apel, cost 0, eroare rezerva_insuficienta', async () => {
+  for (const [rezerva, trece] of [['0.050000', false], ['0.195000', false], [String(COST_MAXIM_FALLBACK), true], ['0.200000', true], [null, false], ['abc', false]] as const) {
+    const f = fixture(), sent: string[] = []; f.set({ rezervaBD: rezerva })
+    const r = await fallbackCu(f, brut(), {}, sent)
+    assert.equal(sent.length, trece ? 1 : 0, String(rezerva))
+    if (trece) { assert.equal(r.status, 200); continue }
+    const cod = rezerva === '0.050000' || rezerva === '0.195000' ? 'rezerva_insuficienta' : 'rezervare_indisponibila'
+    assert.equal(r.status, 503); assert.deepEqual(await r.json(), { success: false, eroare: cod })
+    assert.equal(f.c.apel_faza, 'esuat_inainte'); assert.equal(f.c.cost_usd, 0)
+    assert.equal(f.calls.find(c => c.fn === 'fn_ocr_local_inchide_fallback')!.args.p_eroare, cod)
+    assert.equal(f.calls.some(c => c.fn === 'fn_ocr_local_apel_faza' && c.args.p_faza === 'trimis'), false)
+  }
+  // costul maxim al unui apel = intrarea maximă Sonnet + max_tokens, la tariful Sonnet; arbitrajul (≤ 4000) încape și el în 0,20
+  assert.ok(Math.abs(costMaximApelE3(10400) - COST_MAXIM_FALLBACK) < 1e-12)
+  assert.ok(costMaximApelE3(4000) < costMaximApelE3(10400) && costMaximApelE3(10400) <= 0.2)
+})
+Deno.test('Sonnet: intrarea plafonată la 46.000 de tokeni (nu 48.000 ca la Haiku) — peste = refuz fără generare', async () => {
+  for (const [tokeni, trimis] of [[46000, true], [46001, false], [48000, false]] as const) {
+    const f = fixture(), sent: string[] = []
+    const r = await fallbackCu(f, brut(), { tokeni }, sent)
+    assert.equal(sent.length, trimis ? 1 : 0, String(tokeni))
+    if (!trimis) { assert.equal(r.status, 422); assert.equal((await r.json()).eroare, 'pdf_prea_multi_tokeni'); assert.equal(f.c.cost_usd, 0) }
+  }
+})
+Deno.test('Sonnet: termenul apelului — sub minApel după numărare nu se trimite; altfel messages primește timpul rămas', async () => {
+  for (const ramura of ['fallback', 'arbitraj'] as const) {
+    const T = TERMENE_PLATIT_E3[ramura]
+    for (const [consumat, trimis] of [[T.buget - T.minApel, true], [T.buget - T.minApel + 1, false]] as const) {
+      let ceas = 1_000_000
+      const f = fixture(), sent: string[] = []
+      const t = (async (url: string | URL | Request, init?: RequestInit) => {
+        if (String(url).endsWith('count_tokens')) { ceas += consumat; return Response.json({ input_tokens: 1000 }) }
+        sent.push('send'); assert.ok(init?.signal instanceof AbortSignal)
+        return Response.json({ usage: { input_tokens: 1000, output_tokens: 100 }, stop_reason: 'end_turn', content: [{ type: 'text', text: ramura === 'fallback' ? JSON.stringify(brut()) : JSON.stringify({ celule: [{ rand: 1, camp: 'lungime_doc', valoare: '12.50', sigur: true }] }) }] })
+      }) as typeof fetch
+      const a = await apelPlatitE3({ client: f.d.ledger, id: ID, ramura, token: ramura === 'arbitraj' ? TOKEN : null, user: ramura === 'fallback' ? USER : null, apiKey: 'fake', maxTokens: 260,
+        mesaj: async () => ({ messages: [] }), valida: async raw => JSON.parse(raw), transport: t, acum: () => ceas })
+      assert.equal(sent.length, trimis ? 1 : 0, `${ramura} ${consumat}`)
+      if (!trimis) { assert.deepEqual(a, { tip: 'eroare', cod: 'termen_depasit' }); assert.equal(f.c.apel_faza, 'esuat_inainte'); assert.equal(f.c.cost_usd, 0) }
+    }
+  }
+  assert.ok(TERMENE_PLATIT_E3.fallback.buget <= 120000 - 15000)   // B1: termen_fallback = drept + apel_s (120 s)
+  assert.ok(TERMENE_PLATIT_E3.arbitraj.buget < 35000)              // workerul așteaptă arbitreaza 35 s
+})
+Deno.test('Sonnet: fallback cu serie = șarjă → serie_repetata; serie dublă → structură incertă; fără propunere', async () => {
+  // seria dublă o prinde deja validaStructuraE3 (structura_incerta); garda nouă e „serie = șarjă” (șarja pusă în locul seriei)
+  const dublu = brut(); dublu.randuri.push({ ...dublu.randuri[0], nr_crt: '2' })
+  const sarja = brut(); (sarja.randuri[0] as Record<string, unknown>).sarja = '001'
+  for (const [o, cod] of [[dublu, 'structura_incerta'], [sarja, 'serie_repetata']] as const) {
+    const f = fixture(), r = await fallbackCu(f, o)
+    assert.equal(r.status, 422); assert.deepEqual(await r.json(), { success: false, eroare: cod })
+    assert.equal(f.calls.find(c => c.fn === 'fn_ocr_local_inchide_fallback')!.args.p_eroare, cod)
+    assert.equal(f.c.apel_faza, 'decontat'); assert.ok(f.c.cost_usd! > 0)   // apelul a costat, se decontează
+  }
+  // citirea locală NU trece prin garda de serii a AI-ului (are e3_mapare); obiectul local valid rămâne acceptat
+  const g = fixture(); assert.equal((await g.call(rezultat(), true)).status, 200)
+  assert.equal(g.calls.find(c => c.fn === 'fn_ocr_local_rezultat')!.args.p_eroare, null)
+})
+
 Deno.test('aviz: fără niciun total tipărit sau cu total care nu bate -> structură incertă (Copilot B2 r1)', async () => {
   for (const t of [{ total_metri: null, total_kg: null }, { total_metri: '99.99', total_kg: null }, { total_metri: null, total_kg: '20000', nul: 'greutate_kg' }]) {
     const f = fixture(), o = brut(); o.totaluri_tiparite = { total_metri: t.total_metri, total_kg: t.total_kg } as typeof o.totaluri_tiparite
