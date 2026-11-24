@@ -119,6 +119,8 @@ export const BLOCURI_T8 = [
       const CAT = citeste('scripts/executie_dcc_modul_catalog.sql'), CREV = citeste('scripts/executie_dcc_modul_catalog_revenire.sql')
       const db = await bazaGoala()
       await db.exec(`INSERT INTO public.app_modules (key, parent_key, name) VALUES ('executie', NULL, 'Executie')`)
+      // baza de probă vine cu drepturi sintetice pe executie_dcc (schelet fără FK spre catalog); catalogul real pornește fără niciunul
+      await db.exec(`DELETE FROM public.user_module_access WHERE module = 'executie_dcc'`)
       const fara = await eroare(db.exec(CAT))
       A.ok(fara && /migrarea 20270108a nu e aplicata/.test(fara.message), `catalogul înaintea migrării: ${fara?.message || 'a trecut'}`)
       try { await db.exec('ROLLBACK') } catch { /* deja */ }
