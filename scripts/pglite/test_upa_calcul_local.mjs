@@ -8,6 +8,8 @@
 // Runda 4 (răspunsul expertului, 24.11.2026): CFS-ul și suspendările pe zile calendaristice, pe PERIOADA actului (weekendul de după un CM
 // terminat vineri = zi activă; weekendul dintre două zile cu același cod = în act); contractul și corecțiile HR exact pe interval; pragul de
 // 50 pe NMA-ul rotunjit (49,99 / 49,995 -> 50,00 / 50,00); secțiunea 3d + mutanții noi.
+// Runda 5 (Jakarinos r4): corecția HR nu se prelungește peste capătul ei (nici la încetarea în weekend: 95); ziua liberă urmată de o zi
+// lucrătoare nepontată (și 2.12) = fără pontaj oricare ar fi starea dinainte (97); totalul lipsurilor numără și zilele din afara lunii (98, 99).
 // Rulare (din rădăcina repo-ului; cere bash + python3 în PATH): npm install --no-save @electric-sql/pglite && node scripts/pglite/test_upa_calcul_local.mjs
 //   (--scrie-obiecte rescrie lista revizuită L15 din manifestul generat; --fara-mutanti sare secțiunea 7)
 import { PGlite } from '@electric-sql/pglite'
@@ -104,10 +106,11 @@ INSERT INTO public.logistica_furnizori (id, nume, este_upa, activ, upa_valabil_p
 // Noiembrie 2026: 30 de zile, duminică 1.11, luni 30.11 = Sf. Andrei, 20 de zile lucrătoare; 1.12 (Ziua Națională) sărbătoare, 2.12 miercuri.
 // Regula zilelor libere fără cod (runda 4): în act doar între două zile cu același cod; altfel starea zilei lucrătoare dinainte.
 const angajati = (n = 60) => `INSERT INTO public.employees (id, name, active, hire_date, procent_ocupare) SELECT g, 'ANGAJAT ' || g, true, DATE '2020-01-01', 100 FROM generate_series(1, ${n}) g;`
-// pontajul (rând pe fiecare zi lucrătoare a contractului, oct + nov), DUPĂ codurile speciale; fără administratorul 66 și suspendatul 74
+// pontajul (rând pe fiecare zi lucrătoare a contractului, oct + nov + 2.12), DUPĂ codurile speciale; fără administratorul 66 și suspendatul 74.
+//   Runda 5: și miercuri 2.12 (prima zi lucrătoare de după noiembrie), fiindcă de ea depind 28–30.11 (nepontată = blocaj în noiembrie).
 const pontajPlin = (fara = '0') => `
 INSERT INTO public.pontaj_records (employee_id, date, norma)
-SELECT e.id, d::date, NULL FROM public.employees e, generate_series(TIMESTAMP '2026-10-01', TIMESTAMP '2026-11-30', interval '1 day') d
+SELECT e.id, d::date, NULL FROM public.employees e, generate_series(TIMESTAMP '2026-10-01', TIMESTAMP '2026-12-02', interval '1 day') d
  WHERE extract(isodow FROM d) < 6 AND NOT EXISTS (SELECT 1 FROM public.calendar_days c WHERE c.date = d::date AND c.type = 'legal')
    AND (e.active OR e.termination_date IS NOT NULL) AND d::date >= e.hire_date AND (e.termination_date IS NULL OR d::date <= e.termination_date)
    AND e.id NOT IN (${fara})
@@ -552,7 +555,10 @@ INSERT INTO public.employees (id, name, active, hire_date, termination_date, pro
   (87, 'SUSPENDAT HR S-D', true, '2020-01-01', NULL, 100), (88, 'ANGAJAT SAMBATA', true, '2026-11-14', NULL, 100),
   (89, 'CM PESTE SARBATORI', true, '2020-01-01', NULL, 100), (90, 'CM PESTE SARBATORI CU LL', true, '2020-01-01', NULL, 100),
   (91, 'INCETAT DUMINICA DUPA CM', false, '2020-01-01', '2026-11-15', 100), (92, 'CFS EXPLICIT PE WEEKEND', true, '2020-01-01', NULL, 100),
-  (93, 'CM VINERI, BO LUNI', true, '2020-01-01', NULL, 100), (94, 'CM VINERI 27, DECEMBRIE NEPONTAT', true, '2020-01-01', NULL, 100);
+  (93, 'CM VINERI, BO LUNI', true, '2020-01-01', NULL, 100), (94, 'CM VINERI 27, DECEMBRIE NEPONTAT', true, '2020-01-01', NULL, 100),
+  (95, 'SUSPENDAT HR 9-13, INCETAT DUMINICA', false, '2020-01-01', '2026-11-15', 100), (96, 'SUSPENDAT HR 9-15, INCETAT DUMINICA', false, '2020-01-01', '2026-11-15', 100),
+  (97, 'ACTIV VINERI 27, DECEMBRIE NEPONTAT', true, '2020-01-01', NULL, 100), (98, 'NEPONTAT VINERI 27 SI 2.12', true, '2020-01-01', NULL, 100),
+  (99, 'NEPONTAT VINERI 30.10', true, '2020-01-01', NULL, 100);
 INSERT INTO public.pontaj_records (employee_id, date, norma)
   SELECT 81, d::date, 'CM' FROM generate_series(TIMESTAMP '2026-11-09', TIMESTAMP '2026-11-13', interval '1 day') d
   UNION ALL SELECT 82, d::date, 'BO' FROM generate_series(TIMESTAMP '2026-11-03', TIMESTAMP '2026-11-30', interval '1 day') d
@@ -563,14 +569,16 @@ INSERT INTO public.pontaj_records (employee_id, date, norma) VALUES (83, '2026-1
   (89, '2026-11-27', 'CM'), (89, '2026-12-02', 'CM'), (90, '2026-11-27', 'CM'), (90, '2026-11-30', 'LL'), (90, '2026-12-02', 'CM'),
   (93, '2026-11-13', 'CM'), (93, '2026-11-16', 'BO'), (94, '2026-11-27', 'CM');
 ` + pontajPlin('66, 74') + `
-DELETE FROM public.pontaj_records WHERE employee_id = 85 AND date = '2026-11-23';`
+DELETE FROM public.pontaj_records WHERE employee_id = 85 AND date = '2026-11-23';
+DELETE FROM public.pontaj_records WHERE (employee_id IN (94, 97, 98) AND date = '2026-12-02') OR (employee_id = 98 AND date = '2026-11-27')
+   OR (employee_id = 99 AND date = '2026-10-30');`
 const ASTEPTAT_SUSP = {
   81: [30, 0, 5, 25, 0, 4],   // exemplul expertului: CM L 9 – V 13.11, luni 16 la lucru -> weekendul 14–15 se numără (regula veche: 7 scoase)
   82: [30, 0, 28, 2, 0, 0],   // exemplul expertului: BO 03–30 trecut pe toate zilele (și pe weekend / Sf. Andrei) -> 28 de zile de suspendare
   83: [30, 0, 28, 2, 0, 0],   // BO doar pe zilele lucrătoare 3–27, continuă pe 2.12 -> 28–30.11 între două zile BO: tot 28
   84: [30, 0, 25, 5, 0, 3],   // BO doar pe zilele lucrătoare 3–27, la lucru pe 2.12 -> 28–30.11 active (avertisment: 3 zile)
   85: [30, 0, 1, 29, 1, 0],   // CM vineri 20, luni 23 fără pontaj -> weekendul nu se cunoaște: fără pontaj prin ziua de 23 (1 zi, blocaj)
-  86: [30, 0, 5, 25, 0, 4],   // corecție HR suspendat 9–13.11 (exact pe interval; regula veche: 7)
+  86: [30, 0, 5, 25, 0, 0],   // corecție HR suspendat 9–13.11 (exact pe interval; regula veche: 7); r5: intervalul HR e cunoscut, fără avertisment
   87: [30, 0, 9, 21, 0, 0],   // corecție HR suspendat sâmbătă 14 – duminică 22.11 = 9 zile (regula veche: 7)
   88: [17, 0, 0, 17, 0, 0],   // angajat sâmbătă 14.11: 14..30 = 17 zile, toate numărate (regula veche: 15 + 2 fără efectiv)
   89: [30, 0, 4, 26, 0, 0],   // CM vineri 27.11 și miercuri 2.12 -> 28, 29, 30.11 în act: 4
@@ -579,12 +587,19 @@ const ASTEPTAT_SUSP = {
   92: [30, 3, 0, 27, 0, 0],   // CFS vineri 6 + sâmbătă 7 + duminică 8 trecut explicit: 3 zile CFS
   93: [30, 0, 2, 28, 0, 2],   // CM vineri 13, BO luni 16 (acte diferite) -> weekendul 14–15 în afara amândurora
   94: [30, 0, 1, 29, 1, 0],   // CM vineri 27, 2.12 încă fără pontaj -> 28–30 necunoscute: fără pontaj prin 2.12 (blocaj)
+  // runda 5 (Jakarinos r4): exemplele din verdict + martorii
+  95: [15, 0, 5, 10, 0, 0],   // P1-1: corecție HR suspendat 9–13.11, încetat duminică 15.11 -> 14–15 în afara intervalului HR: 5 (r4: 7)
+  96: [15, 0, 7, 8, 0, 0],    // martor: corecție HR 9–15.11 (acoperă și weekendul), încetat 15.11 -> 7
+  97: [30, 0, 0, 30, 1, 0],   // P1-2: vineri 27 lucrat, 28–30 libere, 2.12 nepontat -> fără pontaj prin 2.12 (r4: numărat, fără blocaj)
+  98: [30, 0, 0, 30, 2, 0],   // vineri 27 și 2.12 nepontate -> două zile lipsă (27.11 și 2.12), fiecare o dată (r4: 1)
+  99: [30, 0, 0, 30, 1, 0],   // vineri 30.10 nepontată -> duminica 1.11 depinde de ea: o zi lipsă în totalul lui noiembrie
 }
 async function suspendariPerioada(db) {
   const ab = []
   const tine = (c, m) => { if (!c) ab.push(m) }
   // 74 (fără pontaj) e suspendat prin corecție, ca în celelalte scenarii; 86 și 87 = corecțiile probate aici
-  for (const [emp, a, b] of [[74, '2026-10-01', '2026-11-30'], [86, '2026-11-09', '2026-11-13'], [87, '2026-11-14', '2026-11-22']]) {
+  for (const [emp, a, b] of [[74, '2026-10-01', '2026-11-30'], [86, '2026-11-09', '2026-11-13'], [87, '2026-11-14', '2026-11-22'],
+    [95, '2026-11-09', '2026-11-13'], [96, '2026-11-09', '2026-11-15']]) {
     const p = await perioada(db, U.OWNER, emp, a, b, null, null, true)
     tine(!p.err, `corecția HR suspendat ${emp} ${a}..${b} (${p.err || 'ok'} ${p.msg || ''})`)
   }
@@ -597,11 +612,20 @@ async function suspendariPerioada(db) {
     const v = await rand(Number(emp))
     tine(JSON.stringify(v) === JSON.stringify(ast), `angajatul ${emp}: așteptat ${JSON.stringify(ast)}, primit ${JSON.stringify(v)}`)
   }
-  // la nivelul lunii: 85 și 94 = 2 zile fără pontaj (blocaj); zilele libere lângă o suspendare: 70 (1.11), 81, 84, 86, 93 = 5 angajați
+  // la nivelul lunii: 85 (1), 94 (1), 97 (1), 98 (2), 99 (1) = 6 zile fără pontaj (blocaj; 30.10 și 2.12 intră în totalul lui noiembrie);
+  //   zilele libere lângă o suspendare din pontaj: 70 (1.11), 81, 84, 93 = 4 angajați (86 / 95 = corecții HR, intervalul e cunoscut)
   const c = await calcul(db, '2026-11-01', '2026-12-13')
   const fp = (await db.query(`SELECT employee_id AS e, zile_fara_pontaj AS n FROM public.fn_upa_nma_angajati('2026-11-01') WHERE zile_fara_pontaj > 0 OR zile_libere_langa_suspendare > 0 ORDER BY 1`)).rows
-  tine(lista(c.blocaje).includes('pontaj_lipsa:2') && lista(c.avertismente).includes('suspendari_langa_zile_libere:5'),
-    `noiembrie: pontaj_lipsa:2, suspendari_langa_zile_libere:5 (${JSON.stringify(c.blocaje)} ${JSON.stringify(c.avertismente)} ${JSON.stringify(fp)})`)
+  tine(lista(c.blocaje).includes('pontaj_lipsa:6') && lista(c.avertismente).includes('suspendari_langa_zile_libere:4') && c.poate_inchide === false,
+    `noiembrie: pontaj_lipsa:6, suspendari_langa_zile_libere:4, nu se închide (${JSON.stringify(c.blocaje)} ${JSON.stringify(c.avertismente)} ${JSON.stringify(fp)})`)
+  // 97: ziua de 2.12 pontată -> 28–30.11 active, lipsa dispare
+  await db.query(`INSERT INTO public.pontaj_records (employee_id, date, norma) VALUES (97, '2026-12-02', NULL)`)
+  let v97 = await rand(97)
+  tine(JSON.stringify(v97) === '[30,0,0,30,0,0]', `97 la lucru pe 2.12: 28–30.11 active, fără lipsă (${JSON.stringify(v97)})`)
+  // 97: 2.12 = CM (actul poate începe în weekend: nu se știe) -> 28–30 active, cu avertismentul zilelor libere lângă suspendare
+  await db.query(`UPDATE public.pontaj_records SET norma = 'CM' WHERE employee_id = 97 AND date = '2026-12-02'`)
+  v97 = await rand(97)
+  tine(JSON.stringify(v97) === '[30,0,0,30,0,3]', `97 cu CM pe 2.12: 28–30.11 active, avertisment 3 (${JSON.stringify(v97)})`)
   // 94: ziua de 2.12 decide zilele libere de la sfârșitul lui noiembrie (prima zi lucrătoare de după lună)
   await db.query(`INSERT INTO public.pontaj_records (employee_id, date, norma) VALUES (94, '2026-12-02', 'CM')`)
   let v = await rand(94)
@@ -1002,10 +1026,17 @@ for (const [nume, din, in_] of [
   ['ziua încetării exclusă', "AND c.d <= coalesce(e.termination_date, 'infinity'::date)),", "AND c.d < coalesce(e.termination_date, 'infinity'::date)),"],
   ['data angajării ignorată', 'WHERE c.d >= coalesce(e.hire_date, z.l0) AND', 'WHERE c.d >= z.l0 - 14 AND'],
   // runda 4: suspendările pe perioada actului
-  ['regula veche: ziua liberă după o suspendare tot suspendată', "WHEN y.st_ant IN ('cfs', 'suspendare') AND (y.d_urm IS NULL OR y.cod_urm = y.cod_ant) THEN y.st_ant", "WHEN y.st_ant IN ('cfs', 'suspendare') THEN y.st_ant"],
+  ['regula veche: ziua liberă după o suspendare tot suspendată', "WHEN y.st_ant IN ('cfs', 'suspendare') AND y.cod_ant NOT LIKE 'HR%' AND (y.d_urm IS NULL OR y.cod_urm = y.cod_ant) THEN y.st_ant", "WHEN y.st_ant IN ('cfs', 'suspendare') THEN y.st_ant"],
   ['continuitatea pe cauză, nu pe același cod', 'AND (y.d_urm IS NULL OR y.cod_urm = y.cod_ant) THEN y.st_ant', 'AND (y.d_urm IS NULL OR y.st_urm = y.st_ant) THEN y.st_ant'],
   ['contractul încheiat în weekend: suspendarea întreruptă', 'AND (y.d_urm IS NULL OR y.cod_urm = y.cod_ant) THEN y.st_ant', 'AND (y.cod_urm = y.cod_ant) THEN y.st_ant'],
-  ['ziua lucrătoare nepontată de după suspendare ignorată', "             WHEN y.st_ant IN ('cfs', 'suspendare') AND y.st_urm = 'fara_pontaj' THEN 'fara_pontaj'\n", ''],
+  // runda 5 (Jakarinos r4): P1-1 corecția HR pe intervalul ei, P1-2 ziua lucrătoare nepontată de după blochează oricare ar fi starea dinainte
+  ['ziua lucrătoare nepontată de după ignorată', "             WHEN y.st_urm = 'fara_pontaj' THEN 'fara_pontaj'\n", ''],
+  ['regula r4: nepontata de după blochează doar după o suspendare', "             WHEN y.st_urm = 'fara_pontaj' THEN 'fara_pontaj'\n", "             WHEN y.st_ant IN ('cfs', 'suspendare') AND y.st_urm = 'fara_pontaj' THEN 'fara_pontaj'\n"],
+  ['ziua liberă după o zi nepontată numărată', "             WHEN y.st_ant = 'fara_pontaj' THEN 'fara_pontaj'\n", ''],
+  ['regula r4: corecția HR prelungită până la capătul contractului', "AND y.cod_ant NOT LIKE 'HR%' AND (y.d_urm IS NULL", 'AND (y.d_urm IS NULL'],
+  ['lipsa de după lună nenumărată (r4: doar ziua dinainte)', "\n                                                          || array_agg(x.r_urm) FILTER (WHERE x.cat = 'fara_pontaj')) AS q(r)),", ') AS q(r)),'],
+  ['avertismentul și după o corecție HR', "(y.st_ant IN ('cfs', 'suspendare') AND y.cod_ant NOT LIKE 'HR%')", "y.st_ant IN ('cfs', 'suspendare')"],
+  ['avertismentul și înaintea unei corecții HR', "(y.st_urm IN ('cfs', 'suspendare') AND y.cod_urm NOT LIKE 'HR%')", "y.st_urm IN ('cfs', 'suspendare')"],
   ['codul de pe weekend ignorat (doar zile lucrătoare)', '             WHEN public.fn_upa_cauza_cod(p.norma) IS NOT NULL THEN', '             WHEN c.lucr AND public.fn_upa_cauza_cod(p.norma) IS NOT NULL THEN'],
   ['codul fără sens pe o zi liberă (LL) luat drept zi lucrată', "AND (c.lucr OR nullif(btrim(p.norma), '') IS NULL) THEN 'numarat'", "THEN 'numarat'"],
   ['fereastra fără zilele de după lună', '(z.l1 + 14)::timestamp, interval', 'z.l1::timestamp, interval'],

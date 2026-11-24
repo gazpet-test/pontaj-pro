@@ -56,19 +56,25 @@ ERP-ul nu are actele (certificatele de CM, deciziile de CFS) cu datele lor; are 
 
 1. **Perioade explicite, exact pe interval:** contractul (angajare → încetare), corecțiile HR (normă / administrator / suspendare fără cod),
    codul din pontaj al zilei. Un cod trecut și pe weekend sau pe o sărbătoare (de exemplu BO pe 28, 29 și 30.11) contează pe ziua lui.
-2. **Zi liberă fără cod** (weekend sau sărbătoare fără rând în pontaj, sau cu un cod care nu spune nimic despre suspendare, ca LL / CO):
-   - e în act dacă cea mai apropiată zi cu informație **dinainte și cea de după** au **același** cod de CFS / suspendare (sau aceeași
-     corecție HR): weekendul dintre un CM de vineri și un CM de luni e suspendat;
+2. **Zi liberă fără cod** (weekend sau sărbătoare fără rând în pontaj, sau cu un cod care nu spune nimic despre suspendare, ca LL / CO),
+   în ordinea asta:
+   - dacă ziua lucrătoare de după e **fără pontaj** (și când e în luna următoare, de exemplu 2.12 pentru 28–30.11), ziua intră la „fără
+     pontaj” și blochează închiderea până se completează acea zi, **oricare ar fi starea de dinainte** (și după o vineri lucrată: un act
+     poate începe în weekend). La fel dacă ziua lucrătoare de dinainte e fără pontaj (runda 5);
+   - e în act dacă cea mai apropiată zi cu informație **dinainte și cea de după** au **același** cod de CFS / suspendare din pontaj:
+     weekendul dintre un CM de vineri și un CM de luni e suspendat;
+   - dacă după ea nu mai e nicio zi de contract (încetat duminică după un CM de vineri din pontaj), suspendarea continuă până la capăt;
+   - **corecția HR nu se prelungește niciodată** peste zilele din afara intervalului ei, nici la încetarea contractului în weekend
+     (suspendare HR 9–13.11 + încetare duminică 15.11 = 5 zile suspendate, nu 7; runda 5). Dacă actul acoperă și weekendul, intervalul
+     corecției se pune până duminică;
    - altfel e zi activă: weekendul de după un CM terminat vineri (luni la lucru) se numără; la fel între un CM de vineri și un BO de luni
-     (acte diferite);
-   - dacă ziua de după e o zi lucrătoare **fără pontaj**, starea nu se cunoaște: ziua intră la „fără pontaj” și blochează închiderea
-     până se completează acea zi (poate fi și prima zi lucrătoare a lunii următoare, de exemplu 2.12 pentru sfârșitul lui noiembrie);
-   - dacă după ea nu mai e nicio zi de contract (încetat duminică după un CM de vineri), suspendarea continuă până la capăt.
-3. **Regula „efectivul zilei lucrătoare precedente”** rămâne doar pentru ziua liberă fără cod care nu e lângă o suspendare (contract activ,
-   fără suspendare): ia starea zilei lucrătoare dinainte, adică numărată sau „fără pontaj”.
+     (acte diferite) și după o vineri lucrată.
+3. **Totalul zilelor fără pontaj** (`pontaj_lipsa`) numără fiecare zi lucrătoare lipsă de care depinde luna o singură dată, inclusiv cele
+   din afara lunii (vineri 30.10 pentru duminica 1.11, miercuri 2.12 pentru 28–30.11).
 4. **Avertismentul `suspendari_langa_zile_libere`** (nu blochează): angajații cu zile libere numărate active la capătul unei suspendări /
-   CFS. Pontajul nu arată dacă actul le acoperă (un CM poate ține până duminică): owner-ul verifică la închidere și, dacă actul le acoperă,
-   se trece codul și pe ele în pontaj (sau o corecție HR). În Detaliu NMA angajații apar cu „N zile libere lângă o suspendare”.
+   CFS din pontaj. Pontajul nu arată dacă actul le acoperă (un CM poate ține până duminică): owner-ul verifică la închidere și, dacă actul
+   le acoperă, se trece codul și pe ele în pontaj (sau o corecție HR). În Detaliu NMA angajații apar cu „N zile libere lângă o suspendare”.
+   Lângă o corecție HR nu se dă avertismentul: intervalul ei e cunoscut.
 
 Exemplele expertului, în probă (noiembrie 2026, 30 de zile): CM luni 9 – vineri 13, luni 16 la lucru → 5 zile de suspendare, weekendul
 14–15 se numără; BO 03–30 trecut pe toate zilele → 28 de zile; BO doar pe zilele lucrătoare 3–27 și BO și pe 2.12 → tot 28; BO doar pe
@@ -227,6 +233,9 @@ Răspunse pe 24.11.2026: rotunjirea (matematică, ca în cod), suspendările pe 
   - (runda 4, secțiunea 3d) 14 cazuri de perioadă a actului (exemplele expertului, BO peste sfârșitul lunii, ziua lucrătoare nepontată de
     după, corecțiile HR exacte, angajat sâmbătă, încetat duminică, acte diferite, cod LL pe sărbătoare) + pragul 49,99 / 49,995 / 50,00;
     fereastra corecțiilor după luna închisă (2.11 refuzat, 3–4.11 acceptat);
+  - (runda 5, tot în 3d) corecția HR 9–13.11 cu încetare duminică 15.11 = 5 zile (martor: corecția 9–15.11 = 7); vineri lucrată + 2.12
+    nepontat = blocaj (după pontarea lui 2.12: activ; cu CM pe 2.12: activ + avertisment); vineri 27 și 2.12 nepontate = 2 zile lipsă;
+    vineri 30.10 nepontată = o zi lipsă în noiembrie; totalul lunii `pontaj_lipsa:6`;
   - mutanți de comportament, rulați cu amprenta oprită.
 - `src/upaAlerta.test.js` (vitest): textele ecranului, plata, corecțiile, mailul exact / previziunea / termenul depășit, refuzul calculului invalid.
 - `supabase/tests/20270101a_upa_calcul_concurenta.sh`: aceeași cursă în DOUĂ sesiuni reale (barieră pe lock consultativ, fără sleep),

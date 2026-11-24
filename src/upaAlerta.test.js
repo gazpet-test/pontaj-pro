@@ -389,7 +389,7 @@ describe('plata facturii, corecțiile HR și închiderea (20270101a runda 2)', (
     expect(textPlata({ stare_plata: null, luna: '2026-10-01' }).text).toMatch(/luna nu se poate închide/)
   })
   it('codurile noi (pontaj lipsă, calendar, plata necompletată, neplătite excluse, corecții)', () => {
-    expect(textCod('pontaj_lipsa:1')).toBe('1 zi lucrătoare fără pontaj (angajat × zi): se completează pontajul înainte de închidere')
+    expect(textCod('pontaj_lipsa:1')).toBe('1 zi lucrătoare fără pontaj (angajat × zi; poate fi și o zi lucrătoare de dinainte / de după lună, de care depind zilele libere de la margini): se completează pontajul înainte de închidere')
     expect(textCod('pontaj_lipsa:4')).toMatch(/^4 zile lucrătoare fără pontaj/)
     expect(textCod('calendar_incomplet:2026')).toMatch(/pe 2026 nu e încărcat/)
     expect(textCod('achizitii_fara_stare_plata:2')).toBe('2 facturi cu plata necompletată (plătită / neplătită)')

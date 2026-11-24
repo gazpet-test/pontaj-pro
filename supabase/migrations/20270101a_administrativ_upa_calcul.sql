@@ -394,14 +394,19 @@ $f$;
 --   * o zi nelucrătoare FĂRĂ informație (fără rând în pontaj, sau cu un cod care nu spune nimic despre suspendare: CO, LL, N, O ... pe o zi
 --     liberă) e înăuntrul unei suspendări doar dacă cea mai apropiată zi cu informație dinainte ȘI cea de după (în contract, fereastra
 --     luna ± 14 zile) au ACELAȘI cod de CFS / suspendare (sau aceeași corecție HR): weekendul dintre CM vineri și CM luni e suspendat, iar
---     weekendul de după un CM terminat vineri (luni lucrează) se numără. Dacă ziua cu informație de după e o zi lucrătoare fără pontaj,
---     starea nu se cunoaște -> fără pontaj (blocaj la închidere, prin acea zi). Dacă după ea nu mai există nicio zi a contractului (contractul
---     se termină în weekend), suspendarea se consideră continuată până la capăt (fără dovada reluării).
---   * regula „efectivul zilei lucrătoare precedente” rămâne DOAR pentru ziua liberă fără informație care nu e lângă o suspendare (contract
---     activ, fără suspendare): ia starea zilei lucrătoare dinainte, adică „numărat” sau „fără pontaj” (zi lucrătoare nepontată = necunoscut).
--- zile_fara_pontaj = zilele lucrătoare fără rând în pontaj de care depinde luna (și cele de la marginea ferestrei): se numără în previziune,
---   dar blochează închiderea. zile_libere_langa_suspendare = zilele libere fără informație numărate active la capătul unei suspendări /
---   CFS (actul le-ar putea acoperi: avertisment, nu blocaj; dacă le acoperă, codul se trece și pe ele în pontaj sau printr-o corecție HR).
+--     weekendul de după un CM terminat vineri (luni lucrează) se numără. Dacă după ea nu mai există nicio zi a contractului (contractul
+--     se termină în weekend), suspendarea DIN PONTAJ se consideră continuată până la capăt (fără dovada reluării).
+--   * runda 5 (Jakarinos r4, P1-1): corecția HR are intervalul ei explicit, deci nu se prelungește NICIODATĂ peste zilele libere din afara
+--     lui (nici când contractul se încheie în weekend: suspendare HR 9–13.11 + încetare duminică 15.11 = 5 zile, nu 7). Zilele libere de
+--     lângă o corecție HR nu intră nici în avertismentul „lângă o suspendare” (intervalul e cunoscut, nu e nimic de verificat).
+--   * runda 5 (Jakarinos r4, P1-2): zi liberă fără informație urmată de o zi lucrătoare FĂRĂ pontaj (și în luna următoare, de ex. 2.12
+--     pentru 28–30.11) = fără pontaj, ORICARE ar fi starea dinainte (și după o vineri lucrată: actul poate începe în weekend). La fel, zi
+--     liberă după o zi lucrătoare fără pontaj. Altfel (contract activ, fără suspendare în jur) ziua liberă se numără.
+-- zile_fara_pontaj = zilele lucrătoare fără rând în pontaj de care depinde luna: ale lunii și cele din afara ei (dinainte / de după) de care
+--   depind zilele libere ale lunii; fiecare zi o singură dată (r = ziua însăși / ziua dinainte, r_urm = ziua de după). Se numără în
+--   previziune, dar blochează închiderea. zile_libere_langa_suspendare = zilele libere fără informație numărate active la capătul unei
+--   suspendări / CFS din pontaj (actul le-ar putea acoperi: avertisment, nu blocaj; dacă le acoperă, codul se trece și pe ele în pontaj sau
+--   printr-o corecție HR).
 CREATE FUNCTION public.fn_upa_nma_angajati(p_luna date)
 RETURNS TABLE (employee_id integer, zile_calcul integer, zile_cfs integer, zile_suspendare integer, zile_administrator integer,
                zile_numarate integer, contributie numeric, zile_fara_pontaj integer, fara_data_angajare boolean,
@@ -449,19 +454,22 @@ LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$
     SELECT y.id, y.d, y.fa, y.oid IS NOT NULL AS cor, y.norma,
            CASE
              WHEN y.st IS NOT NULL THEN y.st
-             WHEN y.st_ant IN ('cfs', 'suspendare') AND (y.d_urm IS NULL OR y.cod_urm = y.cod_ant) THEN y.st_ant
-             WHEN y.st_ant IN ('cfs', 'suspendare') AND y.st_urm = 'fara_pontaj' THEN 'fara_pontaj'
+             WHEN y.st_urm = 'fara_pontaj' THEN 'fara_pontaj'
              WHEN y.st_ant = 'fara_pontaj' THEN 'fara_pontaj'
+             WHEN y.st_ant IN ('cfs', 'suspendare') AND y.cod_ant NOT LIKE 'HR%' AND (y.d_urm IS NULL OR y.cod_urm = y.cod_ant) THEN y.st_ant
              ELSE 'numarat'
            END AS cat,
-           CASE WHEN y.st IS NOT NULL THEN y.d WHEN y.st_ant = 'fara_pontaj' THEN y.d_ant ELSE y.d_urm END AS r,
-           (y.st IS NULL AND (y.st_ant IN ('cfs', 'suspendare') OR y.st_urm IN ('cfs', 'suspendare'))) AS langa
+           CASE WHEN y.st IS NOT NULL THEN y.d WHEN y.st_ant = 'fara_pontaj' THEN y.d_ant END AS r,
+           CASE WHEN y.st IS NULL AND y.st_urm = 'fara_pontaj' THEN y.d_urm END AS r_urm,
+           (y.st IS NULL AND ((y.st_ant IN ('cfs', 'suspendare') AND y.cod_ant NOT LIKE 'HR%')
+                              OR (y.st_urm IN ('cfs', 'suspendare') AND y.cod_urm NOT LIKE 'HR%'))) AS langa
       FROM y)
   SELECT x.id, count(*)::integer, (count(*) FILTER (WHERE x.cat = 'cfs'))::integer, (count(*) FILTER (WHERE x.cat = 'suspendare'))::integer,
          (count(*) FILTER (WHERE x.cat = 'administrator'))::integer,
          (count(*) FILTER (WHERE x.cat IN ('numarat', 'fara_pontaj')))::integer,
          (coalesce(sum(coalesce(x.norma, 1)) FILTER (WHERE x.cat IN ('numarat', 'fara_pontaj')), 0))::numeric(12,4),
-         (count(DISTINCT x.r) FILTER (WHERE x.cat = 'fara_pontaj'))::integer,
+         (SELECT count(DISTINCT q.r)::integer FROM unnest(array_agg(x.r) FILTER (WHERE x.cat = 'fara_pontaj')
+                                                          || array_agg(x.r_urm) FILTER (WHERE x.cat = 'fara_pontaj')) AS q(r)),
          bool_or(x.fa), coalesce(bool_or(x.norma IS NULL) FILTER (WHERE x.cat IN ('numarat', 'fara_pontaj')), false), bool_or(x.cor),
          (count(*) FILTER (WHERE x.langa AND x.cat = 'numarat'))::integer
     FROM x GROUP BY x.id ORDER BY x.id
@@ -1318,9 +1326,9 @@ BEGIN
              'fn_upa_alerta_proba')
   ) x;
   -- AMPRENTA_20270101a_SFARSIT
-  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '59cb2b55d9be569ff71be6a78ff0592f' THEN
+  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM 'a7d733df35de8abdc3ea18e4f2030667' THEN
     RAISE NOTICE 'AMPRENTA_20270101a_TEXT %', v_amp;
-    RAISE EXCEPTION '20270101a post: AMPRENTA obiectelor % (asteptat 59cb2b55d9be569ff71be6a78ff0592f)', md5(coalesce(v_amp, ''));
+    RAISE EXCEPTION '20270101a post: AMPRENTA obiectelor % (asteptat a7d733df35de8abdc3ea18e4f2030667)', md5(coalesce(v_amp, ''));
   END IF;
   IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20270101a_administrativ_upa_calcul:' || txid_current() THEN
     RAISE EXCEPTION '20270101a: garda final invalida';
