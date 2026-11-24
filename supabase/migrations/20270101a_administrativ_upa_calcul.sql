@@ -10,15 +10,19 @@
 --   Runda 3 (2 x P1 + P2): închiderea citește calculul și detaliul într-un singur instantaneu și reface după scriere calculul COMPLET
 --   (blocajele de completitudine incluse) din sursele de acum (fn_upa_calcul_previziune_la); alerta exactă se recuperează pentru orice lună
 --   închisă fără ea, și după scadență (mesaj „termenul a trecut”); calendarul cere și sărbătorile mobile din zile lucrătoare.
+--   Runda 4 (răspunsul expertului, 24.11.2026): CFS-ul și suspendările se numără pe zile calendaristice, pe PERIOADA actului (weekendul
+--     dintr-o suspendare e suspendat, weekendul de după sfârșitul ei e zi activă); contractul și corecțiile HR exact pe intervalul lor;
+--     pragul de 50 pe NMA-ul rotunjit (NMA >= 50,00); coloana zile_fara_efectiv scoasă (nu mai există zile de contract fără efectiv).
 --
 -- Formula (pe luna M; o singură definiție: fn_upa_calcul_la, L19):
---   NMA = Σ_angajați Σ_zile normă(r) / zilele calendaristice ale lunii, rotunjit la 2 zecimale, unde pentru fiecare zi d a contractului
---     (între employees.hire_date și employees.termination_date, ambele incluse) r = ziua lucrătoare de referință: d dacă e lucrătoare,
---     altfel ultima zi lucrătoare dinaintea ei (repaus săptămânal + sărbătorile legale din calendar_days: efectivul zilei nelucrătoare =
---     efectivul zilei lucrătoare precedente). Ziua d NU se numără dacă în ziua r: contractul nu exista; angajatul era administrator;
---     contractul era suspendat (corecție upa_angajat_perioade) ; avea în pontaj CFS (CFP) sau un cod de suspendare de drept (CM, BO, BP, AM,
---     M: incapacitate temporară de muncă, maternitate — Codul muncii art. 50). normă(r) = corecția pe perioadă sau procent_ocupare / 100.
---   posturi = round(4% × NMA, 2) (0 sub 50 de angajați; Legea 448/2006 art. 78, Ordinul 1001/2022 art. 4: 2 zecimale, fără rotunjire la întreg)
+--   NMA = Σ_angajați Σ_zile normă(d) / zilele calendaristice ale lunii, rotunjit la 2 zecimale, pe fiecare zi d a contractului (între
+--     employees.hire_date și employees.termination_date, ambele incluse). Ziua d NU se numără dacă: angajatul era administrator (semnatar
+--     activ sau corecție HR pe interval); contractul era suspendat (corecție upa_angajat_perioade pe interval); era în CFS (CFP) sau într-o
+--     suspendare de drept (CM, BO, BP, AM, M: incapacitate temporară de muncă, maternitate — Codul muncii art. 50), pe PERIOADA actului:
+--     codul din pontaj pe ziua d (și pe weekend / sărbătoare, dacă e trecut), iar o zi nelucrătoare fără cod e în act doar dacă e între
+--     două zile cu același cod (detaliul: fn_upa_nma_angajati). normă(d) = corecția pe perioadă sau procent_ocupare / 100.
+--   posturi = round(4% × NMA, 2), doar dacă NMA >= 50 (altfel 0); Legea 448/2006 art. 78, Ordinul 1001/2022 art. 4: 2 zecimale, fără
+--     rotunjire la întreg (rotunjire matematică, confirmată de expert)
 --   locuri neocupate = max(posturi − angajați cu handicap, 0)
 --   contribuția INTEGRALĂ B = round(locuri × salariul minim brut al lunii, 2) (upa_parametri 'salariu_minim', pe perioade)
 --   deducerea maximă = trunc(B / 2, 2): la stat se plătește cel puțin jumătate din B; achizițiile acoperă cel mult cealaltă jumătate
@@ -233,7 +237,7 @@ CREATE TABLE public.upa_parametri (
 COMMENT ON TABLE public.upa_parametri IS 'UPA (20270101a): intrarile calculului pe perioade (valabile de la luna randului pana la urmatorul rand al cheii): salariu_minim, angajati_handicap, report_initial (prima luna a calculului). Scris doar prin fn_upa_parametru_seteaza.';
 
 -- corecțiile HR pe interval (ERP-ul nu are istoricul normei, al calității de administrator și al suspendărilor fără cod de pontaj): pentru
---   zilele de referință din [de_la, pana_la] ale angajatului, norma (dacă e dată) și administrator (dacă e dat) înlocuiesc valorile de azi,
+--   zilele calendaristice din [de_la, pana_la] ale angajatului (runda 4: exact pe interval), norma (dacă e dată) și administrator (dacă e dat) înlocuiesc valorile de azi,
 --   iar suspendat = true scoate zilele din calcul. Fără suprapuneri (impus în RPC, sub lock-ul calculului). Doar owner-ul (date personale HR).
 CREATE TABLE public.upa_angajat_perioade (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -297,13 +301,12 @@ CREATE TABLE public.upa_calcul_angajat (
   zile_cfs integer NOT NULL,
   zile_suspendare integer NOT NULL,
   zile_administrator integer NOT NULL,
-  zile_fara_efectiv integer NOT NULL,
   zile_numarate integer NOT NULL,
   contributie numeric(12,4) NOT NULL,
   CONSTRAINT upa_calcul_angajat_pk PRIMARY KEY (luna, employee_id),
   CONSTRAINT upa_calcul_angajat_valori CHECK (zile_calcul BETWEEN 1 AND 31 AND zile_cfs >= 0 AND zile_suspendare >= 0 AND zile_administrator >= 0
-    AND zile_fara_efectiv >= 0 AND zile_numarate >= 0
-    AND zile_cfs + zile_suspendare + zile_administrator + zile_fara_efectiv + zile_numarate = zile_calcul
+    AND zile_numarate >= 0
+    AND zile_cfs + zile_suspendare + zile_administrator + zile_numarate = zile_calcul
     AND contributie >= 0 AND contributie <= zile_numarate)
 );
 COMMENT ON TABLE public.upa_calcul_angajat IS 'UPA (20270101a): detaliul NMA al unei luni inchise, pe angajat (zile pe categorii, contributia = suma normelor zilelor numarate). Citire doar owner; nemodificabil.';
@@ -382,51 +385,92 @@ LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
   SELECT CASE WHEN upper(btrim(p)) = 'CFP' THEN 'cfs' WHEN upper(btrim(p)) IN ('CM', 'BO', 'BP', 'AM', 'M') THEN 'suspendare' END
 $f$;
 
--- NMA pe angajat, pe zile (vezi formula din antet). Intră angajații activi și cei cu dată de încetare, cu contractul suprapus pe lună; cei
---   inactivi FĂRĂ dată de încetare nu au o perioadă cunoscută (blocaj în fn_upa_calcul_la dacă au pontaj). zile_fara_pontaj = zilele
---   lucrătoare de referință ale contractului (numărate) fără rând în pontaj: se numără în previziune, dar blochează închiderea.
+-- NMA pe angajat, pe zile calendaristice (vezi formula din antet). Intră angajații activi și cei cu dată de încetare, cu contractul suprapus
+--   pe lună; cei inactivi FĂRĂ dată de încetare nu au o perioadă cunoscută (blocaj în fn_upa_calcul_la dacă au pontaj).
+-- Runda 4 (răspunsul expertului, 24.11.2026): fiecare zi se judecă pe PERIOADA actului care o acoperă, nu prin ziua lucrătoare dinainte:
+--   * contractul: zilele dintre hire_date și termination_date, ambele incluse (angajat sâmbătă = sâmbăta se numără);
+--   * corecția HR (upa_angajat_perioade: normă / administrator / suspendat) se aplică exact pe zilele intervalului ei;
+--   * codul din pontaj al zilei (și pe weekend / sărbătoare, dacă e trecut acolo): CFS (CFP) / suspendare (CM, BO, BP, AM, M) scot ziua;
+--   * o zi nelucrătoare FĂRĂ informație (fără rând în pontaj, sau cu un cod care nu spune nimic despre suspendare: CO, LL, N, O ... pe o zi
+--     liberă) e înăuntrul unei suspendări doar dacă cea mai apropiată zi cu informație dinainte ȘI cea de după (în contract, fereastra
+--     luna ± 14 zile) au ACELAȘI cod de CFS / suspendare (sau aceeași corecție HR): weekendul dintre CM vineri și CM luni e suspendat, iar
+--     weekendul de după un CM terminat vineri (luni lucrează) se numără. Dacă ziua cu informație de după e o zi lucrătoare fără pontaj,
+--     starea nu se cunoaște -> fără pontaj (blocaj la închidere, prin acea zi). Dacă după ea nu mai există nicio zi a contractului (contractul
+--     se termină în weekend), suspendarea se consideră continuată până la capăt (fără dovada reluării).
+--   * regula „efectivul zilei lucrătoare precedente” rămâne DOAR pentru ziua liberă fără informație care nu e lângă o suspendare (contract
+--     activ, fără suspendare): ia starea zilei lucrătoare dinainte, adică „numărat” sau „fără pontaj” (zi lucrătoare nepontată = necunoscut).
+-- zile_fara_pontaj = zilele lucrătoare fără rând în pontaj de care depinde luna (și cele de la marginea ferestrei): se numără în previziune,
+--   dar blochează închiderea. zile_libere_langa_suspendare = zilele libere fără informație numărate active la capătul unei suspendări /
+--   CFS (actul le-ar putea acoperi: avertisment, nu blocaj; dacă le acoperă, codul se trece și pe ele în pontaj sau printr-o corecție HR).
 CREATE FUNCTION public.fn_upa_nma_angajati(p_luna date)
 RETURNS TABLE (employee_id integer, zile_calcul integer, zile_cfs integer, zile_suspendare integer, zile_administrator integer,
-               zile_fara_efectiv integer, zile_numarate integer, contributie numeric, zile_fara_pontaj integer, fara_data_angajare boolean,
-               fara_norma boolean, corectii boolean)
+               zile_numarate integer, contributie numeric, zile_fara_pontaj integer, fara_data_angajare boolean,
+               fara_norma boolean, corectii boolean, zile_libere_langa_suspendare integer)
 LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$
   WITH z AS (SELECT date_trunc('month', p_luna::timestamp)::date AS l0,
                     (date_trunc('month', p_luna::timestamp) + interval '1 month' - interval '1 day')::date AS l1),
-  c AS (SELECT g::date AS d, public.fn_upa_zi_lucratoare(g::date) AS lucr FROM z, generate_series((z.l0 - 14)::timestamp, z.l1::timestamp, interval '1 day') AS g),
-  zi AS (SELECT c.d, (SELECT max(w.d) FROM c w WHERE w.lucr AND w.d <= c.d) AS r FROM c, z WHERE c.d BETWEEN z.l0 AND z.l1),
+  c AS (SELECT g::date AS d, public.fn_upa_zi_lucratoare(g::date) AS lucr FROM z, generate_series((z.l0 - 14)::timestamp, (z.l1 + 14)::timestamp, interval '1 day') AS g),
   e AS (SELECT em.id::integer AS id, em.hire_date, em.termination_date, em.procent_ocupare,
                EXISTS (SELECT 1 FROM public.hr_decizii_semnatari s
                         WHERE s.employee_id = em.id AND s.activ IS TRUE AND lower(btrim(s.calitate)) = 'administrator') AS admin
           FROM public.employees em, z
          WHERE (em.active IS TRUE OR em.termination_date IS NOT NULL)
            AND (em.hire_date IS NULL OR em.hire_date <= z.l1) AND (em.termination_date IS NULL OR em.termination_date >= z.l0)),
-  x AS (
-    SELECT e.id, zi.d, zi.r, e.hire_date IS NULL AS fa, o.id IS NOT NULL AS cor,
-           coalesce(o.norma, e.procent_ocupare / 100.0) AS norma,
+  -- fiecare zi a contractului din fereastră, cu ce se știe despre ea: st = administrator / suspendare / cfs / numarat / fara_pontaj, NULL = zi
+  --   liberă fără informație; cod = identitatea actului (codul din pontaj sau 'HR' + id-ul corecției) pentru continuitatea peste zilele libere
+  s AS (
+    SELECT e.id, c.d, c.lucr, e.hire_date IS NULL AS fa, o.id AS oid, coalesce(o.norma, e.procent_ocupare / 100.0) AS norma,
+           CASE WHEN o.suspendat IS TRUE THEN 'HR' || o.id ELSE nullif(upper(btrim(p.norma)), '') END AS cod,
            CASE
-             WHEN zi.r IS NULL OR zi.r < coalesce(e.hire_date, z.l0) OR zi.r > coalesce(e.termination_date, 'infinity'::date) THEN 'fara_efectiv'
              WHEN coalesce(o.administrator, e.admin) THEN 'administrator'
              WHEN o.suspendat IS TRUE THEN 'suspendare'
-             ELSE coalesce(public.fn_upa_cauza_cod(p.norma), CASE WHEN p.employee_id IS NULL THEN 'fara_pontaj' ELSE 'numarat' END)
-           END AS cat
-      FROM e CROSS JOIN z CROSS JOIN zi
+             WHEN public.fn_upa_cauza_cod(p.norma) IS NOT NULL THEN public.fn_upa_cauza_cod(p.norma)
+             WHEN p.employee_id IS NOT NULL AND (c.lucr OR nullif(btrim(p.norma), '') IS NULL) THEN 'numarat'
+             WHEN c.lucr THEN 'fara_pontaj'
+           END AS st
+      FROM e CROSS JOIN z CROSS JOIN c
       LEFT JOIN LATERAL (SELECT o.id, o.norma, o.administrator, o.suspendat FROM public.upa_angajat_perioade o
-                          WHERE o.employee_id = e.id AND zi.r BETWEEN o.de_la AND o.pana_la ORDER BY o.de_la LIMIT 1) o ON true
-      LEFT JOIN public.pontaj_records p ON p.employee_id = e.id AND p.date = zi.r
-     WHERE zi.d >= coalesce(e.hire_date, z.l0) AND zi.d <= coalesce(e.termination_date, z.l1))
+                          WHERE o.employee_id = e.id AND c.d BETWEEN o.de_la AND o.pana_la ORDER BY o.de_la LIMIT 1) o ON true
+      LEFT JOIN public.pontaj_records p ON p.employee_id = e.id AND p.date = c.d
+     WHERE c.d >= coalesce(e.hire_date, z.l0) AND c.d <= coalesce(e.termination_date, 'infinity'::date)),
+  -- cea mai apropiată zi cu informație dinainte / de după (în contract și în fereastră)
+  w AS (
+    SELECT s.*,
+           max(s.d) FILTER (WHERE s.st IS NOT NULL) OVER (PARTITION BY s.id ORDER BY s.d ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS d_ant,
+           min(s.d) FILTER (WHERE s.st IS NOT NULL) OVER (PARTITION BY s.id ORDER BY s.d ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING) AS d_urm
+      FROM s),
+  y AS (
+    SELECT w.id, w.d, w.fa, w.oid, w.norma, w.st, w.d_ant, w.d_urm, a.st AS st_ant, a.cod AS cod_ant, u.st AS st_urm, u.cod AS cod_urm
+      FROM w CROSS JOIN z
+      LEFT JOIN s a ON a.id = w.id AND a.d = w.d_ant
+      LEFT JOIN s u ON u.id = w.id AND u.d = w.d_urm
+     WHERE w.d BETWEEN z.l0 AND z.l1),
+  x AS (
+    SELECT y.id, y.d, y.fa, y.oid IS NOT NULL AS cor, y.norma,
+           CASE
+             WHEN y.st IS NOT NULL THEN y.st
+             WHEN y.st_ant IN ('cfs', 'suspendare') AND (y.d_urm IS NULL OR y.cod_urm = y.cod_ant) THEN y.st_ant
+             WHEN y.st_ant IN ('cfs', 'suspendare') AND y.st_urm = 'fara_pontaj' THEN 'fara_pontaj'
+             WHEN y.st_ant = 'fara_pontaj' THEN 'fara_pontaj'
+             ELSE 'numarat'
+           END AS cat,
+           CASE WHEN y.st IS NOT NULL THEN y.d WHEN y.st_ant = 'fara_pontaj' THEN y.d_ant ELSE y.d_urm END AS r,
+           (y.st IS NULL AND (y.st_ant IN ('cfs', 'suspendare') OR y.st_urm IN ('cfs', 'suspendare'))) AS langa
+      FROM y)
   SELECT x.id, count(*)::integer, (count(*) FILTER (WHERE x.cat = 'cfs'))::integer, (count(*) FILTER (WHERE x.cat = 'suspendare'))::integer,
-         (count(*) FILTER (WHERE x.cat = 'administrator'))::integer, (count(*) FILTER (WHERE x.cat = 'fara_efectiv'))::integer,
+         (count(*) FILTER (WHERE x.cat = 'administrator'))::integer,
          (count(*) FILTER (WHERE x.cat IN ('numarat', 'fara_pontaj')))::integer,
          (coalesce(sum(coalesce(x.norma, 1)) FILTER (WHERE x.cat IN ('numarat', 'fara_pontaj')), 0))::numeric(12,4),
          (count(DISTINCT x.r) FILTER (WHERE x.cat = 'fara_pontaj'))::integer,
-         bool_or(x.fa), coalesce(bool_or(x.norma IS NULL) FILTER (WHERE x.cat IN ('numarat', 'fara_pontaj')), false), bool_or(x.cor)
+         bool_or(x.fa), coalesce(bool_or(x.norma IS NULL) FILTER (WHERE x.cat IN ('numarat', 'fara_pontaj')), false), bool_or(x.cor),
+         (count(*) FILTER (WHERE x.langa AND x.cat = 'numarat'))::integer
     FROM x GROUP BY x.id ORDER BY x.id
 $f$;
 -- amprenta unui rând de detaliu (aceeași formă pentru calcul și pentru rândurile scrise la închidere, L19)
-CREATE FUNCTION public.fn_upa_rand_amprenta(p_id integer, p_zc integer, p_cfs integer, p_susp integer, p_adm integer, p_fe integer, p_num integer,
+CREATE FUNCTION public.fn_upa_rand_amprenta(p_id integer, p_zc integer, p_cfs integer, p_susp integer, p_adm integer, p_num integer,
                                             p_contr numeric) RETURNS text
 LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
-  SELECT concat_ws(':', p_id, p_zc, p_cfs, p_susp, p_adm, p_fe, p_num, p_contr::numeric(12,4)::text)
+  SELECT concat_ws(':', p_id, p_zc, p_cfs, p_susp, p_adm, p_num, p_contr::numeric(12,4)::text)
 $f$;
 -- amprenta achizițiilor lunii (id, luna, valoarea fără TVA, starea și data plății): închiderea cere aceeași amprentă ca pe ecran
 CREATE FUNCTION public.fn_upa_amprenta_achizitii(p_luna date) RETURNS text
@@ -451,7 +495,7 @@ $f$;
 CREATE FUNCTION public.fn_upa_calcul_previziune_la(p_luna date, p_azi date, p_adancime integer DEFAULT 0) RETURNS jsonb
 LANGUAGE plpgsql STABLE SET search_path = public, pg_temp AS $f$
 DECLARE v_l date; v_l1 date; v_start date; v_zile integer; v_sum numeric; v_n integer; v_fa integer; v_fn integer;
-        v_fp integer; v_cor integer; v_amp_ang text; v_amp_ach text; v_inact integer; v_nma numeric; v_sal numeric; v_hand numeric; v_post numeric;
+        v_fp integer; v_cor integer; v_lg integer; v_amp_ang text; v_amp_ach text; v_inact integer; v_nma numeric; v_sal numeric; v_hand numeric; v_post numeric;
         v_loc numeric; v_d numeric; v_jum numeric; v_a numeric; v_na integer; v_astept numeric; v_fstare integer; v_nepl integer; v_tarziu integer;
         v_ftva integer; v_ftva_t integer; v_rin numeric; v_ant jsonb; v_ded numeric; v_plata numeric; v_rout numeric; v_ramas numeric;
         v_bl text[] := '{}'; v_av text[] := '{}'; v_acum numeric; v_inchis boolean; v_final boolean; v_termen date; v_cal integer;
@@ -481,9 +525,10 @@ BEGIN
   -- NMA (o singură citire a detaliului: sumele și amprenta din aceleași rânduri)
   SELECT coalesce(sum(x.contributie), 0), count(*)::integer, (count(*) FILTER (WHERE x.fara_data_angajare))::integer,
          (count(*) FILTER (WHERE x.fara_norma))::integer, coalesce(sum(x.zile_fara_pontaj), 0)::integer, (count(*) FILTER (WHERE x.corectii))::integer,
+         (count(*) FILTER (WHERE x.zile_libere_langa_suspendare > 0))::integer,
          md5(coalesce(string_agg(public.fn_upa_rand_amprenta(x.employee_id, x.zile_calcul, x.zile_cfs, x.zile_suspendare, x.zile_administrator,
-                                   x.zile_fara_efectiv, x.zile_numarate, x.contributie), ',' ORDER BY x.employee_id), ''))
-    INTO v_sum, v_n, v_fa, v_fn, v_fp, v_cor, v_amp_ang FROM public.fn_upa_nma_angajati(v_l) x;
+                                   x.zile_numarate, x.contributie), ',' ORDER BY x.employee_id), ''))
+    INTO v_sum, v_n, v_fa, v_fn, v_fp, v_cor, v_lg, v_amp_ang FROM public.fn_upa_nma_angajati(v_l) x;
   v_nma := round(v_sum / v_zile, 2);
   SELECT count(*)::integer INTO v_inact FROM public.employees em
    WHERE em.active IS NOT TRUE AND em.termination_date IS NULL
@@ -498,6 +543,8 @@ BEGIN
     v_av := v_av || 'pontaj_in_curs'::text;
   END IF;
   IF v_cor > 0 THEN v_av := v_av || ('angajati_cu_corectii:' || v_cor); END IF;
+  -- runda 4: zilele libere de la capătul unei suspendări / CFS se numără active (pontajul nu arată actul pe ele): omul verifică actul
+  IF v_lg > 0 THEN v_av := v_av || ('suspendari_langa_zile_libere:' || v_lg); END IF;
   IF NOT v_inchis THEN v_av := v_av || 'pontaj_neinchis'::text; END IF;
   -- intrările pe perioade și formula (posturi cu 2 zecimale, contribuția integrală, deducerea maximă = jumătate)
   v_sal := public.fn_upa_parametru_la('salariu_minim', v_l);
@@ -505,6 +552,8 @@ BEGIN
   IF v_sal IS NULL THEN v_bl := v_bl || 'fara_salariu_minim'::text; END IF;
   IF v_hand IS NULL THEN v_bl := v_bl || 'fara_nr_handicap'::text; END IF;
   IF v_sal IS NOT NULL AND v_hand IS NOT NULL THEN
+    -- pragul (expertul, 24.11.2026): obligația există doar dacă NMA >= 50, pe NMA-ul DEJA rotunjit la 2 zecimale (49,99 -> 0;
+    --   50,00 -> 2,00 posturi; 49,995 se rotunjește la 50,00, deci obligație); același prag în CHECK-ul upa_calcul_lunar_regula
     v_post := CASE WHEN v_nma < 50 THEN 0 ELSE round(v_nma * 0.04, 2) END;
     IF v_nma < 50 THEN v_av := v_av || 'sub_50_angajati'::text; END IF;
     v_loc := greatest(v_post - v_hand, 0);
@@ -664,8 +713,8 @@ BEGIN
           (v_c ->> 'termen_stat')::date, ARRAY(SELECT jsonb_array_elements_text(v_c -> 'avertismente')), v_c ->> 'versiune',
           v_c ->> 'amprenta_angajati', v_c ->> 'amprenta_achizitii', v_c ->> 'amprenta', p_uid)
   RETURNING c.luna INTO v_l;
-  INSERT INTO public.upa_calcul_angajat (luna, employee_id, zile_calcul, zile_cfs, zile_suspendare, zile_administrator, zile_fara_efectiv, zile_numarate, contributie)
-  SELECT v_l, x.employee_id, x.zile_calcul, x.zile_cfs, x.zile_suspendare, x.zile_administrator, x.zile_fara_efectiv, x.zile_numarate, x.contributie
+  INSERT INTO public.upa_calcul_angajat (luna, employee_id, zile_calcul, zile_cfs, zile_suspendare, zile_administrator, zile_numarate, contributie)
+  SELECT v_l, x.employee_id, x.zile_calcul, x.zile_cfs, x.zile_suspendare, x.zile_administrator, x.zile_numarate, x.contributie
     FROM jsonb_populate_recordset(NULL::public.upa_calcul_angajat, v_det) x;
   -- (2) reverificarea pe sursele de acum, cu completitudinea (instrucțiune nouă = instantaneu nou: vede ce s-a comis între timp)
   v_v := public.fn_upa_calcul_previziune_la(v_l, p_azi, 0);
@@ -674,7 +723,7 @@ BEGIN
   END IF;
   -- (3) rândurile scrise
   SELECT md5(coalesce(string_agg(public.fn_upa_rand_amprenta(a.employee_id, a.zile_calcul, a.zile_cfs, a.zile_suspendare, a.zile_administrator,
-                                   a.zile_fara_efectiv, a.zile_numarate, a.contributie), ',' ORDER BY a.employee_id), '')),
+                                   a.zile_numarate, a.contributie), ',' ORDER BY a.employee_id), '')),
          round(coalesce(sum(a.contributie), 0) / (v_c ->> 'zile_luna')::integer, 2), count(*)::integer
     INTO v_amp, v_nma, v_n FROM public.upa_calcul_angajat a WHERE a.luna = v_l;
   IF v_amp IS DISTINCT FROM v_c ->> 'amprenta_angajati' OR v_nma IS DISTINCT FROM (v_c ->> 'nma')::numeric OR v_n <> (v_c ->> 'nr_angajati')::integer THEN
@@ -709,18 +758,19 @@ BEGIN
            'norma', o.norma, 'administrator', o.administrator, 'suspendat', o.suspendat, 'nota', o.nota, 'setat_la', o.setat_la)
            ORDER BY em.name, o.de_la, o.id), '[]'::jsonb)
     INTO v_p FROM public.upa_angajat_perioade o LEFT JOIN public.employees em ON em.id = o.employee_id
-   WHERE o.de_la <= v_l1 AND o.pana_la >= v_l - 14;
+   WHERE o.de_la <= v_l1 + 14 AND o.pana_la >= v_l - 14;
   IF EXISTS (SELECT 1 FROM public.upa_calcul_lunar c WHERE c.luna = v_l) THEN
     SELECT coalesce(jsonb_agg(jsonb_build_object('employee_id', a.employee_id, 'nume', em.name, 'zile_calcul', a.zile_calcul, 'zile_cfs', a.zile_cfs,
-             'zile_suspendare', a.zile_suspendare, 'zile_administrator', a.zile_administrator, 'zile_fara_efectiv', a.zile_fara_efectiv,
+             'zile_suspendare', a.zile_suspendare, 'zile_administrator', a.zile_administrator,
              'zile_numarate', a.zile_numarate, 'contributie', a.contributie) ORDER BY em.name, a.employee_id), '[]'::jsonb)
       INTO v_r FROM public.upa_calcul_angajat a LEFT JOIN public.employees em ON em.id = a.employee_id WHERE a.luna = v_l;
     RETURN jsonb_build_object('luna', v_l, 'definitiv', true, 'angajati', v_r, 'perioade', v_p);
   END IF;
   SELECT coalesce(jsonb_agg(jsonb_build_object('employee_id', x.employee_id, 'nume', em.name, 'zile_calcul', x.zile_calcul, 'zile_cfs', x.zile_cfs,
-           'zile_suspendare', x.zile_suspendare, 'zile_administrator', x.zile_administrator, 'zile_fara_efectiv', x.zile_fara_efectiv,
+           'zile_suspendare', x.zile_suspendare, 'zile_administrator', x.zile_administrator,
            'zile_numarate', x.zile_numarate, 'contributie', x.contributie, 'zile_fara_pontaj', x.zile_fara_pontaj,
-           'fara_data_angajare', x.fara_data_angajare, 'fara_norma', x.fara_norma, 'corectii', x.corectii) ORDER BY em.name, x.employee_id), '[]'::jsonb)
+           'fara_data_angajare', x.fara_data_angajare, 'fara_norma', x.fara_norma, 'corectii', x.corectii,
+           'zile_libere_langa_suspendare', x.zile_libere_langa_suspendare) ORDER BY em.name, x.employee_id), '[]'::jsonb)
     INTO v_r FROM public.fn_upa_nma_angajati(v_l) x LEFT JOIN public.employees em ON em.id = x.employee_id;
   RETURN jsonb_build_object('luna', v_l, 'definitiv', false, 'angajati', v_r, 'perioade', v_p);
 END $f$;
@@ -774,8 +824,9 @@ END $f$;
 
 -- ─── 9. Corecțiile HR pe interval (owner) ─────────────────────────────────────────────────────────────────────────────────
 -- Refuz: alt cont decât owner-ul (42501); valori invalide / angajat inexistent / fără motiv (22023); suprapunere cu altă corecție a
---   aceluiași angajat (UPA05); o lună ÎNCHISĂ care ar folosi intervalul (zilele lui + cele 14 zile de după, prin care trec zilele
---   nelucrătoare de la începutul lunii următoare) (UPA03). Lock: consultativ hashtext('upa_calcul_lunar') -> upa_angajat_perioade.
+--   aceluiași angajat (UPA05); o lună ÎNCHISĂ care ar folosi intervalul (UPA03): de la cele 14 zile dinaintea lunii până la PRIMA zi
+--   lucrătoare de după ea (runda 4: zilele libere de la sfârșitul lunii se judecă și după ziua cu informație de după, care e cel târziu
+--   acea zi lucrătoare; o corecție de mai târziu în luna următoare nu atinge luna închisă). Lock: consultativ hashtext('upa_calcul_lunar') -> upa_angajat_perioade.
 CREATE FUNCTION public.fn_upa_perioada_adauga(p_employee_id integer, p_de_la date, p_pana_la date, p_norma numeric, p_administrator boolean,
                                               p_suspendat boolean, p_nota text) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
@@ -795,7 +846,10 @@ BEGIN
   END IF;
   PERFORM pg_advisory_xact_lock(hashtext('upa_calcul_lunar'));
   IF EXISTS (SELECT 1 FROM public.upa_calcul_lunar c
-              WHERE c.luna <= p_pana_la + 14 AND (c.luna + interval '1 month' - interval '1 day')::date >= p_de_la) THEN
+              WHERE c.luna <= p_pana_la + 14
+                AND coalesce((SELECT min(g::date) FROM generate_series((c.luna + interval '1 month')::timestamp, (c.luna + interval '1 month' + interval '14 days')::timestamp,
+                                                                       interval '1 day') AS g WHERE public.fn_upa_zi_lucratoare(g::date)),
+                              (c.luna + interval '1 month' + interval '14 days')::date) >= p_de_la) THEN
     RAISE EXCEPTION 'upa: o luna inchisa foloseste deja intervalul' USING ERRCODE = 'UPA03';
   END IF;
   IF EXISTS (SELECT 1 FROM public.upa_angajat_perioade o WHERE o.employee_id = p_employee_id AND o.de_la <= p_pana_la AND o.pana_la >= p_de_la) THEN
@@ -819,7 +873,10 @@ BEGIN
   SELECT * INTO v_o FROM public.upa_angajat_perioade o WHERE o.id = p_id;
   IF NOT FOUND THEN RETURN jsonb_build_object('sters', 0); END IF;
   IF EXISTS (SELECT 1 FROM public.upa_calcul_lunar c
-              WHERE c.luna <= v_o.pana_la + 14 AND (c.luna + interval '1 month' - interval '1 day')::date >= v_o.de_la) THEN
+              WHERE c.luna <= v_o.pana_la + 14
+                AND coalesce((SELECT min(g::date) FROM generate_series((c.luna + interval '1 month')::timestamp, (c.luna + interval '1 month' + interval '14 days')::timestamp,
+                                                                       interval '1 day') AS g WHERE public.fn_upa_zi_lucratoare(g::date)),
+                              (c.luna + interval '1 month' + interval '14 days')::date) >= v_o.de_la) THEN
     RAISE EXCEPTION 'upa: o luna inchisa foloseste corectia' USING ERRCODE = 'UPA03';
   END IF;
   DELETE FROM public.upa_angajat_perioade o WHERE o.id = p_id;
@@ -1061,7 +1118,7 @@ END $f$;
 -- funcțiile noi: implicit nimic (Supabase dă EXECUTE implicit rolurilor API); apoi doar ce cheamă ecranul / apelantul
 REVOKE ALL ON FUNCTION public.fn_upa_parametru_la(text, date), public.fn_upa_inceput_calcul(), public.fn_upa_pontaj_inchis(date, date),
   public.fn_upa_zi_lucratoare(date), public.fn_upa_calendar_lipsa(integer), public.fn_upa_termen_stat(date), public.fn_upa_cauza_cod(text),
-  public.fn_upa_nma_angajati(date), public.fn_upa_rand_amprenta(integer, integer, integer, integer, integer, integer, integer, numeric),
+  public.fn_upa_nma_angajati(date), public.fn_upa_rand_amprenta(integer, integer, integer, integer, integer, integer, numeric),
   public.fn_upa_amprenta_achizitii(date), public.fn_upa_calcul_previziune_la(date, date, integer), public.fn_upa_calcul_la(date, date, integer),
   public.fn_upa_situatie_la(date, integer),
   public.fn_upa_situatie(date, integer), public.fn_upa_calcul_inchide_la(date, date, text, uuid), public.fn_upa_calcul_inchide(date, text),
@@ -1135,7 +1192,7 @@ BEGIN
       ('public.fn_upa_termen_stat(date)', 'plpgsql', false, 's', 'postgres:EXECUTE'),
       ('public.fn_upa_cauza_cod(text)', 'sql', false, 'i', 'postgres:EXECUTE'),
       ('public.fn_upa_nma_angajati(date)', 'sql', false, 's', 'postgres:EXECUTE'),
-      ('public.fn_upa_rand_amprenta(integer,integer,integer,integer,integer,integer,integer,numeric)', 'sql', false, 'i', 'postgres:EXECUTE'),
+      ('public.fn_upa_rand_amprenta(integer,integer,integer,integer,integer,integer,numeric)', 'sql', false, 'i', 'postgres:EXECUTE'),
       ('public.fn_upa_amprenta_achizitii(date)', 'sql', false, 's', 'postgres:EXECUTE'),
       ('public.fn_upa_calcul_previziune_la(date,date,integer)', 'plpgsql', false, 's', 'postgres:EXECUTE'),
       ('public.fn_upa_calcul_la(date,date,integer)', 'plpgsql', false, 's', 'postgres:EXECUTE'),
@@ -1261,9 +1318,9 @@ BEGIN
              'fn_upa_alerta_proba')
   ) x;
   -- AMPRENTA_20270101a_SFARSIT
-  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '57ae05bcb155359311a6936e127480a8' THEN
+  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '59cb2b55d9be569ff71be6a78ff0592f' THEN
     RAISE NOTICE 'AMPRENTA_20270101a_TEXT %', v_amp;
-    RAISE EXCEPTION '20270101a post: AMPRENTA obiectelor % (asteptat 57ae05bcb155359311a6936e127480a8)', md5(coalesce(v_amp, ''));
+    RAISE EXCEPTION '20270101a post: AMPRENTA obiectelor % (asteptat 59cb2b55d9be569ff71be6a78ff0592f)', md5(coalesce(v_amp, ''));
   END IF;
   IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20270101a_administrativ_upa_calcul:' || txid_current() THEN
     RAISE EXCEPTION '20270101a: garda final invalida';

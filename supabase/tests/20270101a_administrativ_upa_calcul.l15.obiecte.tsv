@@ -18,7 +18,6 @@ coloana	coloana public.upa_calcul_angajat.luna	creat
 coloana	coloana public.upa_calcul_angajat.zile_administrator	creat
 coloana	coloana public.upa_calcul_angajat.zile_calcul	creat
 coloana	coloana public.upa_calcul_angajat.zile_cfs	creat
-coloana	coloana public.upa_calcul_angajat.zile_fara_efectiv	creat
 coloana	coloana public.upa_calcul_angajat.zile_numarate	creat
 coloana	coloana public.upa_calcul_angajat.zile_suspendare	creat
 coloana	coloana public.upa_calcul_lunar.achizitii_fara_tva	creat
@@ -98,7 +97,7 @@ functie	functie public.fn_upa_parametru_seteaza(text,date,numeric,numeric,text)	
 functie	functie public.fn_upa_perioada_adauga(integer,date,date,numeric,boolean,boolean,text)	creat
 functie	functie public.fn_upa_perioada_sterge(bigint)	creat
 functie	functie public.fn_upa_pontaj_inchis(date,date)	creat
-functie	functie public.fn_upa_rand_amprenta(integer,integer,integer,integer,integer,integer,integer,numeric)	creat
+functie	functie public.fn_upa_rand_amprenta(integer,integer,integer,integer,integer,integer,numeric)	creat
 functie	functie public.fn_upa_situatie(date,integer)	creat
 functie	functie public.fn_upa_situatie_la(date,integer)	creat
 functie	functie public.fn_upa_termen_stat(date)	creat

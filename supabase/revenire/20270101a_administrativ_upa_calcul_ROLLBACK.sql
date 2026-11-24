@@ -124,9 +124,9 @@ BEGIN
              'fn_upa_alerta_proba')
   ) x;
   -- AMPRENTA_20270101a_SFARSIT
-  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '57ae05bcb155359311a6936e127480a8' THEN
+  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '59cb2b55d9be569ff71be6a78ff0592f' THEN
     RAISE NOTICE 'AMPRENTA_20270101a_TEXT %', v_amp;
-    RAISE EXCEPTION '20270101a revenire: AMPRENTA obiectelor % (asteptat 57ae05bcb155359311a6936e127480a8); nimic schimbat', md5(coalesce(v_amp, ''));
+    RAISE EXCEPTION '20270101a revenire: AMPRENTA obiectelor % (asteptat 59cb2b55d9be569ff71be6a78ff0592f); nimic schimbat', md5(coalesce(v_amp, ''));
   END IF;
   -- date noi = refuz (calculul închis, parametrii schimbați, corecțiile HR, achizițiile cu valori în coloanele noi, alerta exactă)
   IF EXISTS (SELECT 1 FROM public.upa_calcul_lunar) OR EXISTS (SELECT 1 FROM public.upa_calcul_angajat) THEN
@@ -342,7 +342,7 @@ DROP FUNCTION public.fn_upa_situatie_la(date, integer);
 DROP FUNCTION public.fn_upa_calcul_la(date, date, integer);
 DROP FUNCTION public.fn_upa_calcul_previziune_la(date, date, integer);
 DROP FUNCTION public.fn_upa_amprenta_achizitii(date);
-DROP FUNCTION public.fn_upa_rand_amprenta(integer, integer, integer, integer, integer, integer, integer, numeric);
+DROP FUNCTION public.fn_upa_rand_amprenta(integer, integer, integer, integer, integer, integer, numeric);
 DROP FUNCTION public.fn_upa_nma_angajati(date);
 DROP FUNCTION public.fn_upa_cauza_cod(text);
 DROP FUNCTION public.fn_upa_termen_stat(date);

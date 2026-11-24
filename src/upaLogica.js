@@ -142,7 +142,8 @@ const TEXTE_COD = {
   pontaj_lipsa: n => nrTxt(n, 'zi lucrătoare', 'zile lucrătoare') + ' fără pontaj (angajat × zi): se completează pontajul înainte de închidere',
   calendar_incomplet: an => `calendarul sărbătorilor legale pe ${an ?? 'an'} nu e încărcat (Setări → Calendar)`,
   angajati_cu_corectii: n => nrTxt(n, 'angajat cu corecție', 'angajați cu corecții') + ' HR (normă / administrator / suspendare), vezi Detaliu NMA',
-  sub_50_angajati: () => 'sub 50 de angajați: nu există obligație',
+  sub_50_angajati: () => 'numărul mediu de angajați sub 50: nu există obligație',
+  suspendari_langa_zile_libere: n => nrTxt(n, 'angajat', 'angajați') + ' cu CFS / suspendare lângă un weekend sau o sărbătoare: zilele libere de la capăt se numără active; dacă actul le acoperă, trece codul și pe ele în pontaj (vezi Detaliu NMA)',
   achizitii_fara_tva: n => nrTxt(n, 'factură fără', 'facturi fără') + ' valoarea fără TVA',
   achizitii_fara_data_platii: n => nrTxt(n, 'factură fără', 'facturi fără') + ' data plății',
   achizitii_fara_stare_plata: n => nrTxt(n, 'factură', 'facturi') + ' cu plata necompletată (plătită / neplătită)',
@@ -153,8 +154,11 @@ const TEXTE_COD = {
   angajati_fara_norma: n => nrTxt(n, 'angajat', 'angajați') + ' fără normă (se completează în HR)',
   inactivi_fara_data_incetarii_cu_pontaj: n => nrTxt(n, 'angajat inactiv', 'angajați inactivi') + ' fără data încetării, cu pontaj în lună (se completează data în HR)',
 }
+// Detaliu NMA: zilele libere numărate active lângă o suspendare (runda 4)
+export const nrZileLibere = n => nrTxt(Number(n), 'zi liberă', 'zile libere')
 export function textCod(cod) {
-  const m = /^([a-z_]{1,60})(?::([0-9]{1,6}))?$/.exec(String(cod ?? ''))
+  // numele poate avea cifre (sub_50_angajati, runda 4: înainte apărea codul brut pe ecran)
+  const m = /^([a-z][a-z0-9_]{0,59})(?::([0-9]{1,6}))?$/.exec(String(cod ?? ''))
   if (!m) return String(cod ?? '')
   const f = TEXTE_COD[m[1]]
   return f ? f(m[2] == null ? null : Number(m[2])) : m[1].replace(/_/g, ' ')

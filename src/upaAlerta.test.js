@@ -3,7 +3,7 @@
 // e probat pe migrarea reală în scripts/pglite/test_upa_alerta_local.mjs; aici BD-ul simulat întoarce ce ar întoarce rezervarea în fiecare caz.
 import { describe, it, expect } from 'vitest'
 import { lei, lunaText, zileText, mailUpa, cheieIdempotenta, ruleazaAlertaUpa, ADRESA_INTERNA, DOMENIU_INTERN, destinatariValizi, areCalcul, ziText } from '../supabase/functions/_shared/upaAlerta.mjs'
-import { validaSuma, validaFaraTva, stareCalculLuna, etichetaStare, textCod, leiSauLipsa, validaParametru, valoareVazuta, mesajParametru,
+import { validaSuma, validaFaraTva, stareCalculLuna, etichetaStare, textCod, nrZileLibere, leiSauLipsa, validaParametru, valoareVazuta, mesajParametru,
          avertismenteAchizitie, lunaDinZi, luniInapoi, ziRO,
          stareSalvare, rezultatNesigur, poateScoatePdf, mesajRefuzAchizitie, CAMPURI_INTENTIE, numarFacturaUpa, refuzNumarFactura, mesajInsertUpa,
          pdfExistaDeja, caleaPdf, ordineFurnizori, paginaCuGarda, validaPlata, textPlata, validaPerioada, mesajPerioada, mesajInchidere } from './upaLogica.js'
@@ -396,6 +396,14 @@ describe('plata facturii, corecțiile HR și închiderea (20270101a runda 2)', (
     expect(textCod('achizitii_neplatite_excluse:1')).toBe('1 factură neplătită în lună (nu intră în deducere)')
     expect(textCod('angajati_cu_corectii:3')).toMatch(/^3 angajați cu corecții HR/)
     expect(textCod('angajati_fara_data_angajarii:1')).toMatch(/se completează în HR/)
+  })
+  it('runda 4: suspendările pe perioada actului (avertismentul zilelor libere) și pragul de 50', () => {
+    expect(textCod('suspendari_langa_zile_libere:1')).toBe('1 angajat cu CFS / suspendare lângă un weekend sau o sărbătoare: zilele libere de la capăt se numără active; dacă actul le acoperă, trece codul și pe ele în pontaj (vezi Detaliu NMA)')
+    expect(textCod('suspendari_langa_zile_libere:3')).toMatch(/^3 angajați cu CFS \/ suspendare/)
+    expect(textCod('sub_50_angajati')).toBe('numărul mediu de angajați sub 50: nu există obligație')
+    expect(nrZileLibere(1)).toBe('1 zi liberă')
+    expect(nrZileLibere(2)).toBe('2 zile libere')
+    expect(nrZileLibere('3')).toBe('3 zile libere')
   })
   it('corecția HR: validarea (normă în (0, 1], cel puțin o schimbare, motivul) și mesajele refuzului', () => {
     const baza = { employee_id: '72', de_la: '2026-10-01', pana_la: '2026-10-15', norma: '1', administrator: '', suspendat: false, nota: ' act adițional 12 ' }

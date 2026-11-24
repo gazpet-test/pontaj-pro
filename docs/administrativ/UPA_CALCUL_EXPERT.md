@@ -4,6 +4,18 @@ Decizia owner-ului (20.11.2026): contribuția pentru fondul de handicap se **cal
 în locul plafonului fix din setări (7.000 lei). Migrarea `20270101a_administrativ_upa_calcul` (NEAPLICATĂ) + ecranul + edge-ul v11.
 Contextul (alerta, jurnalul, drepturile, bucketul) rămâne cel din `docs/administrativ/UPA_FOND_HANDICAP.md` (20261229a / b / c).
 Runda 2 (review PR #1154, 8 x P1 + P2) a corectat formula, numărul mediu de angajați, închiderea, tranzițiile și termenul din decembrie.
+Runda 4 (răspunsul expertului din 24.11.2026, cu un calcul model): CFS-ul și suspendările pe zile calendaristice, pe perioada actului;
+pragul de 50 pe NMA-ul rotunjit.
+
+## Răspunsul expertului (24.11.2026, calculul model)
+
+- NMA = ROUND(suma zilelor echivalente / zilele calendaristice ale lunii, 2); posturi = ROUND(NMA × 4%, 2), rotunjire matematică (confirmă
+  ce era în cod).
+- Se scot: CFS, greva, detașarea, suspendările. Norma parțială se ia proporțional (ore / 8).
+- **Suspendările se numără pe zile calendaristice, pe perioada actului**: weekendurile din interval sunt suspendate; un weekend DUPĂ
+  sfârșitul suspendării (de exemplu CM până vineri) e zi activă. Exemplu: BO 03–30 într-o lună de 30 de zile = 28 de zile de suspendare.
+  La fel pentru CFS.
+- **Pragul**: obligația există doar dacă NMA ≥ 50 (altfel contribuția e 0).
 
 ## Răspunsul expertului (date, 20.11.2026)
 
@@ -23,12 +35,11 @@ de două ori (50% din salariu, apoi jumătate din asta); runda 2 aplică jumăta
 
 | Pas | Ce | Sursa în ERP |
 |---|---|---|
-| zilele contractului | zilele lunii între `employees.hire_date` și `employees.termination_date` (ambele incluse) | `employees` |
-| ziua de referință | pentru o zi lucrătoare, ea însăși; pentru weekend / sărbătoare legală, ultima zi lucrătoare dinainte (efectivul zilei nelucrătoare = efectivul zilei lucrătoare precedente) | `calendar_days` ('legal') |
-| zile scoase | în ziua de referință: CFS (`CFP`), suspendare de drept (`CM`, `BO`, `BP`, `AM` = incapacitate de muncă, `M` = maternitate), suspendare fără cod (corecție HR), administrator, contract inexistent | `pontaj_records.norma`, `upa_angajat_perioade`, `hr_decizii_semnatari` |
-| normă | `employees.procent_ocupare / 100`, sau corecția HR pe interval (act adițional) | `employees`, `upa_angajat_perioade` |
+| zilele contractului | zilele calendaristice ale lunii între `employees.hire_date` și `employees.termination_date` (ambele incluse; angajat sâmbătă = sâmbăta se numără) | `employees` |
+| zile scoase | pe perioada actului (vezi mai jos): CFS (`CFP`), suspendare de drept (`CM`, `BO`, `BP`, `AM` = incapacitate de muncă, `M` = maternitate), suspendare fără cod (corecție HR pe interval), administrator (semnatar activ sau corecție HR pe interval) | `pontaj_records.norma`, `upa_angajat_perioade`, `hr_decizii_semnatari`, `calendar_days` ('legal') |
+| normă | `employees.procent_ocupare / 100`, sau corecția HR pe interval (act adițional), pe ziua respectivă | `employees`, `upa_angajat_perioade` |
 | NMA | Σ normele zilelor numărate / zilele lunii, rotunjit la 2 zecimale | — |
-| posturi | 4% × NMA, cu 2 zecimale (fără rotunjire la întreg); 0 sub 50 de angajați | — |
+| posturi | 4% × NMA, cu 2 zecimale (rotunjire matematică, fără rotunjire la întreg); **0 dacă NMA < 50** (pragul se aplică pe NMA-ul deja rotunjit: 49,99 → 0; 49,995 → 50,00 → obligație) | — |
 | locuri neocupate | max(posturi − angajați cu handicap, 0) | `upa_parametri.angajati_handicap` |
 | contribuția integrală B | locuri × salariul minim al lunii (rotunjit la bani) | `upa_parametri.salariu_minim` |
 | deducerea maximă | jumătate din B (trunchiat la bani: la stat rămâne cel puțin jumătate) | — |
@@ -38,6 +49,33 @@ de două ori (50% din salariu, apoi jumătate din asta); runda 2 aplică jumăta
 | de plată la stat | B − deducere | — |
 | report ieșit | A + report intrat − deducere | — |
 | termenul la stat | 25 a lunii următoare (zi nelucrătoare → prima zi lucrătoare de după); pentru noiembrie: 21 decembrie (zi nelucrătoare → ziua lucrătoare dinainte), Codul de procedură fiscală art. 155 alin. (2) | `fn_upa_termen_stat` |
+
+### Perioada actului: cum se judecă fiecare zi (runda 4, `fn_upa_nma_angajati`)
+
+ERP-ul nu are actele (certificatele de CM, deciziile de CFS) cu datele lor; are pontajul pe zile. De aceea:
+
+1. **Perioade explicite, exact pe interval:** contractul (angajare → încetare), corecțiile HR (normă / administrator / suspendare fără cod),
+   codul din pontaj al zilei. Un cod trecut și pe weekend sau pe o sărbătoare (de exemplu BO pe 28, 29 și 30.11) contează pe ziua lui.
+2. **Zi liberă fără cod** (weekend sau sărbătoare fără rând în pontaj, sau cu un cod care nu spune nimic despre suspendare, ca LL / CO):
+   - e în act dacă cea mai apropiată zi cu informație **dinainte și cea de după** au **același** cod de CFS / suspendare (sau aceeași
+     corecție HR): weekendul dintre un CM de vineri și un CM de luni e suspendat;
+   - altfel e zi activă: weekendul de după un CM terminat vineri (luni la lucru) se numără; la fel între un CM de vineri și un BO de luni
+     (acte diferite);
+   - dacă ziua de după e o zi lucrătoare **fără pontaj**, starea nu se cunoaște: ziua intră la „fără pontaj” și blochează închiderea
+     până se completează acea zi (poate fi și prima zi lucrătoare a lunii următoare, de exemplu 2.12 pentru sfârșitul lui noiembrie);
+   - dacă după ea nu mai e nicio zi de contract (încetat duminică după un CM de vineri), suspendarea continuă până la capăt.
+3. **Regula „efectivul zilei lucrătoare precedente”** rămâne doar pentru ziua liberă fără cod care nu e lângă o suspendare (contract activ,
+   fără suspendare): ia starea zilei lucrătoare dinainte, adică numărată sau „fără pontaj”.
+4. **Avertismentul `suspendari_langa_zile_libere`** (nu blochează): angajații cu zile libere numărate active la capătul unei suspendări /
+   CFS. Pontajul nu arată dacă actul le acoperă (un CM poate ține până duminică): owner-ul verifică la închidere și, dacă actul le acoperă,
+   se trece codul și pe ele în pontaj (sau o corecție HR). În Detaliu NMA angajații apar cu „N zile libere lângă o suspendare”.
+
+Exemplele expertului, în probă (noiembrie 2026, 30 de zile): CM luni 9 – vineri 13, luni 16 la lucru → 5 zile de suspendare, weekendul
+14–15 se numără; BO 03–30 trecut pe toate zilele → 28 de zile; BO doar pe zilele lucrătoare 3–27 și BO și pe 2.12 → tot 28; BO doar pe
+zilele lucrătoare 3–27 și la lucru pe 2.12 → 25 (+ avertismentul pentru 28–30).
+
+Corecțiile HR față de o lună închisă: se refuză dacă ating intervalul de la 14 zile dinaintea lunii până la **prima zi lucrătoare de după
+ea** (de ea depind zilele libere de la sfârșitul lunii). O corecție de mai târziu în luna următoare nu mai e refuzată.
 
 ### Exemplul pentru expert: noiembrie 2026 (NMA ≈ 64)
 
@@ -86,7 +124,8 @@ Verificat și pe exemplul din review (NMA 75, 3 posturi): fără achiziții 12.9
   - luna anterioară neînchisă.
 - **Avertismente** (se văd, nu opresc închiderea):
   - factură neplătită în lună (nu se deduce) sau plătită după termen (nu se deduce);
-  - angajați cu corecții HR.
+  - angajați cu corecții HR;
+  - (runda 4) angajați cu zile libere numărate active lângă o suspendare / CFS (`suspendari_langa_zile_libere`).
 - **După închidere:** ecranul arată dacă sursele lunii (pontaj / facturi) s-au schimbat, inclusiv dacă datele nu mai sunt complete (o zi de
   pontaj ștearsă după închidere). Calculul închis rămâne; o rectificare se discută
   cu contabilul (mecanismul de rectificare nu e în această migrare).
@@ -128,14 +167,19 @@ Tabelul `upa_plafon_lunar`, `fn_upa_luni` și `fn_upa_plafon_seteaza` rămân ne
 
 ## Întrebări pentru expert (de confirmat înainte de aplicare)
 
-1. Exemplul de mai sus (contribuția integrală, posturi cu 2 zecimale, jumătate la stat) e corect? Suma se rotunjește la leu în declarație?
-2. Rotunjirea celor 4% × NMA la 2 zecimale: matematic (2,5652 → 2,57) sau prin trunchiere?
-3. Absențele nemotivate (N) se numără ca zile lucrate (contractul nu e suspendat până la o decizie)? Concediul paternal / de îngrijire a
-   copilului bolnav au coduri proprii în pontaj?
-4. Reportul expiră (de exemplu la sfârșitul anului)?
-5. 21 decembrie nelucrător: termenul se mută pe ziua lucrătoare dinainte (cum e în cod) sau după? În 2026 și 2027 ziua e lucrătoare.
-6. Angajatul cu contract din ziua de sâmbătă: regula „efectivul zilei lucrătoare precedente” îl scoate pentru sâmbăta și duminica de început.
-7. Prima lună a calculului e octombrie 2026, cu report inițial 0. Există un excedent din lunile anterioare?
+Răspunse pe 24.11.2026: rotunjirea (matematică, ca în cod), suspendările pe perioada actului, pragul de 50 (vezi mai sus). Rămân:
+
+1. Exemplul de mai sus (contribuția integrală, jumătate la stat) e corect? Suma se rotunjește la leu în declarație?
+2. Absențele nemotivate (N) se numără ca zile lucrate (contractul nu e suspendat până la o decizie)? Greva și detașarea (pe care expertul
+   le scoate) nu au cod în pontaj: se trec ca suspendare fără cod (corecție HR)? Concediul paternal / de îngrijire a copilului bolnav au
+   coduri proprii în pontaj?
+3. Reportul expiră (de exemplu la sfârșitul anului)?
+4. 21 decembrie nelucrător: termenul se mută pe ziua lucrătoare dinainte (cum e în cod) sau după? În 2026 și 2027 ziua e lucrătoare.
+5. Prima lună a calculului e octombrie 2026, cu report inițial 0. Există un excedent din lunile anterioare?
+6. (runda 4) Un weekend între două acte DIFERITE (CM vineri, BO luni) se numără activ (cum e în cod)? Iar unul între două certificate de
+   CM succesive se ia ca suspendat (pontajul nu le deosebește), dacă nu se trece altfel în pontaj?
+7. (runda 4, decizie de confirmat) Angajatul cu contract din sâmbătă: acum sâmbăta și duminica de început se numără (zilele contractului,
+   ca în punctul 3 din primul răspuns); înainte îl scotea regula zilei lucrătoare precedente.
 
 ## Ordinea livrării (de coordonator, după review și „da”)
 
@@ -180,6 +224,9 @@ Tabelul `upa_plafon_lunar`, `fn_upa_luni` și `fn_upa_plafon_seteaza` rămân ne
   - (runda 3) cursa în timpul închiderii: 5 schimbări care nu mișcă cifrele (zi de pontaj ștearsă, normă ștearsă, data încetării ștearsă
     la un inactiv cu pontaj, o sărbătoare fixă și una mobilă scoase), injectate exact între citire și reverificare → refuz, nimic scris;
     alerta exactă la prima rulare după 40 de luni, cu termenul depășit; sărbătorile mobile 2026 / 2027 (Paștele de mână);
+  - (runda 4, secțiunea 3d) 14 cazuri de perioadă a actului (exemplele expertului, BO peste sfârșitul lunii, ziua lucrătoare nepontată de
+    după, corecțiile HR exacte, angajat sâmbătă, încetat duminică, acte diferite, cod LL pe sărbătoare) + pragul 49,99 / 49,995 / 50,00;
+    fereastra corecțiilor după luna închisă (2.11 refuzat, 3–4.11 acceptat);
   - mutanți de comportament, rulați cu amprenta oprită.
 - `src/upaAlerta.test.js` (vitest): textele ecranului, plata, corecțiile, mailul exact / previziunea / termenul depășit, refuzul calculului invalid.
 - `supabase/tests/20270101a_upa_calcul_concurenta.sh`: aceeași cursă în DOUĂ sesiuni reale (barieră pe lock consultativ, fără sleep),

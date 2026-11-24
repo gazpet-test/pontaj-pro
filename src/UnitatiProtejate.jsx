@@ -7,8 +7,8 @@
 // protejate autorizate (UPA).
 // 20270101a (răspunsul expertului contabil, 20.11.2026; runda 2): contribuția e CALCULATĂ
 // în BD (fn_upa_situatie / fn_upa_calcul_la = o singură definiție, L19): numărul mediu de
-// angajați pe zile (zilele nelucrătoare iau efectivul zilei lucrătoare precedente; CFS,
-// CM / BO / M și suspendările scad), posturile = 4% cu 2 zecimale, salariul minim pe
+// angajați pe zile calendaristice (runda 4: CFS, CM / BO / M și suspendările scad pe
+// perioada actului; pragul de 50 pe NMA-ul rotunjit), posturile = 4% cu 2 zecimale, salariul minim pe
 // perioade, achizițiile FĂRĂ TVA plătite până la sfârșitul lunii; excedentul se reportează;
 // plata la stat până pe 25 a lunii următoare (21.12 pentru noiembrie). Luna rămâne
 // PREVIZIUNE până o închide OWNER-ul din ecran (din 13 a lunii următoare, fără blocaje),
@@ -27,7 +27,7 @@ import CitesteOricePanel from './CitesteOricePanel.jsx'
 import { paginareKeyset } from './hrDeciziiUtil.js'
 import { avertismenteAchizitie, ziRO, lunaDinZi, luniInapoi,
          stareSalvare, rezultatNesigur, poateScoatePdf, mesajRefuzAchizitie, pdfExistaDeja, caleaPdf, ordineFurnizori,
-         paginaCuGarda, validaSuma, validaFaraTva, esteNumar, leiSauLipsa, textCod, stareCalculLuna, etichetaStare,
+         paginaCuGarda, validaSuma, validaFaraTva, esteNumar, leiSauLipsa, textCod, nrZileLibere, stareCalculLuna, etichetaStare,
          CHEI_PARAMETRI, NUME_PARAMETRU, validaParametru, valoareVazuta, mesajParametru,
          validaPlata, textPlata, validaPerioada, mesajPerioada, mesajInchidere } from './upaLogica.js'
 
@@ -425,28 +425,30 @@ function DetaliuNma({ luna, onClose, onSchimbat, setMesaj, inEpoca }) {
         {d && (
           <>
             <div style={{fontSize:12, color:G.muted, marginBottom:8, lineHeight:1.5}}>
-              Pe fiecare zi din contract: zilele nelucrătoare (weekend, sărbători) iau situația zilei lucrătoare dinainte. Nu se numără zilele de CFS,
-              de suspendare (CM, BO, BP, AM, maternitate sau corecție HR) și cele ca administrator. Contribuția = suma normelor zilelor numărate;
-              total {total.toLocaleString('ro-RO', { maximumFractionDigits:4 })} împărțit la zilele lunii = NMA.
+              Pe fiecare zi calendaristică din contract. Nu se numără zilele de CFS, de suspendare (CM, BO, BP, AM, maternitate sau corecție HR) și
+              cele ca administrator, pe perioada actului: weekendul / sărbătoarea dintre două zile cu același cod e în act, iar cea de după
+              sfârșitul lui (ex. CM până vineri, luni la lucru) se numără. Dacă actul acoperă și zilele libere de la capăt, trece codul și pe ele
+              în pontaj. Contribuția = suma normelor zilelor numărate; total {total.toLocaleString('ro-RO', { maximumFractionDigits:4 })} împărțit
+              la zilele lunii = NMA.
             </div>
             {fara.length > 0 && (
               <div style={{fontSize:12, color:G.red, marginBottom:8}}>⛔ Fără pontaj în zile lucrătoare: {fara.map(x => `${x.nume || '#' + x.employee_id} (${x.zile_fara_pontaj})`).join(', ')}.</div>
             )}
             <table style={{width:'100%', borderCollapse:'collapse', fontSize:12}}>
               <thead><tr style={{color:G.muted, textAlign:'left'}}>
-                {['Angajat', 'Zile contract', 'CFS', 'Suspendare', 'Administrator', 'Fără efectiv', 'Numărate', 'Contribuție'].map(th)}
+                {['Angajat', 'Zile contract', 'CFS', 'Suspendare', 'Administrator', 'Numărate', 'Contribuție'].map(th)}
               </tr></thead>
               <tbody>{rand.map(x => (
                 <tr key={x.employee_id} style={{borderBottom:`1px solid ${G.border2}`}}>
                   <td style={{padding:'4px 6px'}}>{x.nume || '#' + x.employee_id}
                     {x.fara_data_angajare ? <span style={{color:G.red}}> · fără dată angajare</span> : null}
                     {x.fara_norma ? <span style={{color:G.red}}> · fără normă</span> : null}
-                    {x.corectii ? <span style={{color:G.purple}}> · corecție HR</span> : null}</td>
+                    {x.corectii ? <span style={{color:G.purple}}> · corecție HR</span> : null}
+                    {x.zile_libere_langa_suspendare > 0 ? <span style={{color:G.yellow}}> · {nrZileLibere(x.zile_libere_langa_suspendare)} lângă o suspendare, numărate: verifică actul</span> : null}</td>
                   <td style={{padding:'4px 6px'}}>{x.zile_calcul}</td>
                   <td style={{padding:'4px 6px'}}>{nr(x.zile_cfs)}</td>
                   <td style={{padding:'4px 6px'}}>{nr(x.zile_suspendare)}</td>
                   <td style={{padding:'4px 6px'}}>{nr(x.zile_administrator)}</td>
-                  <td style={{padding:'4px 6px'}}>{nr(x.zile_fara_efectiv)}</td>
                   <td style={{padding:'4px 6px'}}>{x.zile_numarate}</td>
                   <td style={{padding:'4px 6px', fontVariantNumeric:'tabular-nums'}}>{Number(x.contributie).toLocaleString('ro-RO', { maximumFractionDigits:4 })}</td>
                 </tr>
