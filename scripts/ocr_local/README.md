@@ -419,6 +419,17 @@ pornit; dacă rămâne pe aceleași căi de model, E3 îl oprește la preluare (
 pentru orice `vllm serve` neadoptat de pe căile lui). Citirile E3 (`lock=False`) nu
 verifică cererea.
 
+### Coada de citire (24.11.2026, `coada.py`)
+Sesiunile nu mai pornesc modele: `python -B -m ocr_local coada adauga <plan_dir>... --cine <eticheta>`
+(apoi `coada stare` / `coada anuleaza <id>`). Un singur proces (`coada lucreaza`, Task Scheduler) ține
+`gpu.lock` cu deținătorul `ocr_coada` (`GpuLock(detinator=...)`) doar cât un model e pornit, citește cu
+`read.run_reader(lock=False, cedare=...)` (cererea E3 + oprirea cozii, între benzi) și eliberează lacătul
+prin `Coordinator.descarca` (memoria confirmată). Instanța unică (`ocr_coada.instanta.lock`) și obligația
+memoriei (`ocr_coada.modele.json`) stau lângă `gpu.lock`, oricare ar fi `--root`. Destinațiile scrierilor
+(arborele planului, rădăcina cozii) se verifică fără reparse / legături fizice înaintea fiecărei citiri; o cerere
+cu structură invalidă se izolează ca `eroare` (originalul în `cereri\invalide\`). Comenzi, stări, instalare și revenire:
+`docs/ocrlab/COADA_CITIRE.md`. Teste: `python -B -m pytest scripts/ocr_local/tests/coada -q -p no:cacheprovider`.
+
 Ambele cititoare primesc cadrul întreg, în paralel. Adaptorul apelează
 `read.run_reader(..., lock=False)` în procese separate, cu garda v5 și termen
 absolut; terminarea procesului oprește și firul intern MinerU. La gardă, la

@@ -217,8 +217,11 @@ def backend_idle(cfg, timeout=30.0, poll=0.5):
         if time.monotonic() >= end: return False
         time.sleep(max(0.0, min(poll, end - time.monotonic())))  # nici pauza nu trece de termen
 
-def run_reader(plan_dir, reader, *, run_id, check_weights=True, check_server=True, lock=True):
+def run_reader(plan_dir, reader, *, run_id, check_weights=True, check_server=True, lock=True, cedare=None):
     """Citeste toate benzile planului cu un singur cititor. Termen / eroare de transport / rezultat neconfirmat = oprire (fara reincercare).
+    `cedare` = functie apelata inaintea fiecarei benzi; un text nevid (ex. 'cedat_e3', 'oprit') opreste citirea cu acea stare, dupa
+    banda curenta. Implicit: cu `lock` = cererea E3 (gpu.cerere); fara `lock` = nimic. Coada (coada.py) tine ea gpu.lock (lock=False)
+    si da propria functie (cererea E3 + oprirea cozii).
     O banda oprita de GARDA (decizie Razvan 14.10) opreste doar banda: dupa confirmarea ca vLLM e liber (/metrics), banda ramane
     incompleta (la incarcare: stare „incomplet” cu motivul si guard_event; la arbitraj: om, fara Claude) si citirea continua.
     Returneaza starea; scrie <banda>/<cititor>/raw.txt + result.json si <plan>/read_<cititor>.json."""
@@ -229,6 +232,7 @@ def run_reader(plan_dir, reader, *, run_id, check_weights=True, check_server=Tru
              'bands': len(doc['bands']), 'done': 0, 'skipped_existing': 0, 'benzi_garda': [], 'status': 'starting'}
     state['weights_sha256'] = verify_weights(cfg) if check_weights else None
     if check_server: verify_server(cfg)
+    if cedare is None and lock: cedare = lambda: 'cedat_e3' if cerere_activa(proto['gpu_lock']) else None
     ctx = gpu_lock(proto['gpu_lock'], run_id) if lock else contextlib.nullcontext({'keep': False})
     with ctx as holder:
         state['status'] = 'running'; save(plan_dir / ('read_%s.json' % reader), state)
@@ -249,10 +253,11 @@ def run_reader(plan_dir, reader, *, run_id, check_weights=True, check_server=Tru
                 state.update(status='interrupted_needs_review', band=band['id'], motiv='rezultat existent incompatibil'); break
             if (out / 'request_started.json').exists():
                 state.update(status='interrupted_needs_review', band=band['id']); break
-            if lock and cerere_activa(proto['gpu_lock']):
+            motiv_cedare = cedare() if cedare is not None else None
+            if motiv_cedare:
                 # E3 (Izometrie) cere GPU-ul (gpu_cedare.py, decizia 19.11.2026): banda anterioara e scrisa complet, nu incepem alta;
                 # gpu.lock se elibereaza la iesire. Reluarea (`citeste` din nou) sare benzile gata. Serverul vLLM il opreste cine l-a pornit.
-                state.update(status='cedat_e3', band=band['id']); break
+                state.update(status=str(motiv_cedare), band=band['id']); break
             data = (plan_dir / band['image']).read_bytes()
             holder['keep'] = True  # GPU-ul e 'ocupat' din momentul cererii pana cand rezultatul complet e scris pe disc
             raw, result = FUNCS[reader](data, out, cfg, proto['deadline_seconds'])

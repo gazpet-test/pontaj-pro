@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Task Scheduler: procesul unic al cozii de citire OCR local (docs/ocrlab/COADA_CITIRE.md, sectiunea Instalare).
+  Inainte de import se inlocuiesc: __UTILIZATOR__ (acelasi cont ca task-ul E3), __PY__ (interpretorul env_mineru),
+  __CLONA__ (clona din care ruleaza serviciul E3; Start in = __CLONA__\scripts), __CONFIG__ (config.json al E3: WSL + fractii VRAM).
+  Fara .ps1/.cmd: task-ul cheama direct python.exe. Iesire 0 = oprire ceruta (nu reporneste); alt cod = repornire dupa 5 min.
+-->
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Coada de citire OCR local (ocr_local coada lucreaza): un singur proces citeste pe rand cererile sesiunilor. E3 are prioritate (gpu.cerere).</Description>
+    <URI>\Gazpet\OCR coada citire</URI>
+  </RegistrationInfo>
+  <Triggers>
+    <BootTrigger>
+      <Enabled>true</Enabled>
+      <Delay>PT3M</Delay>
+    </BootTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>__UTILIZATOR__</UserId>
+      <LogonType>Password</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>7</Priority>
+    <RestartOnFailure>
+      <Interval>PT5M</Interval>
+      <Count>12</Count>
+    </RestartOnFailure>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>__PY__</Command>
+      <Arguments>-B -m ocr_local coada lucreaza --root C:/Users/Public/paw-data/ocr_coada --config __CONFIG__</Arguments>
+      <WorkingDirectory>__CLONA__\scripts</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>

@@ -109,9 +109,12 @@ def process_start(pid):
 
 
 class GpuLock:
-    def __init__(self, path, *, alive=pid_alive, boot=boot_time, clock=time.time, start=process_start):
+    """`detinator` = cine ține lacătul: E3 (implicit) sau coada de citire (`ocr_coada`, coada.py). Fiecare preia
+    DOAR lacătul vechi al propriului deținător (proces mort / repornire); lacătul altuia nu se atinge niciodată."""
+    def __init__(self, path, *, alive=pid_alive, boot=boot_time, clock=time.time, start=process_start,
+                 detinator='e3_serviciu'):
         self.path, self.alive, self.boot, self.clock = pathlib.Path(path), alive, boot, clock
-        self.start = start
+        self.start, self.detinator = start, detinator
         self.token = uuid.uuid4().hex
 
     def claim(self):
@@ -125,7 +128,7 @@ class GpuLock:
                 except OSError:
                     return False
                 if isinstance(old, dict):
-                    if old.get('detinator') != 'e3_serviciu' or old.get('gazda') != socket.gethostname():
+                    if old.get('detinator') != self.detinator or old.get('gazda') != socket.gethostname():
                         return False
                     pid = old.get('pid')
                     actual_start = self.start(pid)
@@ -140,7 +143,7 @@ class GpuLock:
                 self.path.unlink()
             # save = temp + flush/fsync + os.replace; fără fereastră cu lock JSON parțial.
             pending = self.path.with_name(self.path.name + '.pending')
-            save(pending, {'detinator': 'e3_serviciu', 'pid': os.getpid(), 'pornit_la': self.clock(),
+            save(pending, {'detinator': self.detinator, 'pid': os.getpid(), 'pornit_la': self.clock(),
                            'proces_pornit_la': self.start(os.getpid()),
                            'gazda': socket.gethostname(), 'token': self.token})
             try:
@@ -158,7 +161,7 @@ class GpuLock:
         with mutex(str(self.path) + '.coord'):
             try:
                 old = json.loads(self.path.read_text(encoding='utf-8'))
-                if old.get('token') == self.token and old.get('detinator') == 'e3_serviciu':
+                if old.get('token') == self.token and old.get('detinator') == self.detinator:
                     self.path.unlink()
             except FileNotFoundError:
                 pass
