@@ -1,6 +1,6 @@
-# Achiziții: retur la furnizor pe reperele unei comenzi (TKT-2026-0347) — specificație v3
+# Achiziții: retur la furnizor pe reperele unei comenzi (TKT-2026-0347) — specificație v4
 
-Data: 24.11.2026 · Stare: v3 după a doua rundă de review NO-GO (24.11), de aprobat · Varianta aleasă de owner: **A** (retur pe linia de comandă, cu ieșire automată din stoc). Până la livrare se aplică **C**: ieșire manuală din Magazie (`ajustare_minus`) cu motivul „retur furnizor, comanda …”.
+Data: 24.11.2026 · Stare: v4 după a treia rundă de review NO-GO (24.11), de aprobat · Varianta aleasă de owner: **A** (retur pe linia de comandă, cu ieșire automată din stoc). Până la livrare se aplică **C**: ieșire manuală din Magazie (`ajustare_minus`) cu motivul „retur furnizor, comanda …”.
 
 ## 1. De ce
 
@@ -27,7 +27,7 @@ Azi ERP-ul nu are retur nicăieri: nici în Achiziții, nici în Magazie, nici �
 - **Fluxul comenzii (azi):** `draft → in_aprobare → emisa → in_tranzit → ajunsa → receptionata → in_stoc`.
   - „Recepție pe repere” apare doar în `emisa`, `in_tranzit` și `ajunsa`.
   - „Predare parțială în stoc” apare până la `receptionata`.
-- **Triggere pe linii** (sincronizarea cu cererile interne, `trg_cfl_sync_cereri`, și potrivirea automată, `trg_cfl_automatch`) reacționează la cantități. Returul nu trebuie să redeschidă cereri interne deja satisfăcute: din punctul de vedere al cererii, marfa vine oricum, prin înlocuire.
+- **Triggere pe linii** (sincronizarea cu cererile interne, `trg_cfl_sync_cereri`, și potrivirea automată, `trg_cfl_automatch`) reacționează la cantități. Pe producție, `fn_cfl_automatch` setează doar legătura la INSERT, iar `fn_cerere_rollup_status` se uită numai la statusul comenzilor de furnizor, nu la cantități (vezi §3.5).
 
 ## 3. Ce se construiește
 
@@ -45,8 +45,9 @@ Returul o **scade**, iar recepția unei înlocuiri o **crește**. Așa, toate do
 Istoricul cumulat (cât s-a returnat, cât s-a înlocuit, cât s-a anulat) stă **doar** în tabelul `comenzi_furnizor_retururi`, nu în contori pe linie.
 
 Liniile cu `cantitate_primita = NULL`:
-- la primul retur sau la prima recepție incrementală, RPC-ul transformă întâi NULL în valoarea efectivă (`cantitate`), în aceeași tranzacție și sub lock-ul liniei;
-- abia apoi aplică operația.
+- NULL înseamnă „recepție fără repere”. Asta dovedește că marfa a sosit **doar** dacă există o recepție, adică comanda are `receptie_mp_la` sau `receptie_achizitii_la`, statusul e `receptionata` / `in_stoc`, sau `cantitate_intrata_stoc > 0`.
+- În aceste cazuri, la prima operație nouă, RPC-ul transformă NULL în `cantitate`, sub lock-ul liniei.
+- Altfel (comandă emisă, în tranzit, ajunsă fără recepție) returul și anularea sunt refuzate cu „faceți întâi recepția”. Recepția incrementală pornește de la 0.
 
 Reguli, toate verificate sub lock:
 - **Returnabil maxim** = `primita` efectivă. Pe exemplul din review: 100 primite, un retur de 40 lasă 60, iar al doilea retur poate fi de până la 60.
@@ -88,6 +89,25 @@ Așa, returul nu poate duce stocul pe minus. Celelalte căi rămân cum sunt, ia
 
 Ordinea fixă a lock-urilor: linia comenzii (`FOR UPDATE`) → cheia de stoc → rândul de retur, la anulare și înlocuire.
 
+### 3.2b Protecția cantităților liniei, pe toate căile
+
+- Pe `comenzi_furnizor_linii`, coloanele `cantitate_primita` și `cantitate_intrata_stoc` nu mai pot fi scrise direct:
+  - `REVOKE UPDATE (cantitate_primita, cantitate_intrata_stoc)` de la `authenticated` și `anon`;
+  - plus un trigger `BEFORE UPDATE` care refuză orice schimbare a lor dacă nu vine dintr-un RPC al acestui modul (marcaj de tranzacție `set_config('app.cf_cantitati', '1', true)`, pus doar de RPC-uri).
+- Un client vechi, rămas deschis, care încearcă `update({ cantitate_primita })` primește eroare și mesajul „reîncărcați pagina”. Nu se poate suprascrie un retur.
+- Celelalte coloane ale liniei (denumire, preț, termen, observații) rămân editabile ca azi.
+
+### 3.3b Recepția cu transport direct și locația returului
+
+- `finalizeazaReceptieTransport` (intrare în sediu și transfer pe proiect, „transport direct”) trece și el prin `fn_cf_intra_stoc`, cu parametrul `p_transfer_proiect`. Intrarea, transferul și `intrata_stoc += N` se fac într-o singură tranzacție.
+- **Locația returului.** Marfa unei linii poate fi la sediu sau pe proiect, după transfer. Returul primește `p_locatie_tip` / `p_locatie_id`:
+  - fereastra oferă doar locațiile comenzii (sediul și proiectul ei), cu stocul curent din fiecare;
+  - lock-ul (§3.2) se ia pe cheia locației alese.
+- **Datele existente.**
+  - Proba de pe clonă listează liniile din comenzi `in_stoc` primite prin transport direct, care au `intrata_stoc = 0` deși au mișcări `intrare_achizitie` cu `ref_id` = comanda.
+  - Corectura lor (`intrata_stoc` = suma acelor mișcări) e **DML pe date reale** și se aplică doar după preview și „da”, înaintea primului retur pe acele comenzi.
+  - Până atunci, RPC-ul de retur refuză liniile cu mișcări de intrare care nu se potrivesc cu `intrata_stoc` („recepție veche nereconciliată”).
+
 ### 3.3 RPC-uri (`SECURITY DEFINER`, `search_path` fix, dreptul reverificat DUPĂ lock-uri — L01)
 
 Dreptul: achiziții cu drept de creare sau owner. Toate primesc `p_cheie uuid`:
@@ -98,15 +118,16 @@ Dreptul: achiziții cu drept de creare sau owner. Toate primesc `p_cheie uuid`:
 1. **`fn_cf_retur_inregistreaza(p_cheie, p_linie_id, p_cantitate, p_din_stoc NULL, p_motiv, p_pv_path, p_asteapta_inlocuire)`**
    1. Lock pe linie, apoi transformarea NULL → `cantitate`, apoi lock pe stocul liniei, apoi reverificarea dreptului.
    2. Validări: `0 < cantitate ≤ primita`; `din_stoc` (implicit sau dat) în intervalul de la §3.0; stocul ≥ `din_stoc`, altfel refuz cu „în stoc sunt doar X”.
-   3. Mișcarea `retur_furnizor` (−`din_stoc`), apoi `primita −= cantitate` și `intrata_stoc −= din_stoc`, apoi rândul `retur`.
+   3. Dacă `din_stoc > 0`, mișcarea `retur_furnizor` (−`din_stoc`) din locația aleasă (§3.3b). Dacă `din_stoc = 0`, nu se scrie nicio mișcare și `stoc_miscare_id` rămâne NULL. Apoi `primita −= cantitate` și `intrata_stoc −= din_stoc`, apoi rândul `retur`.
 2. **`fn_cf_retur_anuleaza(p_cheie, p_retur_id, p_motiv)`**
    - Se refuză dacă returul e deja anulat sau dacă `cantitate_inlocuita > 0`.
-   - Aceleași lock-uri, apoi mișcarea `retur_furnizor_anulare` (+`din_stoc`), apoi `primita += cantitate`, `intrata_stoc += din_stoc`.
+   - Aceleași lock-uri, apoi mișcarea `retur_furnizor_anulare` (+`din_stoc`, doar dacă `din_stoc > 0`, în aceeași locație ca returul), apoi `primita += cantitate`, `intrata_stoc += din_stoc`.
    - Rândul `anulare`; returul primește `inchis_la` și motivul.
 3. **`fn_cf_receptie_adauga(p_cheie, p_linie_id, p_cantitate_sosita, p_primita_citita)`**: recepția incrementală.
    - Verificare: `primita` curentă = `p_primita_citita`, altfel `valoare_schimbata` (recepția din formular nu mai poate suprascrie un retur).
    - Apoi `primita += N`, iar N acoperă retururile deschise care așteaptă înlocuire, în ordinea vechimii; un retur acoperit integral se închide.
-   - „Recepție pe repere” trimite doar diferența. Când o valoare scade, adică „reper anulat de furnizor = 0”, se folosește aceeași verificare, cu N negativ, dar numai până la `intrata_stoc`; sub ea e refuz, iar pentru asta există returul.
+   - „Recepție pe repere” trimite doar diferența. Când o valoare scade (corectură sau „reper anulat de furnizor = 0”), N e negativ, dar numai până la `intrata_stoc`; sub ea e refuz, iar pentru asta există returul.
+   - **Compensarea la N negativ:** corectura scade întâi `cantitate_inlocuita` pe retururile acoperite de recepții, în ordinea inversă a alocării (cel mai nou întâi). Fiecare retur atins se redeschide (`inchis_la = NULL`), iar `asteapta_inlocuire` revine pe adevărat. Alocările stau într-un jurnal `comenzi_furnizor_retur_alocari` (retur, recepția care a alocat, cantitate), ca inversarea să fie exactă.
 4. **`fn_cf_intra_stoc(p_cheie, p_linie_id, p_cantitate)`**: înlocuiește perechea din client „rezervare + insert” din `intraInStoc`.
    - Lock pe linie; `p_cantitate ≤ primita − intrata_stoc`.
    - Mișcarea `intrare_achizitie`, apoi `intrata_stoc += p_cantitate`.
@@ -159,11 +180,12 @@ Fiecare probă are și un mutant care trebuie să pice: se scoate lock-ul, rever
 3. **Retragerea dreptului** între verificare și scriere, pe fiecare RPC: refuz. Reconcilierea cheii comise de autor merge.
 4. **Idempotență:** aceeași cheie repetată nu are efect dublu, iar o cheie cu alt payload e refuzată.
 5. **Anulare:** o singură dată; refuzată după înlocuire; pune la loc exact `din_stoc`.
-6. **Înlocuire:** parțială, multiplă, peste mai multe retururi, în ordinea vechimii; închiderea fără înlocuire.
+6. **Înlocuire:** parțială, multiplă, peste mai multe retururi, în ordinea vechimii; închiderea fără înlocuire; corectura negativă după o înlocuire redeschide exact returul atins.
+10. **Căi vechi:** un client vechi care scrie direct `cantitate_primita` e refuzat; recepția prin transport direct actualizează `intrata_stoc`; un retur pe o comandă emisă fără recepție e refuzat; un retur doar din marfă neintrată nu scrie mișcare.
 7. **Cererile interne:** statusul cererii legate e identic înainte și după fiecare operație.
 8. **Revenire:**
    - scriptul ia lock pe `comenzi_furnizor_linii` și `comenzi_furnizor_retururi` înaintea verificării;
-   - refuză dacă există retururi, mișcări `retur_furnizor*` sau contori nenuli;
+   - refuză dacă există retururi, alocări sau mișcări `retur_furnizor*`; elimină toate obiectele noi (tabele, trigger-e, RPC-uri, REVOKE-ul pe coloane) și restaurează CHECK-urile și tipurile de mișcare de dinainte;
    - scoate trigger-ul de lock și restaurează varianta din client a `intraInStoc` și a recepției.
 9. **Non-owner:** toate căile rulate și cu un utilizator achiziții fără drept de owner, plus refuzul pentru un utilizator fără drept.
 
