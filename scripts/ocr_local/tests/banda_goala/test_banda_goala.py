@@ -276,15 +276,14 @@ class CaleaLaboratorului(unittest.TestCase):
                 text, st = asambleaza_document(root, 'plan', pagini_native={1: ''})
                 self.assertIn(MARCAJ_GOL % 'p0001_b1', text); self.assertEqual(st['lista_goale_de_verificat'], ['p0001_b1'])
 
-    def test_decizia_omului_banda_goala_lipeste_vecinii(self):
+    def test_decizia_arbitrului_nu_rezolva_banda_goala(self):
         with tempfile.TemporaryDirectory() as root:
             out, (_, items) = self._citeste(root, ALBA)
             dec = [{'id': items[0]['id'], 'item_sha256': items[0]['item_sha256'], 'decizie': 'ales_lighton', 'text': '',
                     'motiv': 'verificat pe imagine: banda e goala', 'e_cantitate': False, 'anomalie_separator': False,
                     'arbitru_model': 'claude-sonnet-5', 'prompt_versiune': 't1'}]
             r = self._reconciliaza(out, dec)
-            self.assertEqual((r['needs_human'], r['text']), (False, 'Cant. 12,5 mc\nTotal 7'))
-            self.assertIn({'type': 'banda_goala_sarita', 'banda': 1}, r['semnale'])
+            self.assertEqual(r['needs_human'], True)  # arbitrul automat nu poate inchide o banda goala: ramane la om
 
     def test_gol_la_unul_text_la_celalalt(self):
         with tempfile.TemporaryDirectory() as root:

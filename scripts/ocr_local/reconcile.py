@@ -49,8 +49,12 @@ def apply_band(raw_a, raw_b, items, decisions):
             if d is None or d['decizie'] != 'ales_lighton': needs_struct = True; break
     else: needs_struct = False
     if needs_struct: return None, True
-    # banda_intreaga (garda / citire incompleta) si banda_goala_de_verificat (iesire goala): decizia pe toata banda, fara ea = om
-    if any(i['tip'] in ('banda_intreaga', 'banda_goala_de_verificat') for i in items):
+    # banda_goala_de_verificat (iesire goala la un cititor): DOAR omul o poate rezolva (review r2 P1). Arbitrul automat nu are
+    # o provenienta umana in schema deciziilor, deci orice decizie a lui e ignorata aici: banda ramane needs_human.
+    if any(i['tip'] == 'banda_goala_de_verificat' for i in items):
+        return None, True
+    # banda_intreaga (garda / citire incompleta): decizia pe toata banda, fara ea = om
+    if any(i['tip'] == 'banda_intreaga' for i in items):
         it = items[0]; d = decisions.get(it['id'])
         if d is None or d['decizie'] == 'needs_human': return None, True
         return render(segments(chosen(it, d))), False
