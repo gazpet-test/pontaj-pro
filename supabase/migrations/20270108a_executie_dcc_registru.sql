@@ -1454,8 +1454,11 @@ BEGIN
       RAISE EXCEPTION 'DCC_CHEI_NECUNOSCUTE: un interval are chei necunoscute' USING ERRCODE = '22023';
     END IF;
     IF jsonb_typeof(e -> 'interval') IS DISTINCT FROM 'string' OR jsonb_typeof(e -> 'limita_inf') IS DISTINCT FROM 'number'
-       OR jsonb_typeof(e -> 'limita_sup') IS DISTINCT FROM 'number'
-       OR (e ->> 'limita_inf')::numeric <> trunc((e ->> 'limita_inf')::numeric) OR (e ->> 'limita_sup')::numeric <> trunc((e ->> 'limita_sup')::numeric) THEN
+       OR jsonb_typeof(e -> 'limita_sup') IS DISTINCT FROM 'number' THEN
+      RAISE EXCEPTION 'DCC_LISTA_INVALIDA: interval cu campuri de alt tip' USING ERRCODE = '22023';
+    END IF;
+    IF (e ->> 'limita_inf')::numeric <> trunc((e ->> 'limita_inf')::numeric) OR (e ->> 'limita_sup')::numeric <> trunc((e ->> 'limita_sup')::numeric)
+       OR abs((e ->> 'limita_inf')::numeric) > 2147483647 OR abs((e ->> 'limita_sup')::numeric) > 2147483647 THEN
       RAISE EXCEPTION 'DCC_LISTA_INVALIDA: interval cu campuri de alt tip' USING ERRCODE = '22023';
     END IF;
     IF public.fn_dcc_interval_canonic(e ->> 'interval') IS NULL THEN
@@ -1997,5 +2000,300 @@ GRANT EXECUTE ON FUNCTION public.fn_dcc_ghid_creeaza(jsonb, uuid), public.fn_dcc
   public.fn_dcc_aloca(bigint, text, text, text, text, text, text, integer, uuid), public.fn_dcc_aloca_manual(bigint, text, text, text, integer, text, text, integer, uuid),
   public.fn_dcc_revizie_noua(bigint, bigint, bigint, text, text, uuid), public.fn_dcc_fila_noua(bigint, integer, text, text, uuid),
   public.fn_dcc_anexa_noua(bigint, text, text, uuid), public.fn_dcc_anuleaza(bigint, bigint, text, uuid), public.fn_dcc_serii_proiect(bigint) TO authenticated;
+
+-- ─── 6. importul istoric, „Copiază pentru Gmail” și „Confirm că am trimis”
+
+-- forma listei de revizii a unui apel (copiat / confirmat), FĂRĂ citiri de date: nevidă, fără NULL, fără dubluri (refuz, nu deduplicare), cel
+-- mult 50 (plafonul Transmittal); forma normalizată = sortată (aceeași mulțime în altă ordine = aceeași intenție). Internă, fără EXECUTE.
+CREATE FUNCTION public.fn_dcc_lista_forma_intern(p_revizii bigint[]) RETURNS bigint[]
+LANGUAGE plpgsql IMMUTABLE SET search_path = public, pg_temp AS $f$
+BEGIN
+  IF p_revizii IS NULL OR cardinality(p_revizii) = 0 THEN RAISE EXCEPTION 'DCC_LISTA_GOALA: lista de revizii e goala' USING ERRCODE = '22023'; END IF;
+  IF array_position(p_revizii, NULL) IS NOT NULL THEN RAISE EXCEPTION 'DCC_LISTA_INVALIDA: lista de revizii are elemente NULL' USING ERRCODE = '22023'; END IF;
+  IF (SELECT count(DISTINCT x) FROM unnest(p_revizii) x) <> cardinality(p_revizii) THEN
+    RAISE EXCEPTION 'DCC_LISTA_DUBLURI: lista de revizii are dubluri' USING ERRCODE = '22023';
+  END IF;
+  IF cardinality(p_revizii) > 50 THEN RAISE EXCEPTION 'DCC_LISTA_PREA_LUNGA: cel mult 50 de revizii pe un mesaj' USING ERRCODE = '22023'; END IF;
+  RETURN (SELECT array_agg(x ORDER BY x) FROM unnest(p_revizii) x);
+END $f$;
+
+-- dreptul pe lista (L09): pe FIECARE id, inexistent sau fără drept de scriere = același 42501; toate pe drept, dar din proiecte DCC diferite =
+-- DCC_PROIECTE_AMESTECATE. Întoarce proiectul DCC comun. Internă, fără EXECUTE.
+CREATE FUNCTION public.fn_dcc_lista_drept_intern(p_lista bigint[]) RETURNS bigint
+LANGUAGE plpgsql STABLE SET search_path = public, pg_temp AS $f$
+DECLARE v_id bigint; v_p bigint; v_proiecte bigint[] := '{}';
+BEGIN
+  FOREACH v_id IN ARRAY p_lista LOOP
+    v_p := NULL;
+    SELECT d.proiect_dcc_id INTO v_p FROM public.dcc_revizii r JOIN public.dcc_documente d ON d.id = r.document_id WHERE r.id = v_id;
+    IF v_p IS NULL OR NOT public.fn_dcc_drept(v_p, 'scriere') THEN RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501'; END IF;
+    IF NOT v_p = ANY (v_proiecte) THEN v_proiecte := v_proiecte || v_p; END IF;
+  END LOOP;
+  IF cardinality(v_proiecte) <> 1 THEN
+    RAISE EXCEPTION 'DCC_PROIECTE_AMESTECATE: reviziile sunt din proiecte DCC diferite' USING ERRCODE = '22023';
+  END IF;
+  RETURN v_proiecte[1];
+END $f$;
+
+-- importul istoric (owner / admin pe proiect / calea serverului): rânduri brute, imuabile, idempotent pe identitatea sursei (proiect, sursa,
+-- sursa_id, pozitie). Lista EXACTĂ de câmpuri admise (orice altă cheie = refuz pe tot lotul, nimic scris, L12); revizia absentă = NULL
+-- (niciodată 0); dublurile din același lot = refuz (altfel ON CONFLICT le-ar înghiți tăcut); un rând existent cu alt conținut = „diferit”
+-- (listat, NU suprascris). Invariantul inserate + identice + diferite = total verificat înaintea rezultatului. Lock-urile: pasul 3.
+CREATE FUNCTION public.fn_dcc_istoric_importa(p_proiect_dcc bigint, p_lot text, p_randuri jsonb, p_cheie uuid) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v_uid uuid := auth.uid(); v_srv boolean := public.fn_dcc_server(); v_lot text := btrim(p_lot); v_hash text; v_r jsonb; e jsonb; v_randuri jsonb;
+  v_n integer; p public.dcc_proiecte; v_id bigint; v_hx text; v_inserate integer := 0; v_identice integer := 0; v_diferite jsonb := '[]'::jsonb;
+  v_chei text[] := ARRAY['sursa', 'sursa_id', 'pozitie', 'valori_originale', 'cod_scris', 'emitent', 'tematica', 'tip', 'limba', 'secventa', 'fila', 'anexa',
+                         'revizie', 'probleme'];
+BEGIN
+  IF v_uid IS NULL AND NOT v_srv THEN RAISE EXCEPTION 'DCC_NEAUTENTIFICAT: autentificare necesara' USING ERRCODE = '42501'; END IF;
+  IF p_cheie IS NULL OR p_proiect_dcc IS NULL THEN RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: proiectul si cheia sunt obligatorii' USING ERRCODE = '22023'; END IF;
+  IF v_lot IS NULL OR v_lot !~ '^[A-Za-z0-9_.-]{1,60}$' THEN RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: lotul are forma [A-Za-z0-9_.-]{1,60}' USING ERRCODE = '22023'; END IF;
+  IF jsonb_typeof(p_randuri) IS DISTINCT FROM 'array' OR jsonb_array_length(p_randuri) = 0 THEN
+    RAISE EXCEPTION 'DCC_LISTA_GOALA: lotul nu are randuri' USING ERRCODE = '22023';
+  END IF;
+  IF jsonb_array_length(p_randuri) > 5000 THEN RAISE EXCEPTION 'DCC_LISTA_PREA_LUNGA: cel mult 5000 de randuri pe lot' USING ERRCODE = '22023'; END IF;
+  FOR e IN SELECT x FROM jsonb_array_elements(p_randuri) x LOOP
+    IF jsonb_typeof(e) IS DISTINCT FROM 'object' THEN RAISE EXCEPTION 'DCC_LISTA_INVALIDA: rand invalid' USING ERRCODE = '22023'; END IF;
+    IF EXISTS (SELECT 1 FROM jsonb_object_keys(e) k WHERE k <> ALL (v_chei)) THEN
+      RAISE EXCEPTION 'DCC_CHEI_NECUNOSCUTE: un rand are chei nepermise (cheile de legare, provenienta si amprenta le pune serverul)' USING ERRCODE = '22023';
+    END IF;
+    IF jsonb_typeof(e -> 'sursa') IS DISTINCT FROM 'string' OR (e ->> 'sursa') NOT IN ('excel_registru', 'mail_trimis', 'mail_primit')
+       OR jsonb_typeof(e -> 'sursa_id') IS DISTINCT FROM 'string' OR btrim(e ->> 'sursa_id') !~ '[^[:space:]]' OR length(btrim(e ->> 'sursa_id')) > 300
+       OR jsonb_typeof(e -> 'valori_originale') IS DISTINCT FROM 'object'
+       OR (e ? 'pozitie' AND CASE WHEN jsonb_typeof(e -> 'pozitie') IS DISTINCT FROM 'number' THEN true
+                                  ELSE (e ->> 'pozitie')::numeric <> trunc((e ->> 'pozitie')::numeric) OR (e ->> 'pozitie')::numeric < 1
+                                       OR (e ->> 'pozitie')::numeric > 2147483647 END)
+       OR coalesce(jsonb_typeof(e -> 'cod_scris'), 'null') NOT IN ('string', 'null') OR length(e ->> 'cod_scris') > 200
+       OR coalesce(jsonb_typeof(e -> 'emitent'), 'null') NOT IN ('string', 'null') OR (e ->> 'emitent') !~ '^[A-Z]{3}$'
+       OR coalesce(jsonb_typeof(e -> 'tematica'), 'null') NOT IN ('string', 'null') OR (e ->> 'tematica') !~ '^[A-Z0-9]{2,4}$'
+       OR coalesce(jsonb_typeof(e -> 'tip'), 'null') NOT IN ('string', 'null') OR (e ->> 'tip') !~ '^[A-Z]{2,4}$'
+       OR coalesce(jsonb_typeof(e -> 'limba'), 'null') NOT IN ('string', 'null') OR (e ->> 'limba') !~ '^(RO|EN|BI)$' THEN
+      RAISE EXCEPTION 'DCC_LISTA_INVALIDA: rand cu campuri lipsa sau de alt tip' USING ERRCODE = '22023';
+    END IF;
+    IF (SELECT bool_or(CASE WHEN jsonb_typeof(e -> k) = 'null' THEN false
+                            WHEN jsonb_typeof(e -> k) <> 'number' THEN true
+                            ELSE (e ->> k)::numeric <> trunc((e ->> k)::numeric)
+                                 OR (e ->> k)::numeric < CASE WHEN k = 'revizie' THEN 0 ELSE 1 END
+                                 OR (e ->> k)::numeric > CASE k WHEN 'secventa' THEN 99999 WHEN 'revizie' THEN 2147483647 ELSE 999 END END)
+          FROM unnest(ARRAY['secventa', 'fila', 'anexa', 'revizie']) k WHERE e ? k) THEN
+      RAISE EXCEPTION 'DCC_LISTA_INVALIDA: secventa / fila / anexa / revizie trebuie sa fie intregi in limite sau null' USING ERRCODE = '22023';
+    END IF;
+    IF e ? 'probleme' AND (jsonb_typeof(e -> 'probleme') IS DISTINCT FROM 'array'
+         OR EXISTS (SELECT 1 FROM jsonb_array_elements(e -> 'probleme') q
+                     WHERE jsonb_typeof(q) IS DISTINCT FROM 'string'
+                        OR (q #>> '{}') NOT IN ('dublura', 'forma_nestandard', 'revizie_necunoscuta', 'tematica_gresita', 'cod_nerecunoscut', 'conflict'))
+         OR (SELECT count(*) <> count(DISTINCT q) FROM jsonb_array_elements(e -> 'probleme') q)) THEN
+      RAISE EXCEPTION 'DCC_LISTA_INVALIDA: problemele sunt din lista, fara dubluri' USING ERRCODE = '22023';
+    END IF;
+  END LOOP;
+  -- forma canonică a fiecărui rând (toate câmpurile, cu valorile implicite) și lotul sortat după identitate
+  SELECT jsonb_agg(c ORDER BY c ->> 'sursa', c ->> 'sursa_id', (c ->> 'pozitie')::integer), count(*) - count(DISTINCT (c ->> 'sursa', c ->> 'sursa_id', c ->> 'pozitie'))
+    INTO v_randuri, v_n
+    FROM (SELECT jsonb_build_object(
+                   'sursa', x ->> 'sursa', 'sursa_id', btrim(x ->> 'sursa_id'), 'pozitie', coalesce((x ->> 'pozitie')::integer, 1),
+                   'valori_originale', x -> 'valori_originale', 'cod_scris', x ->> 'cod_scris', 'emitent', x ->> 'emitent', 'tematica', x ->> 'tematica',
+                   'tip', x ->> 'tip', 'secventa', (x ->> 'secventa')::integer, 'fila', (x ->> 'fila')::integer, 'anexa', (x ->> 'anexa')::integer,
+                   'revizie', (x ->> 'revizie')::integer, 'limba', x ->> 'limba',
+                   'probleme', coalesce((SELECT jsonb_agg(q ORDER BY q) FROM jsonb_array_elements_text(x -> 'probleme') q), '[]'::jsonb)) AS c
+            FROM jsonb_array_elements(p_randuri) x) z;
+  IF v_n > 0 THEN RAISE EXCEPTION 'DCC_LOT_DUBLURI: doua randuri cu aceeasi identitate (sursa, sursa_id, pozitie) in lot' USING ERRCODE = '22023'; END IF;
+  v_hash := public.fn_dcc_hash_parametri('istoric_importa', jsonb_build_object('proiect', p_proiect_dcc, 'lot', v_lot, 'randuri', v_randuri));
+  v_r := public.fn_dcc_intentie_reia(p_cheie, 'istoric_importa', v_hash);
+  IF v_r IS NOT NULL THEN RETURN v_r; END IF;
+  IF NOT v_srv AND NOT public.fn_dcc_drept(p_proiect_dcc, 'admin') THEN RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501'; END IF;
+  v_r := public.fn_dcc_intentie_revendica(p_cheie, 'istoric_importa', v_hash);
+  IF v_r IS NOT NULL THEN RETURN v_r; END IF;
+  SELECT * INTO p FROM public.dcc_proiecte x WHERE x.id = p_proiect_dcc FOR SHARE;
+  IF NOT FOUND OR (NOT v_srv AND NOT public.fn_dcc_drept(p_proiect_dcc, 'admin')) THEN
+    RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501';
+  END IF;
+  FOR e IN SELECT x FROM jsonb_array_elements(v_randuri) x LOOP
+    v_id := NULL;
+    INSERT INTO public.dcc_istoric_aparitii (contract_id, proiect_dcc_id, sursa, sursa_id, pozitie, lot_import, valori_originale, cod_scris, emitent, tematica, tip,
+                                             secventa, fila, anexa, revizie, limba, probleme, continut_hash, importat_prin)
+    VALUES (p.contract_id, p.id, e ->> 'sursa', e ->> 'sursa_id', (e ->> 'pozitie')::integer, v_lot, e -> 'valori_originale', e ->> 'cod_scris', e ->> 'emitent',
+            e ->> 'tematica', e ->> 'tip', (e ->> 'secventa')::integer, (e ->> 'fila')::integer, (e ->> 'anexa')::integer, (e ->> 'revizie')::integer, e ->> 'limba',
+            ARRAY(SELECT jsonb_array_elements_text(e -> 'probleme')), repeat('0', 64), 'server')
+    ON CONFLICT ON CONSTRAINT dcc_istoric_sursa_uq DO NOTHING
+    RETURNING id INTO v_id;
+    IF v_id IS NOT NULL THEN
+      v_inserate := v_inserate + 1;
+    ELSE
+      SELECT h.continut_hash INTO v_hx FROM public.dcc_istoric_aparitii h
+       WHERE h.proiect_dcc_id = p.id AND h.sursa = e ->> 'sursa' AND h.sursa_id = e ->> 'sursa_id' AND h.pozitie = (e ->> 'pozitie')::integer;
+      IF v_hx = public.fn_dcc_istoric_hash(e ->> 'sursa', e ->> 'sursa_id', (e ->> 'pozitie')::integer, e -> 'valori_originale', e ->> 'cod_scris', e ->> 'emitent',
+                                           e ->> 'tematica', e ->> 'tip', (e ->> 'secventa')::integer, (e ->> 'fila')::integer, (e ->> 'anexa')::integer,
+                                           (e ->> 'revizie')::integer, e ->> 'limba', ARRAY(SELECT jsonb_array_elements_text(e -> 'probleme'))) THEN
+        v_identice := v_identice + 1;
+      ELSE
+        v_diferite := v_diferite || jsonb_build_object('sursa', e ->> 'sursa', 'sursa_id', e ->> 'sursa_id', 'pozitie', (e ->> 'pozitie')::integer);
+      END IF;
+    END IF;
+  END LOOP;
+  -- invariantul de contabilizare (L12): nimic nu dispare tăcut
+  IF v_inserate + v_identice + jsonb_array_length(v_diferite) <> jsonb_array_length(v_randuri) THEN
+    RAISE EXCEPTION 'DCC_IMPORT_NECONTABILIZAT: % + % + % <> %', v_inserate, v_identice, jsonb_array_length(v_diferite), jsonb_array_length(v_randuri) USING ERRCODE = 'P0001';
+  END IF;
+  v_r := jsonb_build_object('inserate', v_inserate, 'identice', v_identice, 'diferite', v_diferite, 'total', jsonb_array_length(v_randuri));
+  PERFORM public.fn_dcc_intentie_incheie(p_cheie, v_r);
+  RETURN v_r || '{"reluat": false}'::jsonb;
+END $f$;
+
+-- „Copiază pentru Gmail” (copierea NU dovedește expedierea): snapshotul exact copiat (fără BCC) + reviziile -> copiata_pentru_gmail. To = exact
+-- adresa DCC a proiectului; fiecare CC din lista albă (cc_lista + valorile din cc_implicit). Lock-urile: 3 (proiectul FOR SHARE) -> 6 (documentele
+-- reviziilor FOR UPDATE, ORDER BY id) -> 8 (snapshotul).
+CREATE FUNCTION public.fn_dcc_marcheaza_copiat(p_revizii bigint[], p_snapshot jsonb, p_cheie uuid) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v_uid uuid := auth.uid(); v_lista bigint[]; v_proiect bigint; v_to text[]; v_cc text[]; v_subiect text; v_corp text; v_linkuri text[]; v_manifest jsonb;
+  v_n integer; v_hash text; v_r jsonb; p public.dcc_proiecte; d record; rv record; v_sid bigint; v_shash text; v_rev jsonb := '[]'::jsonb; v_alb text[];
+BEGIN
+  IF v_uid IS NULL THEN RAISE EXCEPTION 'DCC_NEAUTENTIFICAT: autentificare necesara' USING ERRCODE = '42501'; END IF;
+  IF p_cheie IS NULL THEN RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: cheia de intentie lipseste' USING ERRCODE = '22023'; END IF;
+  v_lista := public.fn_dcc_lista_forma_intern(p_revizii);
+  IF jsonb_typeof(p_snapshot) IS DISTINCT FROM 'object'
+     OR (SELECT array_agg(k ORDER BY k) FROM jsonb_object_keys(p_snapshot) k) IS DISTINCT FROM ARRAY['cc', 'corp', 'linkuri', 'manifest', 'subiect', 'to'] THEN
+    RAISE EXCEPTION 'DCC_CHEI_NECUNOSCUTE: snapshotul are exact cheile to, cc, subiect, corp, linkuri, manifest (fara bcc)' USING ERRCODE = '22023';
+  END IF;
+  IF jsonb_typeof(p_snapshot -> 'to') IS DISTINCT FROM 'array' OR jsonb_typeof(p_snapshot -> 'cc') IS DISTINCT FROM 'array'
+     OR jsonb_typeof(p_snapshot -> 'linkuri') IS DISTINCT FROM 'array' OR jsonb_typeof(p_snapshot -> 'manifest') IS DISTINCT FROM 'array'
+     OR jsonb_typeof(p_snapshot -> 'subiect') IS DISTINCT FROM 'string' OR jsonb_typeof(p_snapshot -> 'corp') IS DISTINCT FROM 'string'
+     OR EXISTS (SELECT 1 FROM jsonb_array_elements(p_snapshot -> 'to') x WHERE jsonb_typeof(x) IS DISTINCT FROM 'string')
+     OR EXISTS (SELECT 1 FROM jsonb_array_elements(p_snapshot -> 'cc') x WHERE jsonb_typeof(x) IS DISTINCT FROM 'string')
+     OR EXISTS (SELECT 1 FROM jsonb_array_elements(p_snapshot -> 'linkuri') x WHERE jsonb_typeof(x) IS DISTINCT FROM 'string')
+     OR EXISTS (SELECT 1 FROM jsonb_array_elements(p_snapshot -> 'manifest') m
+                 WHERE jsonb_typeof(m) IS DISTINCT FROM 'object'
+                    OR (SELECT array_agg(k ORDER BY k) FROM jsonb_object_keys(m) k) IS DISTINCT FROM ARRAY['marime', 'nume', 'sha256']
+                    OR jsonb_typeof(m -> 'nume') IS DISTINCT FROM 'string' OR btrim(m ->> 'nume') = ''
+                    OR CASE WHEN jsonb_typeof(m -> 'marime') IS DISTINCT FROM 'number' THEN true
+                            ELSE (m ->> 'marime')::numeric <> trunc((m ->> 'marime')::numeric) OR (m ->> 'marime')::numeric < 0
+                                 OR (m ->> 'marime')::numeric > 9223372036854775807 END
+                    OR jsonb_typeof(m -> 'sha256') IS DISTINCT FROM 'string' OR (m ->> 'sha256') !~ '^[0-9a-f]{64}$') THEN
+    RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: snapshot cu campuri de alt tip (manifest = {nume, marime, sha256})' USING ERRCODE = '22023';
+  END IF;
+  -- normalizarea: to / cc cu litere mici, tăiate (cc sortat, dublurile refuzate), linkurile în ordinea dată, manifestul sortat după nume (nume unic)
+  SELECT array_agg(lower(btrim(x)) ORDER BY o) INTO v_to FROM jsonb_array_elements_text(p_snapshot -> 'to') WITH ORDINALITY a(x, o);
+  SELECT array_agg(c ORDER BY c), count(*) - count(DISTINCT c) INTO v_cc, v_n FROM (SELECT lower(btrim(x)) AS c FROM jsonb_array_elements_text(p_snapshot -> 'cc') x) z;
+  IF v_n > 0 THEN RAISE EXCEPTION 'DCC_LISTA_DUBLURI: adrese CC dublate' USING ERRCODE = '22023'; END IF;
+  v_cc := coalesce(v_cc, '{}'::text[]);
+  v_subiect := nullif(btrim(p_snapshot ->> 'subiect'), '');
+  IF v_subiect IS NULL THEN RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: subiectul e obligatoriu' USING ERRCODE = '22023'; END IF;
+  v_corp := p_snapshot ->> 'corp';
+  SELECT coalesce(array_agg(x ORDER BY o), '{}'::text[]) INTO v_linkuri FROM jsonb_array_elements_text(p_snapshot -> 'linkuri') WITH ORDINALITY a(x, o);
+  SELECT coalesce(jsonb_agg(jsonb_build_object('nume', btrim(m ->> 'nume'), 'marime', (m ->> 'marime')::bigint, 'sha256', m ->> 'sha256') ORDER BY btrim(m ->> 'nume')), '[]'::jsonb),
+         count(*) - count(DISTINCT btrim(m ->> 'nume'))
+    INTO v_manifest, v_n FROM jsonb_array_elements(p_snapshot -> 'manifest') m;
+  IF v_n > 0 THEN RAISE EXCEPTION 'DCC_LISTA_DUBLURI: fisiere cu acelasi nume in manifest' USING ERRCODE = '22023'; END IF;
+  v_hash := public.fn_dcc_hash_parametri('marcheaza_copiat', jsonb_build_object('revizii', to_jsonb(v_lista), 'to', to_jsonb(v_to), 'cc', to_jsonb(v_cc), 'subiect', v_subiect,
+    'corp', v_corp, 'linkuri', to_jsonb(v_linkuri), 'manifest', v_manifest));
+  v_r := public.fn_dcc_intentie_reia(p_cheie, 'marcheaza_copiat', v_hash);
+  IF v_r IS NOT NULL THEN RETURN v_r; END IF;
+  v_proiect := public.fn_dcc_lista_drept_intern(v_lista);
+  v_r := public.fn_dcc_intentie_revendica(p_cheie, 'marcheaza_copiat', v_hash);
+  IF v_r IS NOT NULL THEN RETURN v_r; END IF;
+  -- lock-urile: 3 -> 6 (documentele, în ordinea id-urilor)
+  SELECT * INTO p FROM public.dcc_proiecte x WHERE x.id = v_proiect FOR SHARE;
+  FOR d IN SELECT x.id, x.stare FROM public.dcc_documente x WHERE x.id IN (SELECT r.document_id FROM public.dcc_revizii r WHERE r.id = ANY (v_lista))
+            ORDER BY x.id FOR UPDATE LOOP
+    -- reverificarea după lock: starea fiecărui document
+    IF d.stare = 'anulat' THEN RAISE EXCEPTION 'DCC_DOCUMENT_ANULAT: o revizie e a unui document anulat' USING ERRCODE = 'P0001'; END IF;
+  END LOOP;
+  -- reverificarea dreptului după lock, pe fiecare revizie
+  IF public.fn_dcc_lista_drept_intern(v_lista) IS DISTINCT FROM v_proiect THEN
+    RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501';
+  END IF;
+  FOR rv IN SELECT r.id, r.stare_transport FROM public.dcc_revizii r WHERE r.id = ANY (v_lista) ORDER BY r.id LOOP
+    IF public.fn_dcc_tranzitie_permisa(rv.stare_transport, 'copiata_pentru_gmail') IS NOT TRUE THEN
+      RAISE EXCEPTION 'DCC_TRANZITIE_NEPERMISA: % -> copiata_pentru_gmail', rv.stare_transport USING ERRCODE = 'P0001';
+    END IF;
+  END LOOP;
+  IF p.adresa_dcc IS NULL OR v_to IS DISTINCT FROM ARRAY[p.adresa_dcc] THEN
+    RAISE EXCEPTION 'DCC_TO_DIFERIT: destinatarul e exact adresa DCC a proiectului' USING ERRCODE = '22023';
+  END IF;
+  SELECT coalesce(array_agg(DISTINCT lower(btrim(x))), '{}'::text[]) INTO v_alb
+    FROM (SELECT unnest(p.cc_lista) AS x
+          UNION ALL SELECT jsonb_array_elements_text(CASE WHEN jsonb_typeof(e.value) = 'array' THEN e.value ELSE '[]'::jsonb END) FROM jsonb_each(p.cc_implicit) e) z;
+  IF NOT (v_cc <@ v_alb) THEN RAISE EXCEPTION 'DCC_CC_NEPERMIS: o adresa CC nu e in lista alba a proiectului' USING ERRCODE = '22023'; END IF;
+  INSERT INTO public.dcc_snapshoturi (contract_id, proiect_dcc_id, tip, from_adresa, to_lista, cc_lista, subiect, corp, linkuri, manifest, hash, aprobat_de)
+  VALUES (p.contract_id, p.id, 'copiat_gmail', NULL, v_to, v_cc, v_subiect, v_corp, v_linkuri, v_manifest, repeat('0', 64), v_uid)
+  RETURNING id, hash INTO v_sid, v_shash;
+  FOR rv IN SELECT r.id, r.stare_transport FROM public.dcc_revizii r WHERE r.id = ANY (v_lista) ORDER BY r.id LOOP
+    INSERT INTO public.dcc_snapshot_revizii (snapshot_id, revizie_id) VALUES (v_sid, rv.id);
+    UPDATE public.dcc_revizii r SET stare_transport = 'copiata_pentru_gmail' WHERE r.id = rv.id;
+    v_rev := v_rev || jsonb_build_object('revizie_id', rv.id, 'stare_anterioara', rv.stare_transport, 'stare', 'copiata_pentru_gmail');
+  END LOOP;
+  v_r := jsonb_build_object('snapshot_id', v_sid, 'hash', v_shash, 'revizii', v_rev);
+  PERFORM public.fn_dcc_intentie_incheie(p_cheie, v_r);
+  RETURN v_r || '{"reluat": false}'::jsonb;
+END $f$;
+
+-- „Confirm că am trimis” (fără căsuță conectată): UN mesaj manual (toate ID-urile NULL, dovezi incomplete — nicio valoare inventată) + câte o
+-- legătură manuală confirmată + reviziile -> trimisa_manual_neverificata (devine „confirmată” doar cu o dovadă, în B). Lock-urile: 3 -> 6 -> 8.
+CREATE FUNCTION public.fn_dcc_confirma_trimis_manual(p_revizii bigint[], p_trimis_la timestamptz, p_casuta_declarata text, p_subiect text, p_snapshot bigint,
+                                                     p_cheie uuid) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v_uid uuid := auth.uid(); v_casuta text := nullif(btrim(p_casuta_declarata), ''); v_subiect text := nullif(btrim(p_subiect), ''); v_lista bigint[];
+  v_proiect bigint; v_hash text; v_r jsonb; p public.dcc_proiecte; d record; rv record; v_snap public.dcc_snapshoturi; v_mid bigint; v_lid bigint;
+  v_leg jsonb := '[]'::jsonb; v_rev jsonb := '[]'::jsonb;
+BEGIN
+  IF v_uid IS NULL THEN RAISE EXCEPTION 'DCC_NEAUTENTIFICAT: autentificare necesara' USING ERRCODE = '42501'; END IF;
+  IF p_cheie IS NULL OR p_trimis_la IS NULL THEN RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: data trimiterii si cheia sunt obligatorii' USING ERRCODE = '22023'; END IF;
+  IF v_casuta IS NULL OR length(v_casuta) > 300 THEN
+    RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: casuta din care s-a trimis se declara (text, max 300)' USING ERRCODE = '22023';
+  END IF;
+  IF p_trimis_la > now() + interval '5 minutes' THEN RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: data trimiterii e in viitor' USING ERRCODE = '22023'; END IF;
+  v_lista := public.fn_dcc_lista_forma_intern(p_revizii);
+  v_hash := public.fn_dcc_hash_parametri('confirma_trimis_manual', jsonb_build_object('revizii', to_jsonb(v_lista),
+    'trimis_la', to_char(p_trimis_la AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US'), 'casuta', v_casuta, 'subiect', v_subiect, 'snapshot', p_snapshot));
+  v_r := public.fn_dcc_intentie_reia(p_cheie, 'confirma_trimis_manual', v_hash);
+  IF v_r IS NOT NULL THEN RETURN v_r; END IF;
+  v_proiect := public.fn_dcc_lista_drept_intern(v_lista);
+  IF p_snapshot IS NOT NULL THEN
+    SELECT * INTO v_snap FROM public.dcc_snapshoturi s WHERE s.id = p_snapshot;
+    IF NOT FOUND OR v_snap.proiect_dcc_id IS DISTINCT FROM v_proiect OR NOT public.fn_dcc_drept(v_snap.proiect_dcc_id, 'scriere') THEN
+      RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501';
+    END IF;
+    IF (SELECT array_agg(sr.revizie_id ORDER BY sr.revizie_id) FROM public.dcc_snapshot_revizii sr WHERE sr.snapshot_id = p_snapshot) IS DISTINCT FROM v_lista THEN
+      RAISE EXCEPTION 'DCC_SNAPSHOT_ALTE_REVIZII: snapshotul are alte revizii decat confirmarea' USING ERRCODE = '22023';
+    END IF;
+  END IF;
+  v_r := public.fn_dcc_intentie_revendica(p_cheie, 'confirma_trimis_manual', v_hash);
+  IF v_r IS NOT NULL THEN RETURN v_r; END IF;
+  SELECT * INTO p FROM public.dcc_proiecte x WHERE x.id = v_proiect FOR SHARE;
+  FOR d IN SELECT x.id, x.stare FROM public.dcc_documente x WHERE x.id IN (SELECT r.document_id FROM public.dcc_revizii r WHERE r.id = ANY (v_lista))
+            ORDER BY x.id FOR UPDATE LOOP
+    IF d.stare = 'anulat' THEN RAISE EXCEPTION 'DCC_DOCUMENT_ANULAT: o revizie e a unui document anulat' USING ERRCODE = 'P0001'; END IF;
+  END LOOP;
+  -- reverificarea dreptului după lock, pe fiecare revizie
+  IF public.fn_dcc_lista_drept_intern(v_lista) IS DISTINCT FROM v_proiect THEN
+    RAISE EXCEPTION 'DCC_FARA_DREPT: operatia nu e permisa' USING ERRCODE = '42501';
+  END IF;
+  FOR rv IN SELECT r.id, r.stare_transport, r.creat_la FROM public.dcc_revizii r WHERE r.id = ANY (v_lista) ORDER BY r.id LOOP
+    IF public.fn_dcc_tranzitie_permisa(rv.stare_transport, 'trimisa_manual_neverificata') IS NOT TRUE THEN
+      RAISE EXCEPTION 'DCC_TRANZITIE_NEPERMISA: % -> trimisa_manual_neverificata', rv.stare_transport USING ERRCODE = 'P0001';
+    END IF;
+    IF p_trimis_la < rv.creat_la THEN RAISE EXCEPTION 'DCC_PARAMETRU_INVALID: data trimiterii e inaintea alocarii reviziei' USING ERRCODE = '22023'; END IF;
+  END LOOP;
+  INSERT INTO public.dcc_mesaje (contract_id, proiect_dcc_id, directie, sursa, casuta_id, casuta_declarata, rfc_message_id, gmail_message_id, gmail_thread_id,
+                                 subiect_original, data_mesaj, snapshot_id, dovezi_complete, creat_de)
+  VALUES (p.contract_id, p.id, 'trimis', 'manual_declarat', NULL, v_casuta, NULL, NULL, NULL, v_subiect, p_trimis_la, p_snapshot, false, v_uid)
+  RETURNING id INTO v_mid;
+  FOR rv IN SELECT r.id, r.stare_transport FROM public.dcc_revizii r WHERE r.id = ANY (v_lista) ORDER BY r.id LOOP
+    INSERT INTO public.dcc_legaturi (mesaj_id, revizie_id, metoda, dovada, stare, autor, confirmat_de, confirmat_la)
+    VALUES (v_mid, rv.id, 'manual', jsonb_build_object('declarat_de_om', true), 'confirmata', v_uid, v_uid, now()) RETURNING id INTO v_lid;
+    UPDATE public.dcc_revizii r SET stare_transport = 'trimisa_manual_neverificata' WHERE r.id = rv.id;
+    v_leg := v_leg || to_jsonb(v_lid);
+    v_rev := v_rev || jsonb_build_object('revizie_id', rv.id, 'stare_anterioara', rv.stare_transport, 'stare', 'trimisa_manual_neverificata');
+  END LOOP;
+  v_r := jsonb_build_object('mesaj_id', v_mid, 'legaturi', v_leg, 'revizii', v_rev);
+  PERFORM public.fn_dcc_intentie_incheie(p_cheie, v_r);
+  RETURN v_r || '{"reluat": false}'::jsonb;
+END $f$;
+
+REVOKE ALL ON FUNCTION public.fn_dcc_lista_forma_intern(bigint[]), public.fn_dcc_lista_drept_intern(bigint[]), public.fn_dcc_istoric_importa(bigint, text, jsonb, uuid),
+  public.fn_dcc_marcheaza_copiat(bigint[], jsonb, uuid), public.fn_dcc_confirma_trimis_manual(bigint[], timestamptz, text, text, bigint, uuid)
+  FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_dcc_istoric_importa(bigint, text, jsonb, uuid), public.fn_dcc_marcheaza_copiat(bigint[], jsonb, uuid),
+  public.fn_dcc_confirma_trimis_manual(bigint[], timestamptz, text, text, bigint, uuid) TO authenticated;
 
 DROP FUNCTION pg_temp.lant_20270108a(text);
