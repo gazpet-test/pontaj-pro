@@ -1,6 +1,6 @@
-# Achiziții: retur la furnizor pe reperele unei comenzi (TKT-2026-0347) — specificație v6
+# Achiziții: retur la furnizor pe reperele unei comenzi (TKT-2026-0347) — specificație v7
 
-Data: 24.11.2026 · Stare: v6 după a cincea rundă de review NO-GO (24.11), de aprobat · Varianta aleasă de owner: **A** (retur pe linia de comandă, cu ieșire automată din stoc). Până la livrare se aplică **C**: ieșire manuală din Magazie (`ajustare_minus`) cu motivul „retur furnizor, comanda …”.
+Data: 24.11.2026 · Stare: v7 după a șasea rundă de review NO-GO (24.11), de aprobat · Varianta aleasă de owner: **A** (retur pe linia de comandă, cu ieșire automată din stoc). Până la livrare se aplică **C**: ieșire manuală din Magazie (`ajustare_minus`) cu motivul „retur furnizor, comanda …”.
 
 ## 1. De ce
 
@@ -143,7 +143,14 @@ Dreptul: achiziții cu drept de creare sau owner. Toate primesc `p_cheie uuid`:
    - Verificare: `primita` curentă = `p_primita_citita`, altfel `valoare_schimbata` (recepția din formular nu mai poate suprascrie un retur).
    - Apoi `primita += N`, iar N acoperă retururile deschise care așteaptă înlocuire, în ordinea vechimii; un retur acoperit integral se închide.
    - „Recepție pe repere” trimite doar diferența. Când o valoare scade (corectură sau „reper anulat de furnizor = 0”), N e negativ, dar numai până la `intrata_stoc`; sub ea e refuz, iar pentru asta există returul.
-   - **Compensarea la N negativ:** corectura scade întâi `cantitate_inlocuita` pe retururile acoperite de recepții, în ordinea inversă a alocării (cel mai nou întâi). Retururile închise prin acoperire (`acoperit`) se redeschid, iar `asteapta_inlocuire` revine pe adevărat. La cele închise prin renunțare, partea renunțată rămâne renunțată: „de înlocuit” = `cantitate − cantitate_inlocuita − cantitate_renuntata`, deci reapare doar partea care fusese acoperită de recepția corectată. Returul rămâne `renuntat` dacă acel rest e 0; altfel se redeschide doar pentru rest. Alocările stau într-un jurnal `comenzi_furnizor_retur_alocari` (retur, recepția care a alocat, cantitate), ca inversarea să fie exactă.
+   - **Jurnalul recepțiilor.** Fiecare recepție pozitivă scrie un rând în `comenzi_furnizor_receptii`: linia, cantitatea, momentul și partea alocată retururilor.
+     - Alocările (recepție → retur, cantitate) stau în `comenzi_furnizor_retur_alocari`.
+     - Partea nealocată a unei recepții = cantitatea − alocările ei − ce s-a corectat deja din ea.
+   - **Compensarea la N negativ** inversează recepțiile **cronologic, de la cea mai nouă**. Din fiecare recepție, corectura consumă întâi partea ei nealocată, apoi alocările ei, de la cea mai nouă.
+     - Se inversează numai alocările recepțiilor atinse de corectură. O înlocuire făcută de o recepție mai veche, neatinsă, rămâne acoperită.
+     - Pe exemplul din review: recepție 40, retur 20, înlocuire 20, recepție greșită de 60, corectura −60. Corectura consumă cele 60 nealocate ale ultimei recepții, iar returul rămâne acoperit.
+     - Retururile ale căror alocări sunt inversate: cele închise prin acoperire se redeschid, iar `asteapta_inlocuire` revine pe adevărat.
+     - La retururile închise prin renunțare, partea renunțată rămâne renunțată: „de înlocuit” = `cantitate − cantitate_inlocuita − cantitate_renuntata`, deci reapare doar partea acoperită de alocarea inversată. Dacă restul e 0, returul rămâne `renuntat`; altfel se redeschide doar pentru rest.
 4. **`fn_cf_intra_stoc(p_cheie, p_linie_id, p_cantitate)`**: înlocuiește perechea din client „rezervare + insert” din `intraInStoc`.
    - Lock pe linie; `p_cantitate ≤ primita − intrata_stoc`.
    - Mișcarea `intrare_achizitie`, apoi `intrata_stoc += p_cantitate`.
@@ -198,6 +205,7 @@ Fiecare probă are și un mutant care trebuie să pice: se scoate lock-ul, rever
 5. **Anulare:** o singură dată; refuzată după înlocuire; pune la loc exact `din_stoc`.
 6. **Înlocuire:** parțială, multiplă, peste mai multe retururi, în ordinea vechimii; închiderea fără înlocuire; corectura negativă după o înlocuire redeschide exact returul atins.
 11. **Ștergeri și moștenire:** pe o linie ambiguă nereconciliată (30 + 70, mișcări 100, contori 0), predarea în stoc, transportul direct și corectura negativă sunt refuzate, iar stocul rămâne 100, nu 200; după reconcilierea manuală, toate merg. Apoi: `deleteStoc` concurent cu un retur se serializează; ștergerea mișcărilor de achiziție / retur e refuzată; o linie ambiguă (două linii cu aceeași denumire și UM) rămâne nereconciliată și refuză returul până la reconcilierea manuală; un retur după un alt retur pe o linie reconciliată merge.
+13. **Corectura cronologică:** recepție 40, retur 20, înlocuire 20, recepție greșită 60, corectura −60: returul rămâne acoperit și „de înlocuit” = 0; o corectură −70 consumă 60 nealocate + 10 din înlocuire și redeschide returul pentru 10.
 12. **Închideri:** retur 40, înlocuire 10, renunțare la 30, apoi corectura recepției de 10 la 0: „de înlocuit” = 10, nu 40.
 10. **Căi vechi:** un client vechi care scrie direct `cantitate_primita` e refuzat; recepția prin transport direct actualizează `intrata_stoc`; un retur pe o comandă emisă fără recepție e refuzat; un retur doar din marfă neintrată nu scrie mișcare.
 7. **Cererile interne:** statusul cererii legate e identic înainte și după fiecare operație.
