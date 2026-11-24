@@ -18,6 +18,7 @@ import { GbeTabel } from './GbeEvidenta.jsx'
 import GarantiiRegistru from './GarantiiRegistru.jsx'
 import AtaseazaPdfFacturi from './AtaseazaPdfFacturi.jsx'
 import { norm } from './lib/diacritice.js'
+import { grupeazaSlFaraFactura, sorteazaCronologic, decidePrecompletare } from './financiarSlGrupare.js'
 import * as XLSX from 'xlsx-js-style'
 
 const G = {
@@ -198,8 +199,11 @@ function buildInvoiceHTML(f) {
 // ===========================================================================
 // MODAL FACTURĂ — creare / editare
 // ===========================================================================
-function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profileId, onClose, onSaved, showToast }) {
+function FacturaModal({ item, proiectDefault, slDefault, grupDefault, beneficiariLista, profileId, onClose, onSaved, showToast }) {
   const isNew = !item?.id
+  // TKT-2026-0363: grupDefault = { proiect_id, serie, nr, canonic, sl:[...] } — mai multe SL cu același nr. de factură
+  // scris pe ele → o singură factură, cu toate SL-urile preselectate (ordine cronologică)
+  const grupSL = isNew && grupDefault && Array.isArray(grupDefault.sl) && grupDefault.sl.length > 0 ? grupDefault : null
   const [form, setForm] = useState({
     serie:       item?.serie || 'GAZ',
     nr:          item?.nr || '',
@@ -220,8 +224,8 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
     delegat_nume: item?.delegat_nume || 'TRUSU RAZVAN MIHAIL',
     delegat_awb:  item?.delegat_awb || '',
     termen_plata_zile: item?.termen_plata_zile ?? 30,
-    proiect_id:        item?.proiect_id || proiectDefault || '',
-    situatie_plata_ids: item?.situatie_plata_ids || (slDefault ? [slDefault.id] : []),
+    proiect_id:        item?.proiect_id || (grupSL ? String(grupSL.proiect_id) : '') || proiectDefault || '',
+    situatie_plata_ids: item?.situatie_plata_ids || (grupSL ? grupSL.sl.map(s => Number(s.id)) : (slDefault ? [slDefault.id] : [])),
     email_destinatar: item?.email_destinatar || 'marilena.tudorache@gazpet.ro',
     status: item?.status || 'in_pregatire',
     titlu_scurt: item?.titlu_scurt || '',
@@ -237,6 +241,9 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
   const [slLista, setSlLista]     = useState([])
   const previewRef                = useRef(null)
   const lastGenRef                = useRef(null)   // snapshot articole auto-generate (detectare modificări manuale)
+  const [grupStare, setGrupStare] = useState(grupSL ? { gata: false, mesaj: '' } : null)  // TKT-2026-0363: precompletarea facturii grupate
+  const montatRef                 = useRef(true)   // rezultatele async se aplică doar cât modalul e deschis
+  useEffect(() => { montatRef.current = true; return () => { montatRef.current = false } }, [])
 
   // ─── HELPER: încarcă valorile unei SL (bază/ajustare/total + ajustări retro) ───
   const loadSLValues = async (slId) => {
@@ -346,11 +353,19 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
     if (lastGenRef.current && curJSON !== lastGenRef.current) {
       if (!window.confirm('Ai modificat manual liniile facturii. Le suprascrii cu liniile generate din SL-urile selectate?')) return
     }
-    // Contract + beneficiar: o singură dată (toate SL din același proiect)
+    // Ordonăm SL-urile cronologic (an, lună, id — aceeași ordine ca în alerta de facturare grupată)
     const proiectId = form.proiect_id ? Number(form.proiect_id) : null
+    const ordered = sorteazaCronologic(slLista.filter(sl => ids.includes(sl.id)))
+    const { articole, patch } = await genereazaDinSL(proiectId, ordered)
+    setForm(f => ({ ...f, ...patch }))
+    lastGenRef.current = JSON.stringify(articole)
+    showToast(`✓ ${ordered.length} situații → ${articole.length} linii generate`)
+  }
+
+  // Liniile + beneficiarul pentru o listă de SL deja ordonată (comun: „Regenerează” și factura grupată, TKT-2026-0363)
+  const genereazaDinSL = async (proiectId, ordered) => {
+    // Contract + beneficiar: o singură dată (toate SL din același proiect)
     const contractInfo = await loadContractBenef(proiectId, null, '')
-    // Ordonăm SL-urile cronologic după lista încărcată (slLista e deja sortată an/luna)
-    const ordered = slLista.filter(sl => ids.includes(sl.id))
     let articole = [], nr = 1
     for (const sl of ordered) {
       const slVals = await loadSLValues(sl.id)
@@ -360,8 +375,7 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
       nr = nextNr
     }
     const benef = contractInfo.benef
-    setForm(f => ({
-      ...f,
+    const patch = {
       articole,
       ...(contractInfo.termenPlata ? { termen_plata_zile: contractInfo.termenPlata } : {}),
       ...(benef ? {
@@ -371,10 +385,41 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
         contact_email: (contractInfo.contactContract && contractInfo.contactContract.email) || benef.contact_email || '',
         contact_telefon: (contractInfo.contactContract && contractInfo.contactContract.telefon) || benef.telefon || '',
       } : {}),
-    }))
-    lastGenRef.current = JSON.stringify(articole)
-    showToast(`✓ ${ordered.length} situații → ${articole.length} linii generate`)
+    }
+    return { articole, patch }
   }
+
+  // TKT-2026-0363: factură grupată din alertă — liniile tuturor SL-urilor + seria/numărul scris pe SL,
+  // precompletat DOAR dacă seria există și numărul nu e deja folosit în facturi_emise. Nu salvează nimic.
+  useEffect(() => {
+    if (!grupSL) return
+    ;(async () => {
+      const ordered = sorteazaCronologic(grupSL.sl)
+      const proiectId = grupSL.proiect_id !== null && grupSL.proiect_id !== undefined && grupSL.proiect_id !== '' ? Number(grupSL.proiect_id) : null
+      // Verificarea numărului: citire exactă pe cheia (serie, nr); eroare = necunoscut, nu „liber”
+      let verificare = { stare: 'eroare' }
+      if (grupSL.serie && SERII.includes(grupSL.serie) && Number.isSafeInteger(grupSL.nr)) {
+        try {
+          const { data, error } = await supabase.from('facturi_emise').select('id').eq('serie', grupSL.serie).eq('nr', grupSL.nr).limit(1)
+          if (!error && Array.isArray(data)) verificare = { stare: data.length ? 'folosit' : 'liber' }
+        } catch (e) { /* rămâne „eroare” */ }
+      }
+      const dec = decidePrecompletare(grupSL, SERII, verificare)
+      let gen = null, errGen = null
+      try { gen = await genereazaDinSL(proiectId, ordered) } catch (e) { errGen = e }
+      if (!montatRef.current) return
+      setForm(f => ({
+        ...f,
+        ...(gen ? gen.patch : {}),
+        proiect_id: String(grupSL.proiect_id ?? ''),
+        situatie_plata_ids: ordered.map(s => Number(s.id)),
+        ...(dec.serie ? { serie: dec.serie } : {}),
+        ...(dec.nr ? { nr: String(dec.nr) } : {}),
+      }))
+      if (gen) lastGenRef.current = JSON.stringify(gen.articole)
+      setGrupStare({ gata: true, mesaj: dec.mesaj, eroare: errGen ? 'Liniile nu au putut fi generate: apasă „Regenerează linii” sau completează-le manual.' : '' })
+    })()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Pre-fill din SL dacă e furnizat
   useEffect(() => {
@@ -565,7 +610,9 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
     else set('beneficiar_id', bId)
   }
 
+  const grupInLucru = !!(grupSL && grupStare && !grupStare.gata)   // TKT-2026-0363: nu se salvează înainte de precompletare
   const handleSave = async (andPDF = false) => {
+    if (grupInLucru) return
     if (!form.beneficiar_nume.trim()) { showToast('Beneficiarul este obligatoriu', 'err'); return }
     if (form.articole.some(a => !a.denumire.trim())) { showToast('Completați denumirea articolelor', 'err'); return }
     setSaving(true)
@@ -753,6 +800,23 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
         </div>
 
         <div style={{padding:'18px 22px',display:'flex',flexDirection:'column',gap:14}}>
+
+          {/* TKT-2026-0363: factură grupată din alertă */}
+          {grupSL && grupStare && (
+            <div style={{background:G.blue+'14',border:`1px solid ${G.blue}55`,borderRadius:8,padding:'10px 14px',fontSize:12,color:G.text,lineHeight:1.5}}>
+              <div style={{fontWeight:700,color:G.blue,marginBottom:4}}>
+                🧾 Factură împreună pentru {grupSL.sl.length} SL · nr. scris pe SL: {grupSL.canonic}
+              </div>
+              <div style={{color:G.muted}}>{sorteazaCronologic(grupSL.sl).map(s => s.nr_situatie || `#${s.id}`).join(' · ')}</div>
+              {!grupStare.gata
+                ? <div style={{marginTop:4,color:G.muted}}>⏳ Generez liniile și verific numărul…</div>
+                : <>
+                    <div style={{marginTop:4,color:G.yellow}}>{grupStare.mesaj}</div>
+                    {grupStare.eroare && <div style={{marginTop:4,color:G.red}}>{grupStare.eroare}</div>}
+                    <div style={{marginTop:4,color:G.dim}}>Nimic nu s-a salvat: verifică liniile, beneficiarul și numărul, apoi salvează.</div>
+                  </>}
+            </div>
+          )}
 
           {/* Serie + Nr + Data + An */}
           <div style={{display:'grid',gridTemplateColumns:'1.2fr 1.2fr 1.4fr 0.8fr',gap:12}}>
@@ -1009,10 +1073,10 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
         {/* Footer butoane */}
         <div style={{padding:'14px 22px',borderTop:`1px solid ${G.border}`,display:'flex',gap:10,flexWrap:'wrap',justifyContent:'flex-end',background:G.bg,position:'sticky',bottom:0}}>
           <button onClick={onClose} style={S.btnS}>Anulează</button>
-          <button onClick={()=>handleSave(false)} disabled={saving} style={{...S.btnS, opacity:saving?0.6:1}}>
+          <button onClick={()=>handleSave(false)} disabled={saving||grupInLucru} style={{...S.btnS, opacity:(saving||grupInLucru)?0.6:1}}>
             {saving ? '⏳...' : '💾 Salvează'}
           </button>
-          <button onClick={()=>handleSave(true)} disabled={saving||genPDF} style={{...S.btnP, background:G.purple, opacity:(saving||genPDF)?0.6:1}}>
+          <button onClick={()=>handleSave(true)} disabled={saving||genPDF||grupInLucru} style={{...S.btnP, background:G.purple, opacity:(saving||genPDF||grupInLucru)?0.6:1}}>
             {genPDF ? '⏳ Generez PDF...' : '📄 Salvează + PDF'}
           </button>
           {!isNew && (
@@ -1275,6 +1339,9 @@ export default function FinanciarPage() {
   const [contracteMap, setContracteMap] = useState({}) // contract_id → „nr — denumire"
   const [deleteConf, setDeleteConf] = useState(null)
   const [slAlert, setSlAlert]       = useState([]) // SL fără factură
+  const [slNrFactura, setSlNrFactura] = useState(null)   // TKT-2026-0363: Map id SL → nr_factura scris pe SL; null = necitit/eroare
+  const [slNrEroare, setSlNrEroare] = useState(false)    // citirea nr_factura a eșuat → alerta rămâne pe SL individuale
+  const alertGenRef                 = useRef(0)          // doar ultima încărcare a alertei se aplică
   const [citesteOpen, setCitesteOpen] = useState(false)  // 02.07.2026: panel „Citește Orice" (certificate de plată)
   const [tab, setTab]               = useState('emise')  // 'emise' | 'furnizori' | 'consumuri'
   // Deep-link din notificări: /financiar?tab=consumuri deschide direct tab-ul
@@ -1303,8 +1370,25 @@ export default function FinanciarPage() {
       const { data } = await q
       setFacturi(data || [])
       // SL fără factură (cross-proiect)
+      const gen = ++alertGenRef.current
       const { data: alertData } = await supabase.from('v_sl_fara_factura').select('*').order('an').order('luna')
-      setSlAlert(alertData || [])
+      // TKT-2026-0363: nr. de factură scris de mână pe SL (view-ul nu îl are) → gruparea „facturează împreună”.
+      // Pe bucăți de 200 id-uri (sub plafonul de 1000 rânduri); orice eroare = fără grupare (nu „fără număr”).
+      const alertIds = [...new Set((alertData || []).map(s => s.id).filter(id => id !== null && id !== undefined))]
+      let nrMap = new Map(), nrErr = false
+      for (let i = 0; i < alertIds.length && !nrErr; i += 200) {
+        const bucata = alertIds.slice(i, i + 200)
+        try {
+          const { data: nrs, error: eNr } = await supabase.from('executie_situatii_plata').select('id,nr_factura').in('id', bucata)
+          if (eNr || !Array.isArray(nrs) || nrs.length > bucata.length) nrErr = true
+          else for (const r of nrs) nrMap.set(r.id, r.nr_factura)
+        } catch (e) { nrErr = true }
+      }
+      if (gen === alertGenRef.current) {
+        setSlAlert(alertData || [])
+        setSlNrFactura(nrErr ? null : nrMap)
+        setSlNrEroare(nrErr)
+      }
       // Beneficiari
       const { data: bens } = await supabase.from('beneficiari').select('id,nume,cif,iban_principal,banca,sediu,contact_email,telefon,contact_nume').eq('activ',true).order('nume')
       setBeneficiari(bens || [])
@@ -1319,6 +1403,8 @@ export default function FinanciarPage() {
   useEffect(() => { loadAll() }, [loadAll])
 
   const isOwner = profile?.is_owner === true
+  // TKT-2026-0363: alerta grupată (același proiect + același nr. de factură normalizat = un rând)
+  const slAlertGrupat = useMemo(() => grupeazaSlFaraFactura(slAlert, slNrFactura), [slAlert, slNrFactura])
   // canWrite = facturi/contabilitate (neschimbat); canWriteGarantii include sub-modulul 'financiar.garantii'
   const { canWrite, canWriteGarantii, doarGarantii, taburi } = accesFinanciar(profile, moduleAcces)
 
@@ -1448,19 +1534,52 @@ export default function FinanciarPage() {
             <div style={{fontSize:13,fontWeight:700,color:G.orange,marginBottom:10}}>
               ⚡ {slAlert.length} situație{slAlert.length>1?'i':''} de plată neacoperite cu factură:
             </div>
+            {slNrEroare && (
+              <div style={{fontSize:11,color:G.yellow,marginBottom:8}}>
+                ⚠️ Nu am putut citi numerele de factură scrise pe SL: situațiile sunt afișate separat (fără grupare). Reîncarcă pagina.
+              </div>
+            )}
             <div style={{display:'flex',flexWrap:'wrap',gap:8}}>
-              {slAlert.map(sl => (
-                <div key={sl.id} style={{background:G.card2,borderRadius:8,padding:'8px 12px',border:`1px solid ${G.border}`,display:'flex',alignItems:'center',gap:10}}>
-                  <span style={{fontSize:11,fontWeight:700,color:G.green}}>{sl.cod_intern}</span>
-                  <span style={{fontSize:11,color:G.text}}>{sl.nr_situatie} · {LUNI[(sl.luna||1)-1]} {sl.an}</span>
-                  {sl.valoare_baza_lei && <span style={{fontSize:11,color:G.green,fontFamily:'monospace'}}>{fmtLei(sl.valoare_baza_lei)}</span>}
-                  {canWrite && (
-                    <button onClick={()=>setEditItem({ _fromSL: sl })} style={{padding:'3px 10px',background:G.financiar+'22',border:`1px solid ${G.financiar}55`,borderRadius:6,color:G.financiar,fontSize:11,cursor:'pointer',fontWeight:700}}>
-                      📄 Emite
-                    </button>
-                  )}
-                </div>
-              ))}
+              {slAlertGrupat.map(el => {
+                if (el.tip === 'grup') {
+                  const prima = el.sl[0], ultima = el.sl[el.sl.length - 1]
+                  const sumaBaza = el.sl.reduce((s, x) => s + (Number.isFinite(parseFloat(x.valoare_baza_lei)) ? parseFloat(x.valoare_baza_lei) : 0), 0)
+                  return (
+                    <div key={el.cheie} style={{background:G.card2,borderRadius:8,padding:'8px 12px',border:`1px solid ${G.blue}66`,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+                      <span style={{fontSize:11,fontWeight:700,color:G.green}}>{prima.cod_intern}</span>
+                      <span style={{fontSize:11,color:G.text}} title={el.sl.map(x => `${x.nr_situatie} · ${LUNI[(x.luna||1)-1]} ${x.an}`).join('\n')}>
+                        {el.sl.length} SL: {el.sl.map(x => x.nr_situatie).join(', ')} · {LUNI[(prima.luna||1)-1]} {prima.an}{ultima !== prima ? ` – ${LUNI[(ultima.luna||1)-1]} ${ultima.an}` : ''}
+                      </span>
+                      <span style={{fontSize:11,color:G.blue,fontWeight:700}} title="Numărul de factură scris pe SL-uri">🧾 {el.canonic}</span>
+                      {sumaBaza > 0 && <span style={{fontSize:11,color:G.green,fontFamily:'monospace'}}>{fmtLei(sumaBaza)}</span>}
+                      {canWrite && (
+                        <button onClick={()=>setEditItem({ _fromGrup: el })} style={{padding:'3px 10px',background:G.blue+'22',border:`1px solid ${G.blue}55`,borderRadius:6,color:G.blue,fontSize:11,cursor:'pointer',fontWeight:700}}>
+                          📄 Facturează împreună ({el.sl.length} SL)
+                        </button>
+                      )}
+                    </div>
+                  )
+                }
+                const sl = el.sl[0]
+                return (
+                  <div key={el.cheie} style={{background:G.card2,borderRadius:8,padding:'8px 12px',border:`1px solid ${G.border}`,display:'flex',alignItems:'center',gap:10}}>
+                    <span style={{fontSize:11,fontWeight:700,color:G.green}}>{sl.cod_intern}</span>
+                    <span style={{fontSize:11,color:G.text}}>{sl.nr_situatie} · {LUNI[(sl.luna||1)-1]} {sl.an}</span>
+                    {sl.valoare_baza_lei && <span style={{fontSize:11,color:G.green,fontFamily:'monospace'}}>{fmtLei(sl.valoare_baza_lei)}</span>}
+                    {el.nr_factura_text && (
+                      <span style={{fontSize:10,color:el.nr_recunoscut ? G.muted : G.yellow}}
+                        title={el.nr_recunoscut ? 'Numărul de factură scris pe SL' : 'Numărul scris pe SL nu are forma SERIE-NR (nu se grupează)'}>
+                        🧾 {el.nr_factura_text}{el.nr_recunoscut ? '' : ' (format necunoscut)'}
+                      </span>
+                    )}
+                    {canWrite && (
+                      <button onClick={()=>setEditItem({ _fromSL: sl })} style={{padding:'3px 10px',background:G.financiar+'22',border:`1px solid ${G.financiar}55`,borderRadius:6,color:G.financiar,fontSize:11,cursor:'pointer',fontWeight:700}}>
+                        📄 Emite
+                      </button>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           </div>
         )}
@@ -1627,8 +1746,9 @@ export default function FinanciarPage() {
       {/* Modal factură */}
       {editItem !== null && (
         <FacturaModal
-          item={editItem?._fromSL ? null : (editItem?.id ? editItem : null)}
+          item={(editItem?._fromSL || editItem?._fromGrup) ? null : (editItem?.id ? editItem : null)}
           slDefault={editItem?._fromSL || null}
+          grupDefault={editItem?._fromGrup || null}
           proiectDefault={editItem?.proiect_id || null}
           beneficiariLista={beneficiari}
           profileId={profile?.id || null}
