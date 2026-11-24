@@ -2,6 +2,7 @@
 Niveluri (spec §2): cuvant (ș/ş, ț/ţ unificate DOAR la comparare), cifra (separatorul zecimal NICIODATA normalizat),
 rand de tabel (celule, cu rolurile cod / UM / cantitate cand se pot deduce). Textul citit ramane literal; nimic nu se corecteaza aici."""
 import difflib, hashlib, html, json, pathlib, re, threading
+from .banda_goala import e_gol, probabil_alba
 
 CEDILLA = str.maketrans({'ş': 'ș', 'ţ': 'ț', 'Ş': 'Ș', 'Ţ': 'Ț'})
 # Numerele pastreaza semnul, exponentul si procentul; semnele, comparatorii si operatorii sunt tokeni separati: -5 vs 5, 5% vs 5,
@@ -347,6 +348,26 @@ def compare_band(band, raw_a, res_a, raw_b, res_b):
     base = {'band': band['id'], 'page': band['page'], 'kind': band['kind'], 'image': band['image'], 'image_sha256': band['image_sha256'],
             'cititori': {r: {'protocol': x.get('protocol'), 'weights_sha256': x.get('weights_sha256')} for r, x in (('lighton', res_a), ('mineru', res_b))},
             'raw_sha256': {'lighton': hashlib.sha256(raw_a.encode()).hexdigest(), 'mineru': hashlib.sha256(raw_b.encode()).hexdigest()}}
+    # banda goala de verificat (banda_goala.py, runda 2): gol la ORICARE cititor = mereu un rand la om, NICIODATA acord (nici cand
+    # ambii dau gol). Euristica pe pixeli intra doar ca informatie (probabil_alba). Marcaj neconsistent (text nevid / ok = True) ->
+    # mai jos, banda_intreaga (citire incompleta / neconsistenta).
+    ga, gb = e_gol(raw_a, res_a), e_gol(raw_b, res_b)
+    if ga or gb:
+        gol_la = [r for r, x in (('lighton', ga), ('mineru', gb)) if x]
+        celalalt = None
+        if len(gol_la) == 1:
+            nume, raw_c, res_c = ('mineru', raw_b, res_b) if ga else ('lighton', raw_a, res_a)
+            celalalt = {'cititor': nume, 'stare': 'text' if res_c.get('ok') is True else 'incomplet', 'text': raw_c,
+                        'signal': res_c.get('signal'), 'error': res_c.get('error')}
+        return {'band': band['id'], 'structura': 'banda_goala_de_verificat', 'gol_la': gol_la, 'disagreements': 1}, [dict(
+            base, id=band['id'] + '_gol', tip='banda_goala_de_verificat', citire_lighton=raw_a, citire_mineru=raw_b, gol_la=gol_la,
+            celalalt=celalalt, probabil_alba=probabil_alba(res_a, res_b),
+            motiv_pipeline=('iesire goala la ambii cititori' if celalalt is None else 'iesire goala la %s, %s la %s'
+                            % (gol_la[0], celalalt['stare'], celalalt['cititor'])) + ' - se verifica imaginea benzii (om)',
+            diferenta_numerica=True, anomalie_separator=separator_anomaly(raw_a, raw_b), e_cantitate=True)]
+    # marcaj gol neconsistent (text nevid sau ok = True): citirea nu se compara ca text -> citire incompleta, la om
+    if res_a.get('gol_de_verificat') is not None: res_a = dict(res_a, ok=False)
+    if res_b.get('gol_de_verificat') is not None: res_b = dict(res_b, ok=False)
     if not (res_a.get('ok') and res_b.get('ok')):
         motiv = [r for r, x in (('lighton', res_a), ('mineru', res_b)) if not x.get('ok')]
         return {'band': band['id'], 'structura': 'citire_incompleta', 'incomplete': motiv}, [dict(base, id=band['id'] + '_banda', tip='banda_intreaga',

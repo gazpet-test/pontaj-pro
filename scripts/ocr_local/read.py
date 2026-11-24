@@ -3,6 +3,7 @@ Reguli pastrate din pipeline-ul Codex: endpoint doar IP loopback literal, fara p
 garda v3, raw-ul nu se repara. Noi: verificarea SHA-256 a greutatilor la pornire, gpu.lock luat de rulare si eliberat la final,
 reluare idempotenta (banda cu result.json se sare; banda inceputa si neterminata NU se reincearca automat)."""
 import base64, contextlib, hashlib, http.client, ipaddress, json, os, pathlib, socket, threading, time, urllib.parse
+from . import banda_goala
 from .guard import Guard
 from .gpu_cedare import cerere_activa
 from .plan import load_plan, save
@@ -165,8 +166,12 @@ def read_mineru(image_bytes, out_dir, cfg, deadline):
     md = json2md(box['c']); raw = md if isinstance(md, str) else str(md)
     dec = decupaje_garda(box.get('uris', ()))
     g = Guard(dec); signal = g(raw)  # scutite doar decupajele codificate de pipeline in aceasta citire
+    # blocurile de layout cu text (banda_goala.iesire_goala cere 0); alta forma a blocurilor = necunoscut (None), nu 0
+    blocuri = box['c'] if isinstance(box['c'], list) else None
+    cu_text = (sum(1 for b in blocuri if isinstance(b.get('content'), str) and b['content'].strip())
+               if blocuri is not None and all(isinstance(b, dict) for b in blocuri) else None)
     return raw, {'ok': not signal and bool(raw.strip()), 'signal': signal, 'guard_event': g.event, 'error': None, 'seconds': seconds,
-                 'blocks': len(box['c']), 'decupaje_pipeline': len(dec)}
+                 'blocks': len(box['c']), 'blocuri_cu_text': cu_text, 'decupaje_pipeline': len(dec)}
 
 FUNCS = {'lighton': read_lighton, 'mineru': read_mineru}
 
@@ -177,6 +182,9 @@ def garda_oprita(res):
 def _garda(band, res):
     ev = res.get('guard_event') or {}
     return {'band': band['id'], 'page': band['page'], 'signal': res.get('signal'), 'detail': ev.get('detail'), 'guard_event': ev}
+
+def _gol(band, res):
+    return {'band': band['id'], 'page': band['page'], 'image': band['image'], 'probabil_alba': banda_goala.probabil_alba(res)}
 
 def backend_idle(cfg, timeout=30.0, poll=0.5):
     """vLLM confirmat liber: /metrics arata 0 cereri in lucru si 0 in asteptare (dupa ce clientul a inchis fluxul oprit de garda)."""
@@ -217,19 +225,24 @@ def backend_idle(cfg, timeout=30.0, poll=0.5):
         if time.monotonic() >= end: return False
         time.sleep(max(0.0, min(poll, end - time.monotonic())))  # nici pauza nu trece de termen
 
-def run_reader(plan_dir, reader, *, run_id, check_weights=True, check_server=True, lock=True, cedare=None):
+def run_reader(plan_dir, reader, *, run_id, check_weights=True, check_server=True, lock=True, cedare=None, gol_de_verificat=False):
     """Citeste toate benzile planului cu un singur cititor. Termen / eroare de transport / rezultat neconfirmat = oprire (fara reincercare).
     `cedare` = functie apelata inaintea fiecarei benzi; un text nevid (ex. 'cedat_e3', 'oprit') opreste citirea cu acea stare, dupa
     banda curenta. Implicit: cu `lock` = cererea E3 (gpu.cerere); fara `lock` = nimic. Coada (coada.py) tine ea gpu.lock (lock=False)
     si da propria functie (cererea E3 + oprirea cozii).
     O banda oprita de GARDA (decizie Razvan 14.10) opreste doar banda: dupa confirmarea ca vLLM e liber (/metrics), banda ramane
     incompleta (la incarcare: stare „incomplet” cu motivul si guard_event; la arbitraj: om, fara Claude) si citirea continua.
+    `gol_de_verificat` (DOAR laboratorul / coada; implicit False = comportamentul de azi, folosit de E3 si clientul Ofertare):
+    iesirea goala curata (banda_goala.iesire_goala) pe ORICE imagine nu mai opreste citirea: rezultatul ramane ok = False, cu
+    `gol_de_verificat: true` (banda_goala.marcheaza), banda intra in state['benzi_goale'] si citirea continua; compara o trimite
+    mereu la om (banda_goala_de_verificat). Fara parametru, iesirea goala ramane esec (stopped_no_retry), ca pe main.
     Returneaza starea; scrie <banda>/<cititor>/raw.txt + result.json si <plan>/read_<cititor>.json."""
     if reader not in READERS: raise ValueError('Cititor necunoscut')
     plan_dir = pathlib.Path(plan_dir); doc = load_plan(plan_dir); proto = protocol(); cfg = proto['readers'][reader]
     endpoint_parts(cfg['endpoint'])
     state = {'reader': reader, 'run_id': run_id, 'protocol': proto['version'], 'model': cfg['model'], 'started': time.time(),
              'bands': len(doc['bands']), 'done': 0, 'skipped_existing': 0, 'benzi_garda': [], 'status': 'starting'}
+    if gol_de_verificat: state['benzi_goale'] = []
     state['weights_sha256'] = verify_weights(cfg) if check_weights else None
     if check_server: verify_server(cfg)
     if cedare is None and lock: cedare = lambda: 'cedat_e3' if cerere_activa(proto['gpu_lock']) else None
@@ -248,6 +261,14 @@ def run_reader(plan_dir, reader, *, run_id, check_weights=True, check_server=Tru
                            and raw_old is not None and hashlib.sha256(raw_old).hexdigest() == old.get('raw_sha256'))
                 if acelasi and old.get('ok') is True:
                     state['skipped_existing'] += 1; continue
+                # banda goala de verificat, inchisa curat: se refoloseste doar pe calea care o accepta (fara parametru = ca pe main).
+                # O iesire goala curata scrisa de codul vechi (fara marcaj, documentele oprite inainte) se marcheaza acum, fara recitire.
+                raw_s = raw_old.decode('utf-8', 'replace') if raw_old is not None else None
+                if (gol_de_verificat and acelasi and 'gol_de_verificat' not in old
+                        and banda_goala.marcheaza(reader, raw_s, old, (plan_dir / band['image']).read_bytes())):
+                    old['gol_marcat_la_reluare'] = run_id; save(out / 'result.json', old)
+                if gol_de_verificat and acelasi and banda_goala.e_gol(raw_s, old) and banda_goala.iesire_goala(reader, raw_s, old):
+                    state['skipped_existing'] += 1; state['benzi_goale'].append(_gol(band, old)); continue
                 if acelasi and garda_oprita(old) and old.get('backend_idle_confirmed') is True:  # banda oprita de garda, inchisa curat
                     state['skipped_existing'] += 1; state['benzi_garda'].append(_garda(band, old)); continue
                 state.update(status='interrupted_needs_review', band=band['id'], motiv='rezultat existent incompatibil'); break
@@ -261,11 +282,16 @@ def run_reader(plan_dir, reader, *, run_id, check_weights=True, check_server=Tru
             data = (plan_dir / band['image']).read_bytes()
             holder['keep'] = True  # GPU-ul e 'ocupat' din momentul cererii pana cand rezultatul complet e scris pe disc
             raw, result = FUNCS[reader](data, out, cfg, proto['deadline_seconds'])
+            # iesire goala curata (orice imagine) = banda de verificat de om, nu oprire (25.11.2026, doar laboratorul / coada)
+            gol = gol_de_verificat and banda_goala.marcheaza(reader, raw, result, data)
             (out / 'raw.txt').write_bytes(raw.encode('utf-8'))  # octeti exacti: hash-ul nu depinde de CRLF pe Windows
             result.update(band=band['id'], reader=reader, image_sha256=band['image_sha256'], raw_sha256=hashlib.sha256(raw.encode()).hexdigest(),
                           protocol=proto['version'], weights_sha256=state['weights_sha256'], run_id=run_id, backend_idle_confirmed=False)
             save(out / 'result.json', result); state['done'] += 1
             if result['ok']: holder['keep'] = False
+            if gol:
+                # cititorul a terminat curat (stop / raspuns MinerU complet): backend-ul nu mai lucreaza la banda -> banda urmatoare
+                holder['keep'] = False; state['benzi_goale'].append(_gol(band, result)); continue
             if not result['ok'] and garda_oprita(result) and backend_idle(cfg):
                 # doar banda: fluxul e inchis de client si vLLM e confirmat liber -> se marcheaza si se trece la banda urmatoare
                 result['backend_idle_confirmed'] = True; save(out / 'result.json', result)

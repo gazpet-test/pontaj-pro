@@ -6,6 +6,7 @@ o bandă oprită de gardă (ok = false, ex. buclă) nu intră niciodată, rămâ
 Paginile cu text nativ (> 50 de caractere) iau textul nativ. Fără rețea, fără modele, fără BD."""
 import hashlib, json, pathlib, re
 
+from .banda_goala import e_gol
 from .compare import segments
 from .reconcile import join_bands, render
 
@@ -14,6 +15,7 @@ CITITORI = ('lighton', 'mineru')
 # „| 001 RPCXA04 | M.C. | 70.200 |” -> „| 001 | RPCXA04 | …”; codul acceptă „%” (lecția: parserul pierdea codurile cu „%”, F3 1654 = 804, nu 772)
 NR_COD = re.compile(r'^\s*(\d{1,4})\s+([A-Z0-9][A-Z0-9%]*[0-9][A-Z0-9%]*)\s*$')
 MARCAJ_NECITITA = '[BANDĂ NECITITĂ %s: fără citire validă la ambii cititori]'
+MARCAJ_GOL = '[BANDĂ GOALĂ DE VERIFICAT %s: niciun text citit; se verifică imaginea benzii]'
 
 
 def fara_tabele_o_coloana(segs):
@@ -45,19 +47,35 @@ def desparte_nr_cod(segs):
     return [(k, desparte_nr_cod_tabel(v)) if k == 'table' else (k, v) for k, v in segs]
 
 
-def citire_valida(banda_dir):
-    """(cititor, raw) din prima citire validă, sau (None, None). Validă = result.json cu ok = true și raw_sha256 OBLIGATORIU, egal cu
-    sha256(raw.txt): lipsă / null / nepotrivire = citire neverificată, se trece la următorul cititor (Jakarinos #906 P1)."""
+def _citiri(banda_dir):
+    """[(cititor, raw, res)] cu result.json lizibil și raw_sha256 OBLIGATORIU egal cu sha256(raw.txt), în ordinea CITITORI."""
+    out = []
     for c in CITITORI:
         r, f = banda_dir / c / 'result.json', banda_dir / c / 'raw.txt'
         if not (r.exists() and f.exists()): continue
         try: res = json.loads(r.read_text(encoding='utf-8'))
         except ValueError: continue
-        if not isinstance(res, dict) or res.get('ok') is not True: continue
-        raw = f.read_bytes().decode('utf-8')
+        if not isinstance(res, dict): continue
+        try: raw = f.read_bytes().decode('utf-8')
+        except UnicodeDecodeError:
+            if res.get('ok') is True: raise  # ca pe main: o citire „validă” nedecodabilă e defect, nu se sare
+            continue
         if res.get('raw_sha256') != hashlib.sha256(raw.encode()).hexdigest(): continue
-        return c, raw
+        out.append((c, raw, res))
+    return out
+
+
+def citire_valida(banda_dir):
+    """(cititor, raw) din prima citire validă, sau (None, None). Validă = result.json cu ok = true și raw_sha256 OBLIGATORIU, egal cu
+    sha256(raw.txt): lipsă / null / nepotrivire = citire neverificată, se trece la următorul cititor (Jakarinos #906 P1)."""
+    for c, raw, res in _citiri(banda_dir):
+        if res.get('ok') is True: return c, raw
     return None, None
+
+
+def goale_de_verificat(banda_dir):
+    """Cititorii cu ieșire goală marcată (banda_goala.e_gol, ok = false): banda e la om, oricât de albă ar părea."""
+    return [c for c, raw, res in _citiri(banda_dir) if e_gol(raw, res)]
 
 
 def text_banda(raw):
@@ -65,11 +83,15 @@ def text_banda(raw):
 
 
 def asambleaza_pagina(benzi_dirs, st):
-    """Benzile unei pagini OCR (în ordine) -> text. Tabelele sunt deja rânduri „| … |” când ajung la join_bands."""
+    """Benzile unei pagini OCR (în ordine) -> text. Tabelele sunt deja rânduri „| … |” când ajung la join_bands.
+    Bandă cu ieșire goală la un cititor: numărată în benzi_goale_de_verificat; dacă niciun cititor n-are citire validă, în text intră
+    marcajul „BANDĂ GOALĂ DE VERIFICAT” (nu se sare tăcut), altfel textul celuilalt cititor, ca fallback-ul de până acum."""
     tx = []
     for bid, d in benzi_dirs:
         c, raw = citire_valida(d)
+        if goale_de_verificat(d): st['benzi_goale_de_verificat'] += 1; st['lista_goale_de_verificat'].append(bid)
         if raw is None:
+            if goale_de_verificat(d): tx.append(MARCAJ_GOL % bid); continue
             st['benzi_necitite'] += 1; st['lista_necitite'].append(bid); tx.append(MARCAJ_NECITITA % bid); continue
         if c == 'mineru': st['benzi_din_mineru'] += 1; st['lista_din_mineru'].append(bid)
         tx.append(text_banda(raw))
@@ -82,7 +104,7 @@ def asambleaza_pagina(benzi_dirs, st):
 
 def stare_noua():
     return {'native': 0, 'ocr': 0, 'cusaturi_nesigure': 0, 'html_ramas': 0, 'benzi_necitite': 0, 'lista_necitite': [],
-            'benzi_din_mineru': 0, 'lista_din_mineru': []}
+            'benzi_din_mineru': 0, 'lista_din_mineru': [], 'benzi_goale_de_verificat': 0, 'lista_goale_de_verificat': []}
 
 
 def asambleaza_document(rulare_dir, doc, pagini_native=None):
