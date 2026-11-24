@@ -1,6 +1,6 @@
-# Ofertare: aceeași cantitate, documente diferite — semnalare automată și propunere de clarificare (TKT-2026-0329) — specificație v2
+# Ofertare: aceeași cantitate, documente diferite — semnalare automată și propunere de clarificare (TKT-2026-0329) — specificație v3
 
-Data: 25.11.2026 · Stare: v2 după review NO-GO (8 puncte) · Varianta A din `TKT-0329_variante.md`, **de ales de owner** înainte de plan.
+Data: 25.11.2026 · Stare: v3 după a doua rundă de review NO-GO (5 puncte) · Varianta A din `TKT-0329_variante.md`, **de ales de owner** înainte de plan.
 
 ## 1. De ce
 
@@ -27,19 +27,28 @@ O **măsură** = (licitație, lot, obiect / tronson, element, natura măsurii, U
 - **natura** ∈ {`furnizare`, `montaj`, `proba`, `total_lucrare`}. O poziție F3 de furnizare se compară doar cu „furnizare” sau „total_lucrare” din alt document, nu cu montajul sau cu proba aceleiași țevi;
 - **agregarea** se face doar pe aceeași măsură: suma pozițiilor F3 de furnizare pe obiect se compară cu totalul ATR pe același obiect. Un total pe toată lucrarea se compară doar cu suma tuturor obiectelor, nu cu un singur tronson. Fiecare valoare intră o singură dată în agregare (identitatea poziției).
 - O potrivire incompletă (lot, obiect, natură sau element necunoscut) dă **„de verificat”**, cu ambele surse afișate. Nu e nici „diferență”, nici „în regulă”.
+- **Completitudinea agregării:** fiecare măsură agregată are un **inventar** al componentelor așteptate.
+  - Pe partea F3: toate pozițiile `ofertare_cantitati` ale obiectului cu același element și aceeași natură.
+  - Pe partea document: toate paginile și rândurile de tip „cantitate” ale secțiunii respective, cu paginile neprocesate (`pagini_necitite`, plafonul de pagini) marcate.
+  - Verdictul `diferenta` sau `in_regula` se dă **doar** dacă inventarul e complet pe ambele părți: toate componentele au dovadă validă și nicio pagină din secțiune nu e neprocesată.
+  - Altfel verdictul e `neverificat: agregare incompletă`, cu lista componentelor lipsă.
 
 ### 3.2 Dovada valorii (rezolvă citatele care nu dovedesc nimic)
 
 Fiecare valoare comparată, **inclusiv cea din F3**, are o dovadă cu `document_id`, `revizie`, `pagina`, `rand` / `celula` (pentru tabele) sau `fragment` (pentru text), `antet_coloana`, `valoare_text`, `um_text`.
 
-- **Verificarea pe server** (deterministă, fără AI): fragmentul există literal în `text_extras` la pagina dată. `valoare_text` se găsește în fragment pe poziția declarată, iar pentru tabele în celula de pe rândul și coloana cu antetul de cantitate. `um_text` apare în același rând sau antet.
+- **Verificarea pe server** (deterministă, fără AI): fragmentul există literal în `text_extras` la pagina dată. Pentru **tabele**: `valoare_text` e conținutul întreg al celulei de pe rândul declarat, în coloana al cărei antet e de cantitate (lista închisă: „cantitate”, „cant.”, „lungime”, „L (m)”, „nr. buc” și altele), iar UM vine din coloana sau antetul UM al aceluiași rând.
+- Pentru **text liber**, sunt acceptate doar tiparele din lista închisă `ofertare_tipare_cantitate`, de forma `<cuvânt-cheie de cantitate> [:=]? <număr> <UM>` (ex. „lungime 250 m”, „L = 250 m”, „în lungime totală de 250 m”):
+  - numărul e un token numeric **întreg**, delimitat (nu parte din „DN160” sau „Ø160”), lipit direct de UM;
+  - numerele precedate de `DN`, `Ø`, `PN`, `SDR`, `De`, `Dn` sau urmate de `mm` sunt **interzise** ca valori de cantitate.
+  - Orice alt text liber: `neverificat: valoare nelegată`, vizibil în ecran.
 - Orice verificare picată: măsurătoarea e respinsă și nu poate produce un semnal.
 - AI-ul doar propune unde e valoarea; nu e sursa adevărului.
 
 ### 3.3 Regula de semnalare
 
 - **Unitatea canonică** pe element: m pentru lungimi, buc, mc, mp. Conversii acceptate doar din tabelul închis (km→m, ml→m, t→kg numai pentru elementele cu masă). Orice altă UM înseamnă „neverificat: unitate incompatibilă”.
-- **Numerele** se citesc în format românesc (punct pentru mii, virgulă pentru zecimale), cu verificare că rezultatul e unic: „1.234” nu poate însemna și 1,234. Ambiguu înseamnă „neverificat”.
+- **Numerele:** format românesc (punct = separator de mii, doar în grupuri exacte de câte 3 cifre; virgulă = zecimale). „1.234” = 1234; „1,234” = 1,234; „1.23” sau „1.2345” (grup ≠ 3 cifre după punct) = `neverificat: format numeric ambiguu`. Același token interpretat diferit de cele două reguli nu se acceptă niciodată.
 - **Formula:** `|a − b| / max(|a|, |b|) > p`, unde `p` e pragul licitației (implicit 5%). Diferențele absolute sub o unitate canonică se ignoră.
   - `a = b = 0`: în regulă.
   - Una dintre valori 0 sau lipsă: „de verificat”, nu diferență.
@@ -47,22 +56,39 @@ Fiecare valoare comparată, **inclusiv cea din F3**, are o dovadă cu `document_
 
 ### 3.4 Identitate, versiuni, invalidare
 
-- **Identitatea semnalului** = amprenta lui (licitație, măsura canonică de la 3.1, perechea de dovezi cu `document_id` + `revizie` + localizare).
-  - Ciorna de clarificare are cheia `auto_surse_<amprentă>`, unică prin indexul existent `(licitatie_id, cheie)`.
-  - Reluarea extragerii nu dublează nimic: `INSERT … ON CONFLICT DO NOTHING`, într-un RPC tranzacțional.
-- **Versiunile.** Măsurătorile sunt legate de `revizie` și de amprenta textului paginii.
-  - O revizie nouă a documentului, o cantitate schimbată sau alt prag duce la recalcularea măsurilor afectate.
-  - Semnalele care nu mai țin se marchează `invechit`.
-- **Protecția muncii omului:**
-  - o ciornă `propunere` **needitată** a unui semnal învechit trece în `retrasa`, cu motiv;
-  - o ciornă editată, aprobată (`de_trimis`) sau trimisă **nu se atinge**. Primește marcajul „baza s-a schimbat — de reverificat”, prin același mecanism ca `marcaj_planse`, extins la `auto_surse_*`.
+- **Trei lucruri separate:**
+  - **identitatea semnalului** = amprenta *stabilă* (licitație + măsura canonică de la 3.1). Nu depinde de valori sau de prag;
+  - **evaluarea** = versiunea curentă a comparației: amprenta tuturor intrărilor (valorile, dovezile cu revizia, inventarul agregării, pragul, cantitatea din ERP) și verdictul;
+  - **decizia omului** pe ciornă: editată, aprobată, respinsă (`retrasa` cu `retrasa_de = 'om'`).
+- **Ciorna** are cheia `auto_surse_<identitate>`, unică prin `(licitatie_id, cheie)`, și reține `evaluare_amprenta` de la generare.
+- **Publicarea, atomic, într-un RPC:**
+  - lock pe rândul semnalului;
+  - se recitesc amprentele **curente** ale surselor (revizia documentelor, cantitatea, pragul). Dacă diferă de cele de la începutul extragerii, rezultatul se aruncă (`evaluare_depasita`) și rămâne cea curentă;
+  - abia apoi se scrie evaluarea și se aplică tranzițiile de mai jos.
+- **Tranzițiile ciornei:**
+  - verdict `diferenta` și fără ciornă → se creează `propunere`;
+  - verdict `diferenta`, iar ciorna e `retrasa` **automat** (`retrasa_de = 'sistem'`) → **se reactivează** în `propunere`, cu textul regenerat;
+  - verdict `diferenta`, iar ciorna e `retrasa` **de om** → rămâne retrasă. Dacă amprenta evaluării s-a schimbat față de cea respinsă, apare semnalul „diferența a reapărut după respingere” în ecran, fără ciornă nouă;
+  - verdictul nu mai e `diferenta`, iar ciorna e `propunere` needitată → `retrasa`, cu `retrasa_de = 'sistem'` și motivul;
+  - ciornă editată, aprobată sau trimisă → nu se atinge; dacă `evaluare_amprenta` ≠ amprenta curentă, primește „baza s-a schimbat — de reverificat” (3.5).
 
-### 3.5 Integrarea cu fluxul de clarificări
+### 3.5 Integrarea cu fluxul de clarificări (circuitul complet)
 
-- Ciorna intră ca `status = 'propunere'`, cu cheie `auto_surse_*` și `origine = 'automat'`, deci moștenește protecțiile de proveniență existente pentru ciornele automate.
-- `eCiornaAutomata` se extinde la `^auto_(planse|surse)_`, iar `v_ofertare_clarificari_baza` primește ramura „surse”: starea bazei = dovezile de la 3.2 încă valide pe revizia curentă.
-- `ofertare_clarificari_export` blochează o ciornă `auto_surse_*` cu baza nevalidă, ca la planșe.
-- Trimiterea rămâne manuală, ca azi.
+- Ciorna intră cu `status = 'propunere'`, cheie `auto_surse_*` și `origine = 'automat'`.
+- **Fiecare punct** din circuitul de protecție al ciornelor `auto_planse_*` se extinde **explicit** la `auto_surse_*` (nu se bazează pe `origine`):
+  - helperul `eCiornaAutomata` (regex `^auto_(planse|surse)_`);
+  - RPC-ul de reconfirmare;
+  - trigger-ul care protejează editarea, aprobarea, transmiterea și ștergerea (cheia selectată de trigger);
+  - view-ul `v_ofertare_clarificari_baza`;
+  - RPC-ul `ofertare_clarificari_export`.
+  - Inventarul exact (fișier / funcție / linie) se face în plan, din SQL-ul existent (inclusiv `docs/R5_MIGRARE_PROPUSA_cantitati_nevalidate.sql`, liniile ~1142 și ~1178). Testele dovedesc fiecare punct cu o ciornă `auto_surse_*`.
+- **Scrierea directă** pe ciornele `auto_surse_*` (UPDATE pe text / status / bază, DELETE) e blocată ca la `auto_planse_*`.
+- **Baza validă pentru export** = amprenta **întregii evaluări** curente (valorile, dovezile cu revizia, inventarul complet, pragul, cantitatea din ERP) e egală cu `evaluare_amprenta` pe care omul a aprobat **textul exact**. Ciorna e blocată la export când:
+  - amprenta s-a schimbat;
+  - recalcularea e în curs (`evaluare_in_curs`);
+  - ultimul verdict nu mai e `diferenta`.
+  Mesajul e unul singur: „baza s-a schimbat — de reverificat”.
+- Trimiterea rămâne manuală.
 
 ### 3.6 Răspunsul Autorității (rezolvă „acoperit” fals)
 
@@ -99,7 +125,17 @@ La urcarea unui `raspuns_clarificare`, sistemul propune doar **„răspuns posib
    - citat autentic, dar valoarea de pe alt rând sau diametrul în loc de cantitate: măsurătoarea e respinsă;
    - unități incompatibile și număr ambiguu: `neverificat`;
    - răspunsul Autorității care doar pomenește rândul: rămâne „posibil relevant” până la confirmarea omului.
-3. **Idempotență și concurență:** două rulări simultane ale extragerii dau o singură ciornă. O revizie nouă invalidează doar propunerile needitate.
+3. **Idempotență, concurență, versiuni:**
+   - două rulări simultane ale extragerii dau o singură ciornă;
+   - o extragere începută înaintea unei revizii noi nu publică (`evaluare_depasita`);
+   - pragul crește apoi revine: ciorna retrasă de sistem se reactivează; respinsă de om, rămâne respinsă, cu semnalul „a reapărut”;
+   - o revizie nouă invalidează doar propunerile needitate;
+   - exportul e blocat după schimbarea cantității, a pragului sau a inventarului, chiar dacă citatele sunt valide.
+3b. **Completitudine și text:**
+   - o poziție F3 respinsă sau o pagină peste plafon dă `neverificat: agregare incompletă`;
+   - „conductă DN 160, lungime 250 m” dă 250 m; „DN160 … 160 m” nu ia diametrul;
+   - „1.23” dă `neverificat`.
+3c. **Circuitul complet:** reconfirmarea, trigger-ul (editare / aprobare / transmitere / ștergere) și exportul, testate fiecare pe o ciornă `auto_surse_*`.
 4. **Acces:**
    - utilizator fără acces la Ofertare: nu citește și nu scrie;
    - scriere directă în tabel: refuzată;
