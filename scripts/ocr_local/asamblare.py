@@ -6,6 +6,7 @@ o bandă oprită de gardă (ok = false, ex. buclă) nu intră niciodată, rămâ
 Paginile cu text nativ (> 50 de caractere) iau textul nativ. Fără rețea, fără modele, fără BD."""
 import hashlib, json, pathlib, re
 
+from .banda_goala import e_goala
 from .compare import segments
 from .reconcile import join_bands, render
 
@@ -45,9 +46,10 @@ def desparte_nr_cod(segs):
     return [(k, desparte_nr_cod_tabel(v)) if k == 'table' else (k, v) for k, v in segs]
 
 
-def citire_valida(banda_dir):
-    """(cititor, raw) din prima citire validă, sau (None, None). Validă = result.json cu ok = true și raw_sha256 OBLIGATORIU, egal cu
-    sha256(raw.txt): lipsă / null / nepotrivire = citire neverificată, se trece la următorul cititor (Jakarinos #906 P1)."""
+def _citire(banda_dir):
+    """(cititor, raw, goala). O citire „bandă goală” (banda_goala.py: albă dovedită) se ia DOAR dacă niciun cititor nu are o citire
+    validă cu text: altfel textul celuilalt cititor intră ca până acum (fallback-ul de azi), iar dezacordul îl prinde compara."""
+    goala = None
     for c in CITITORI:
         r, f = banda_dir / c / 'result.json', banda_dir / c / 'raw.txt'
         if not (r.exists() and f.exists()): continue
@@ -56,8 +58,17 @@ def citire_valida(banda_dir):
         if not isinstance(res, dict) or res.get('ok') is not True: continue
         raw = f.read_bytes().decode('utf-8')
         if res.get('raw_sha256') != hashlib.sha256(raw.encode()).hexdigest(): continue
-        return c, raw
-    return None, None
+        if e_goala(raw, res):
+            goala = goala or (c, raw); continue
+        return c, raw, False
+    return (goala[0], goala[1], True) if goala else (None, None, False)
+
+
+def citire_valida(banda_dir):
+    """(cititor, raw) din prima citire validă, sau (None, None). Validă = result.json cu ok = true și raw_sha256 OBLIGATORIU, egal cu
+    sha256(raw.txt): lipsă / null / nepotrivire = citire neverificată, se trece la următorul cititor (Jakarinos #906 P1)."""
+    c, raw, _ = _citire(banda_dir)
+    return c, raw
 
 
 def text_banda(raw):
@@ -66,15 +77,17 @@ def text_banda(raw):
 
 def asambleaza_pagina(benzi_dirs, st):
     """Benzile unei pagini OCR (în ordine) -> text. Tabelele sunt deja rânduri „| … |” când ajung la join_bands."""
-    tx = []
+    tx = []; goale = set()
     for bid, d in benzi_dirs:
-        c, raw = citire_valida(d)
+        c, raw, goala = _citire(d)
         if raw is None:
             st['benzi_necitite'] += 1; st['lista_necitite'].append(bid); tx.append(MARCAJ_NECITITA % bid); continue
-        if c == 'mineru': st['benzi_din_mineru'] += 1; st['lista_din_mineru'].append(bid)
+        if goala:  # banda albă dovedită: fără text și fără rânduri de suprapunere, se sare la cusătură
+            st['benzi_goale'] += 1; st['lista_goale'].append(bid); goale.add(len(tx))
+        elif c == 'mineru': st['benzi_din_mineru'] += 1; st['lista_din_mineru'].append(bid)
         tx.append(text_banda(raw))
     if not tx: return ''
-    t = join_bands(tx, [], nu_numara=frozenset({'|'}))
+    t = join_bands(tx, [], nu_numara=frozenset({'|'}), goale=frozenset(goale))
     if t is None: st['cusaturi_nesigure'] += 1; t = '\n'.join(tx)
     if '<td' in t.lower() or '<tr' in t.lower(): st['html_ramas'] += 1
     return t
@@ -82,7 +95,7 @@ def asambleaza_pagina(benzi_dirs, st):
 
 def stare_noua():
     return {'native': 0, 'ocr': 0, 'cusaturi_nesigure': 0, 'html_ramas': 0, 'benzi_necitite': 0, 'lista_necitite': [],
-            'benzi_din_mineru': 0, 'lista_din_mineru': []}
+            'benzi_din_mineru': 0, 'lista_din_mineru': [], 'benzi_goale': 0, 'lista_goale': []}
 
 
 def asambleaza_document(rulare_dir, doc, pagini_native=None):

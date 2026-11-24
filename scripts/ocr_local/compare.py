@@ -2,6 +2,7 @@
 Niveluri (spec §2): cuvant (ș/ş, ț/ţ unificate DOAR la comparare), cifra (separatorul zecimal NICIODATA normalizat),
 rand de tabel (celule, cu rolurile cod / UM / cantitate cand se pot deduce). Textul citit ramane literal; nimic nu se corecteaza aici."""
 import difflib, hashlib, html, json, pathlib, re, threading
+from .banda_goala import e_goala
 
 CEDILLA = str.maketrans({'ş': 'ș', 'ţ': 'ț', 'Ş': 'Ș', 'Ţ': 'Ț'})
 # Numerele pastreaza semnul, exponentul si procentul; semnele, comparatorii si operatorii sunt tokeni separati: -5 vs 5, 5% vs 5,
@@ -352,6 +353,19 @@ def compare_band(band, raw_a, res_a, raw_b, res_b):
         return {'band': band['id'], 'structura': 'citire_incompleta', 'incomplete': motiv}, [dict(base, id=band['id'] + '_banda', tip='banda_intreaga',
                 citire_lighton=raw_a, citire_mineru=raw_b, motiv_pipeline='citire incompleta: ' + ', '.join(motiv),
                 diferenta_numerica=True, anomalie_separator=separator_anomaly(raw_a, raw_b), e_cantitate=band['kind'] == 'quantity_table')]
+    # banda goala (banda_goala.py: iesire goala pe imagine alba dovedita). Ambele goale = acord. Goala la unul + orice text la
+    # celalalt (chiar si doar marcaje fara segmente) = dezacord pe toata banda, la om (banda_intreaga: fara arbitraj automat).
+    ga, gb = e_goala(raw_a, res_a), e_goala(raw_b, res_b)
+    if ga and gb:
+        return {'band': band['id'], 'structura': 'banda_goala', 'tokens': 0, 'rows': 0, 'disagreements': 0, 'acord_regula_a': []}, []
+    if ga or gb or res_a.get('banda_goala') is True or res_b.get('banda_goala') is True:
+        goala = [r for r, x in (('lighton', ga), ('mineru', gb)) if x]
+        motiv = ('banda goala la %s, text la %s' % (goala[0], 'mineru' if goala[0] == 'lighton' else 'lighton') if goala
+                 else 'marcaj banda_goala cu text nevid (rezultat neconsistent)')
+        return {'band': band['id'], 'structura': 'banda_goala_dezacord', 'banda_goala': goala}, [dict(base, id=band['id'] + '_banda', tip='banda_intreaga',
+                citire_lighton=raw_a, citire_mineru=raw_b, motiv_pipeline=motiv, diferenta_numerica=numeric_diff(raw_a, raw_b),
+                anomalie_separator=separator_anomaly(raw_a, raw_b),
+                e_cantitate=band['kind'] == 'quantity_table' or any(ch.isdigit() for ch in raw_a + raw_b))]
     sa = segments(raw_a); sb = segments(raw_b)
     na = sum(1 for s in sa if s[0] == 'table'); nb = sum(1 for s in sb if s[0] == 'table')
     structura = 'aceeasi' if (na > 0) == (nb > 0) else 'diferita'

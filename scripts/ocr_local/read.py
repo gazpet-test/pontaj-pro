@@ -3,6 +3,7 @@ Reguli pastrate din pipeline-ul Codex: endpoint doar IP loopback literal, fara p
 garda v3, raw-ul nu se repara. Noi: verificarea SHA-256 a greutatilor la pornire, gpu.lock luat de rulare si eliberat la final,
 reluare idempotenta (banda cu result.json se sare; banda inceputa si neterminata NU se reincearca automat)."""
 import base64, contextlib, hashlib, http.client, ipaddress, json, os, pathlib, socket, threading, time, urllib.parse
+from . import banda_goala
 from .guard import Guard
 from .gpu_cedare import cerere_activa
 from .plan import load_plan, save
@@ -165,8 +166,12 @@ def read_mineru(image_bytes, out_dir, cfg, deadline):
     md = json2md(box['c']); raw = md if isinstance(md, str) else str(md)
     dec = decupaje_garda(box.get('uris', ()))
     g = Guard(dec); signal = g(raw)  # scutite doar decupajele codificate de pipeline in aceasta citire
+    # blocurile de layout cu text (banda_goala.iesire_goala cere 0); alta forma a blocurilor = necunoscut (None), nu 0
+    blocuri = box['c'] if isinstance(box['c'], list) else None
+    cu_text = (sum(1 for b in blocuri if isinstance(b.get('content'), str) and b['content'].strip())
+               if blocuri is not None and all(isinstance(b, dict) for b in blocuri) else None)
     return raw, {'ok': not signal and bool(raw.strip()), 'signal': signal, 'guard_event': g.event, 'error': None, 'seconds': seconds,
-                 'blocks': len(box['c']), 'decupaje_pipeline': len(dec)}
+                 'blocks': len(box['c']), 'blocuri_cu_text': cu_text, 'decupaje_pipeline': len(dec)}
 
 FUNCS = {'lighton': read_lighton, 'mineru': read_mineru}
 
@@ -224,6 +229,8 @@ def run_reader(plan_dir, reader, *, run_id, check_weights=True, check_server=Tru
     si da propria functie (cererea E3 + oprirea cozii).
     O banda oprita de GARDA (decizie Razvan 14.10) opreste doar banda: dupa confirmarea ca vLLM e liber (/metrics), banda ramane
     incompleta (la incarcare: stare „incomplet” cu motivul si guard_event; la arbitraj: om, fara Claude) si citirea continua.
+    Iesire goala curata (fara text, fara garda / eroare) pe o banda ALBA dovedita din imagine (banda_goala.py) = rezultat valid
+    `banda_goala: true`, text gol, citirea continua; iesirea goala pe o banda ne-alba ramane esec (oprire, ca inainte).
     Returneaza starea; scrie <banda>/<cititor>/raw.txt + result.json si <plan>/read_<cititor>.json."""
     if reader not in READERS: raise ValueError('Cititor necunoscut')
     plan_dir = pathlib.Path(plan_dir); doc = load_plan(plan_dir); proto = protocol(); cfg = proto['readers'][reader]
@@ -246,7 +253,9 @@ def run_reader(plan_dir, reader, *, run_id, check_weights=True, check_server=Tru
                 acelasi = (old.get('reader') == reader and old.get('protocol') == proto['version']
                            and old.get('weights_sha256') == state['weights_sha256'] and old.get('image_sha256') == band['image_sha256']
                            and raw_old is not None and hashlib.sha256(raw_old).hexdigest() == old.get('raw_sha256'))
-                if acelasi and old.get('ok') is True:
+                # o banda goala se refoloseste doar daca imaginea e dovedita alba si acum (regula curenta, nu doar cea de la citire)
+                if acelasi and old.get('ok') is True and (old.get('banda_goala') is not True
+                                                          or (not raw_old.strip() and banda_goala.alba((plan_dir / band['image']).read_bytes()))):
                     state['skipped_existing'] += 1; continue
                 if acelasi and garda_oprita(old) and old.get('backend_idle_confirmed') is True:  # banda oprita de garda, inchisa curat
                     state['skipped_existing'] += 1; state['benzi_garda'].append(_garda(band, old)); continue
@@ -261,6 +270,8 @@ def run_reader(plan_dir, reader, *, run_id, check_weights=True, check_server=Tru
             data = (plan_dir / band['image']).read_bytes()
             holder['keep'] = True  # GPU-ul e 'ocupat' din momentul cererii pana cand rezultatul complet e scris pe disc
             raw, result = FUNCS[reader](data, out, cfg, proto['deadline_seconds'])
+            # iesire goala curata pe banda ALBA dovedita din imagine = rezultat valid (banda_goala), nu oprire (25.11.2026)
+            banda_goala.aplica(reader, raw, result, data)
             (out / 'raw.txt').write_bytes(raw.encode('utf-8'))  # octeti exacti: hash-ul nu depinde de CRLF pe Windows
             result.update(band=band['id'], reader=reader, image_sha256=band['image_sha256'], raw_sha256=hashlib.sha256(raw.encode()).hexdigest(),
                           protocol=proto['version'], weights_sha256=state['weights_sha256'], run_id=run_id, backend_idle_confirmed=False)

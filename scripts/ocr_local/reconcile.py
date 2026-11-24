@@ -6,6 +6,7 @@ import json, pathlib
 import hashlib
 import os
 from .compare import segments, tokens, flat_text, table_rows, compare_band, item_hash, canonical, check_result
+from .banda_goala import e_goala
 from .plan import load_plan, save
 
 DECIZII = ('ales_lighton', 'ales_mineru', 'text_propus', 'needs_human')
@@ -120,13 +121,29 @@ def apply_band(raw_a, raw_b, items, decisions):
         return render(original), needs  # nicio schimbare aleasa: structura LightOn ramane cum a citit-o
     return render([tuple(s) for s in segs]), needs
 
-def join_bands(texts, signals, min_tokens=8, max_lines=3, nu_numara=frozenset()):
+def join_bands(texts, signals, min_tokens=8, max_lines=3, nu_numara=frozenset(), goale=frozenset()):
     """Benzile pas6 se suprapun cu 1-3 randuri intregi (doua randuri de cerneala). Se taie din banda urmatoare primele k randuri
     (k = 1..3, cel mai mare) DOAR daca sunt identice (tokeni, ș/ş unificate) cu ultimele k randuri INTREGI ale benzii precedente si au
     impreuna >= 8 tokeni. Comparatie pe randuri complete, nu pe tokeni oarecare. Altfel cusatura e nesigura: None (pagina -> needs_human).
-    nu_numara: tokeni care se compara, dar nu intra in pragul de 8 (ex. '|' pus de conversia tabelelor, Jakarinos #906 P2)."""
+    nu_numara: tokeni care se compara, dar nu intra in pragul de 8 (ex. '|' pus de conversia tabelelor, Jakarinos #906 P2).
+    goale: indicii benzilor ALBE dovedite (banda_goala.py), cu text vid. Banda alba acopera toata zona dintre vecinii ei, inclusiv
+    randurile de suprapunere cu ei (deci acelea sunt albe): banda se sare (semnal banda_goala_sarita), iar banda cu text de dupa ea se
+    lipeste intreaga, fara taiere (semnal cusatura_dupa_banda_goala). Un text vid FARA aceasta dovada ramane cusatura nesigura, ca inainte."""
     from .compare import TOKEN, norm_word
     key = lambda line: [norm_word(t) for t in TOKEN.findall(line)]
+    if goale:
+        out = None; dupa_goala = False
+        for k, t in enumerate(texts):
+            if k in goale and not t.strip():
+                signals.append({'type': 'banda_goala_sarita', 'banda': k}); dupa_goala = True; continue
+            if out is None: out = t
+            elif dupa_goala: out = out + '\n' + t; signals.append({'type': 'cusatura_dupa_banda_goala', 'banda': k})
+            else:
+                sem = []; out = join_bands([out, t], sem, min_tokens, max_lines, nu_numara)  # cusatura obisnuita, aceeasi regula
+                signals.extend(dict(s, banda=k) for s in sem)
+                if out is None: return None
+            dupa_goala = False
+        return '' if out is None else out
     out = texts[0] if texts else ''
     for k, nxt in enumerate(texts[1:], 1):
         la = [l for l in out.split('\n') if l.strip()]; lb = nxt.split('\n'); lbn = [i for i, l in enumerate(lb) if l.strip()]
@@ -175,7 +192,10 @@ def reconcile(plan_dir, decisions_path):
             raise ValueError('dezacorduri.jsonl nu corespunde citirilor pentru banda %s - ruleaza din nou compara' % band['id'])
         text, needs = apply_band(raw_a, raw_b, bi, decisions)
         p = pages.setdefault(band['page'], {'page': band['page'], 'bands': [], 'needs_human': False, 'arbitrat_de_claude_cantitati': 0})
-        p['bands'].append({'band': band['id'], 'text': text, 'needs_human': needs, 'dezacorduri': len(bi)})
+        # imaginea e dovedita alba (dovada tine de imagine, nu de cititor); join_bands sare banda doar daca textul FINAL e vid
+        # (ambii goi, sau decizia pe banda_intreaga a ales citirea goala) - altfel cusatura obisnuita
+        goala = e_goala(raw_a, res['lighton']) or e_goala(raw_b, res['mineru'])
+        p['bands'].append(dict({'band': band['id'], 'text': text, 'needs_human': needs, 'dezacorduri': len(bi)}, **({'banda_goala': True} if goala else {})))
         p['needs_human'] = p['needs_human'] or needs
         for i in bi:
             dec = decisions.get(i['id'])
@@ -192,7 +212,8 @@ def reconcile(plan_dir, decisions_path):
     for p in pages.values():
         # semnalul clasificatorului (pagina citita desi pixelii o socoteau plansa / formular) ajunge in garda.semnale din BD
         p['semnale'] = [{'type': 'clasificare_incerta', 'candidate': x.get('candidate')} for x in incerte.get(p['page'], [])]
-        p['text'] = None if p['needs_human'] else join_bands([b['text'] for b in p['bands']], p['semnale'])
+        p['text'] = None if p['needs_human'] else join_bands([b['text'] for b in p['bands']], p['semnale'],
+                                                             goale=frozenset(i for i, b in enumerate(p['bands']) if b.get('banda_goala')))
         if p['text'] is None: p['needs_human'] = True
     out = {'pages': sorted(pages.values(), key=lambda x: x['page']), 'invalid_decisions': invalid,
            'summary': {'pages': len(pages), 'needs_human_pages': sum(1 for p in pages.values() if p['needs_human']),
