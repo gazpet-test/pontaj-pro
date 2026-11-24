@@ -1,0 +1,199 @@
+WBS | rezumat | jalon | denumire | executant | durata_zile_lucratoare | sursa_durata | start | finish | predecesori (WBS tip+lag)
+0 | da | nu | Protejare conductă DN700 Bobești–Jilava în tub de protecție Ø914,4 – traversări drum principal și bretea (Jilava) | Gazpet (antreprenor general) | 63 | calculat (rezumat) | 2026-11-02 | 2027-01-27 | -
+1 | da | nu | Pregătire execuție, aprovizionare, notificări și organizare de șantier (lucrări temporare, cap. 5.1.2) | Gazpet | 40 | calculat (rezumat) | 2026-11-02 | 2026-12-25 | -
+1.1 | nu | da | Ordin administrativ de începere a lucrărilor (OI) – PCC 1 | beneficiar | 0 | DOCUMENT (dată ERP 2026-11-02; Fișa date II.2.4) | 2026-11-02 | 2026-11-02 | -
+1.2 | nu | nu | Notificare scrisă ET București TRANSGAZ privind data începerii lucrărilor (≥72 h / ≥3 zile lucrătoare) | Gazpet | 1 | PRESUPUS | 2026-11-02 | 2026-11-02 | 1.1 FS
+1.3 | nu | nu | Predare-primire amplasament, PV (PCC 2; B, P, C, reprezentant TRANSGAZ) | beneficiar + proiectant + Gazpet + TRANSGAZ | 1 | PRESUPUS | 2026-11-02 | 2026-11-02 | 1.1 FS
+1.4 | nu | nu | Elaborare documente pre-execuție: WPS/WPQR și tehnologie de sudare, procedură de izolare, proceduri PC, plan propriu SSM, proiect OS, plan gestionare deșeuri | Gazpet | 5 | PRESUPUS | 2026-11-02 | 2026-11-06 | 1.1 FS
+1.5 | nu | nu | Acceptare WPS și proceduri de către beneficiar și TRANSGAZ | beneficiar + TRANSGAZ | 5 | PRESUPUS | 2026-11-09 | 2026-11-13 | 1.4 FS
+1.6 | da | nu | Aprovizionare și recepție materiale (etapa 1 „Procurare materiale” din graficul PT) | Gazpet | 21 | calculat (rezumat) | 2026-11-02 | 2026-11-30 | -
+1.6.1 | nu | nu | Comandă și livrare tub de protecție Ø914,4x7,1 L245N SR EN ISO 3183 (36,5 + 16,0 m) cu certificat 3.1 [3273442] | furnizor / Gazpet | 20 | PRESUPUS | 2026-11-02 | 2026-11-27 | 1.1 FS
+1.6.2 | nu | nu | Livrare materiale izolație: benzi C50 [3273439, 3273444], manșoane capete [3273445], pătură ceramică [3273440] + coliere [3273441] | furnizor / Gazpet | 10 | PRESUPUS | 2026-11-02 | 2026-11-13 | 1.1 FS
+1.6.3 | nu | nu | Livrare distanțieri DN900/DN700 tip CDM 50 (29 + 14 buc) [3273443] | furnizor / Gazpet | 15 | PRESUPUS | 2026-11-02 | 2026-11-20 | 1.1 FS
+1.6.4 | nu | nu | Livrare instalații aerisire cu sită Davis [7456192], țeavă L245N 60,3x3,6 HDPE [3273446], coturi 3D [3273447] | furnizor / Gazpet | 15 | PRESUPUS | 2026-11-02 | 2026-11-20 | 1.1 FS
+1.6.5 | nu | nu | Livrare prize de potențial PVC [3273450], anozi Zn [3273451], cabluri CYY 1x25/1x6, ACYY, tub PVC, papuci | furnizor / Gazpet | 15 | PRESUPUS | 2026-11-02 | 2026-11-20 | 1.1 FS
+1.6.6 | nu | nu | Recepție calitativă material tubular – vizual, măsurare, certificate (PCC 3.1; PV+CC) | Gazpet (RTE) + beneficiar | 1 | PRESUPUS | 2026-11-30 | 2026-11-30 | 1.6.1 FS; 1.7.1 FS+7z
+1.6.7 | nu | nu | Recepție materiale izolație, distanțieri, aerisire (PCC 3.2) | Gazpet (RTE) + beneficiar | 1 | PRESUPUS | 2026-11-23 | 2026-11-23 | 1.6.2 FS; 1.6.3 FS; 1.6.4 FS; 1.7.1 FS+7z
+1.6.8 | nu | nu | Recepție materiale protecție catodică: prize, anozi Zn, cabluri (PCC 4.11) | Gazpet (RTE) + beneficiar | 1 | PRESUPUS | 2026-11-23 | 2026-11-23 | 1.6.5 FS; 1.7.1 FS+7z
+1.7 | da | nu | Notificări scrise faze de control (B, P, ISC, TRANSGAZ) cu minim 10 zile înainte – NOTĂ PCC | Gazpet | 40 | calculat (rezumat) | 2026-11-02 | 2026-12-25 | -
+1.7.1 | nu | nu | N1 – notificare recepție materiale (PCC 3.1, 3.2, 4.11) | Gazpet | 1 | PRESUPUS | 2026-11-02 | 2026-11-02 | 1.1 FS
+1.7.2 | nu | nu | N2 – notificare verificare șanț (PCC 4.1) și montaj anozi/prize (PCC 4.12) | Gazpet | 1 | PRESUPUS | 2026-11-13 | 2026-11-13 | 2.2.1 SS
+1.7.3 | nu | nu | N3 – notificare curățire la luciu și izolație conductă DN700 (PCC 4.2, 4.3, 4.9) | Gazpet | 1 | PRESUPUS | 2026-11-13 | 2026-11-13 | 2.2.1 SS
+1.7.4 | nu | nu | N4 – notificare examinare vizuală și nedistructivă suduri (PCC 4.6–4.8) | Gazpet | 1 | PRESUPUS | 2026-12-02 | 2026-12-02 | 4.3.2 SS
+1.7.5 | nu | nu | N5 – notificare izolație tub de protecție, contact tub–conductă, lucrări ascunse (PCC 4.3, 4.9, 4.10) | Gazpet | 1 | PRESUPUS | 2026-12-11 | 2026-12-11 | 4.3.9 SS
+1.7.6 | nu | nu | N6 – notificare astupare șanț și aducere teren la starea inițială (PCC 4.15) | Gazpet | 1 | PRESUPUS | 2026-12-11 | 2026-12-11 | 4.3.9 SS
+1.7.7 | nu | nu | N7 – notificare PIF protecție catodică (PCC 4.13, 4.14) și DCVG (PCC 5) | Gazpet | 1 | PRESUPUS | 2026-12-25 | 2026-12-25 | 4.3.16 SS
+1.8 | da | nu | Organizare de șantier și lucrări pregătitoare (lucrări temporare) | Gazpet | 6 | calculat (rezumat) | 2026-11-06 | 2026-11-13 | -
+1.8.1 | nu | nu | Amenajare organizare de șantier la ≥20 m de conductă, mobilizare utilaje și echipamente | Gazpet | 3 | PRESUPUS | 2026-11-06 | 2026-11-10 | 1.3 FS; 1.2 FS+3z
+1.8.2 | nu | nu | Trasare, pichetare culoar de lucru 16 m, marcare traseu conductă cu borne TRANSGAZ (topograf; verificare P+B) | Gazpet | 2 | PRESUPUS | 2026-11-06 | 2026-11-09 | 1.3 FS; 1.2 FS+3z
+1.8.3 | nu | nu | Sondaje manuale de identificare a utilităților subterane, cu deținătorii rețelelor | Gazpet | 2 | PRESUPUS | 2026-11-10 | 2026-11-11 | 1.8.2 FS
+1.8.4 | nu | da | PV predare instalație / permis de lucru cu foc deschis emis de TRANSGAZ (precondiție tăiere și sudare) | beneficiar + TRANSGAZ | 0 | jalon | 2026-11-13 | 2026-11-13 | 1.5 FS; 1.8.2 FS
+2 | da | nu | Ob.1 (0001) Terasamente drum principal | ELCAS SRL (subcontractant – PRESUPUS) | 48 | calculat (rezumat) | 2026-11-11 | 2027-01-15 | -
+2.1 | da | nu | Deviz 166101 Pregătire culoar de lucru | ELCAS SRL (PRESUPUS) | 2 | calculat (rezumat) | 2026-11-11 | 2026-11-12 | -
+2.1.1 | nu | nu | TSH01A1 Degajarea terenului de corpuri străine (851 mp) | ELCAS SRL (PRESUPUS) | 1 | PRESUPUS | 2026-11-11 | 2026-11-11 | 1.8.1 FS; 1.8.2 FS
+2.1.2 | nu | nu | TSC19B1 + TSC22D1 Săpătură cu buldozerul și împingerea pământului (194 mc) – numai în afara zonei de protecție de 6 m | ELCAS SRL (PRESUPUS) | 1 | PRESUPUS | 2026-11-12 | 2026-11-12 | 2.1.1 FS
+2.2 | da | nu | Deviz 166102 Săpături șanț | ELCAS SRL (PRESUPUS) | 10 | calculat (rezumat) | 2026-11-13 | 2026-11-26 | -
+2.2.1 | nu | nu | TSA04E1 Săpătură manuală șanț, gropi de poziție și sub conductă, adâncime 1,51–3 m (207 mc) | ELCAS SRL (PRESUPUS) | 8 | PRESUPUS | 2026-11-13 | 2026-11-24 | 2.1.2 FS; 1.8.3 FS
+2.2.2 | nu | nu | TSF01B1 Sprijiniri maluri cu dulapi (162 mp), pe măsura avansării săpăturii | ELCAS SRL (PRESUPUS) | 8 | PRESUPUS | 2026-11-16 | 2026-11-25 | 2.2.1 SS+1z
+2.2.3 | nu | nu | TSE01C1 Nivelare și rectificare manuală fund șanț | ELCAS SRL (PRESUPUS) | 1 | PRESUPUS | 2026-11-26 | 2026-11-26 | 2.2.1 FS; 2.2.2 FS
+2.2.4 | nu | da | Verificare șanț (PCC 4.1) + PV recepție calitativă teren (geotehnician + proiectant) | beneficiar + proiectant + Gazpet | 0 | jalon | 2026-11-26 | 2026-11-26 | 2.2.3 FS; 1.7.2 FS+7z
+2.3 | da | nu | Deviz 166103 Umplere șanț și gropi de poziție | ELCAS SRL (PRESUPUS) | 5 | calculat (rezumat) | 2027-01-07 | 2027-01-13 | -
+2.3.1 | nu | nu | TSD01D1 + CG32A# Umplutură manuală în straturi de 10–15 cm până la 30 cm peste generatoare, apoi 20–30 cm (207 mc) | ELCAS SRL (PRESUPUS) | 4 | PRESUPUS | 2027-01-07 | 2027-01-12 | 4.6.2 FS
+2.3.2 | nu | nu | TSD06A1 Compactare cu placa vibrantă 0,7 t, grad 97–98% (207 mc) | ELCAS SRL (PRESUPUS) | 4 | PRESUPUS | 2027-01-08 | 2027-01-13 | 2.3.1 SS+1z; 2.3.1 FF
+2.4 | da | nu | Deviz 166104 Refacere amplasament | ELCAS SRL (PRESUPUS) | 2 | calculat (rezumat) | 2027-01-14 | 2027-01-15 | -
+2.4.1 | nu | nu | TSD01D1 + TSC22D1 Împrăștiere pământ afânat și împingere cu buldozerul (194 mc) | ELCAS SRL (PRESUPUS) | 1 | PRESUPUS | 2027-01-14 | 2027-01-14 | 2.3.2 FS
+2.4.2 | nu | nu | TSE04B1 Nivelare teren cu buldozerul (851 mp) și refacere strat vegetal | ELCAS SRL (PRESUPUS) | 1 | PRESUPUS | 2027-01-15 | 2027-01-15 | 2.4.1 FS
+2.4.3 | nu | da | Verificare astupare și aducere teren la condițiile inițiale (PCC 4.15) – drum principal | beneficiar + Gazpet | 0 | jalon | 2027-01-15 | 2027-01-15 | 2.4.2 FS; 1.7.6 FS+7z
+3 | da | nu | Ob.2 (0002) Terasamente bretea | ELCAS SRL (subcontractant – PRESUPUS) | 48 | calculat (rezumat) | 2026-11-12 | 2027-01-18 | -
+3.1 | da | nu | Deviz 166201 Pregătire culoar de lucru | ELCAS SRL (PRESUPUS) | 2 | calculat (rezumat) | 2026-11-12 | 2026-11-13 | -
+3.1.1 | nu | nu | TSH01A1 Degajarea terenului de corpuri străine (420 mp) | ELCAS SRL (PRESUPUS) | 1 | PRESUPUS | 2026-11-12 | 2026-11-12 | 2.1.1 FS
+3.1.2 | nu | nu | TSC19B1 + TSC22D1 Săpătură cu buldozerul și împingerea pământului (96 mc) – în afara zonei de 6 m | ELCAS SRL (PRESUPUS) | 1 | PRESUPUS | 2026-11-13 | 2026-11-13 | 3.1.1 FS; 2.1.2 FS
+3.2 | da | nu | Deviz 166202 Săpături șanț | ELCAS SRL (PRESUPUS) | 6 | calculat (rezumat) | 2026-11-25 | 2026-12-02 | -
+3.2.1 | nu | nu | TSA04E1 Săpătură manuală șanț, gropi de poziție și sub conductă (102 mc) | ELCAS SRL (PRESUPUS) | 4 | PRESUPUS | 2026-11-25 | 2026-11-30 | 3.1.2 FS; 2.2.1 FS
+3.2.2 | nu | nu | TSF01B1 Sprijiniri maluri cu dulapi (80 mp) | ELCAS SRL (PRESUPUS) | 4 | PRESUPUS | 2026-11-26 | 2026-12-01 | 3.2.1 SS+1z
+3.2.3 | nu | nu | TSE01C1 Nivelare și rectificare manuală fund șanț | ELCAS SRL (PRESUPUS) | 1 | PRESUPUS | 2026-12-02 | 2026-12-02 | 3.2.1 FS; 3.2.2 FS
+3.2.4 | nu | da | Verificare șanț bretea (PCC 4.1) + PV recepție calitativă teren | beneficiar + proiectant + Gazpet | 0 | jalon | 2026-12-02 | 2026-12-02 | 3.2.3 FS; 1.7.2 FS+7z
+3.3 | da | nu | Deviz 166203 Umplere șanț și gropi de poziție | ELCAS SRL (PRESUPUS) | 3 | calculat (rezumat) | 2027-01-08 | 2027-01-12 | -
+3.3.1 | nu | nu | TSD01D1 + CG32A# Umplutură manuală în straturi compactate (102 mc) | ELCAS SRL (PRESUPUS) | 2 | PRESUPUS | 2027-01-08 | 2027-01-11 | 5.6.2 FS
+3.3.2 | nu | nu | TSD06A1 Compactare cu placa vibrantă, grad 97–98% (102 mc) | ELCAS SRL (PRESUPUS) | 2 | PRESUPUS | 2027-01-11 | 2027-01-12 | 3.3.1 SS+1z; 3.3.1 FF
+3.4 | da | nu | Deviz 166204 Refacere amplasament | ELCAS SRL (PRESUPUS) | 2 | calculat (rezumat) | 2027-01-15 | 2027-01-18 | -
+3.4.1 | nu | nu | TSD01D1 + TSC22D1 Împrăștiere pământ afânat și împingere cu buldozerul (96 mc) | ELCAS SRL (PRESUPUS) | 1 | PRESUPUS | 2027-01-15 | 2027-01-15 | 3.3.2 FS; 2.4.1 FS
+3.4.2 | nu | nu | TSE04B1 Nivelare teren cu buldozerul (420 mp) și refacere strat vegetal | ELCAS SRL (PRESUPUS) | 1 | PRESUPUS | 2027-01-18 | 2027-01-18 | 3.4.1 FS; 2.4.2 FS
+3.4.3 | nu | da | Verificare astupare și aducere teren la condițiile inițiale (PCC 4.15) – bretea | beneficiar + Gazpet | 0 | jalon | 2027-01-18 | 2027-01-18 | 3.4.2 FS; 1.7.6 FS+7z
+4 | da | nu | Ob.3 (0003) Montare tub de protecție drum principal (L1 = 36,5 m) | Gazpet | 42 | calculat (rezumat) | 2026-11-11 | 2027-01-07 | -
+4.1 | da | nu | Deviz 166301 Pregătirea conductei (etapa 4 PT) | Gazpet | 13 | calculat (rezumat) | 2026-11-23 | 2026-12-09 | -
+4.1.1 | nu | nu | IZA03A1 Îndepărtare izolație veche și depuneri cu decapanți (85,95 mp; diluant 6109339) | Gazpet | 2 | PRESUPUS | 2026-11-23 | 2026-11-24 | 2.2.1 SS+4z; 2.2.1 FF
+4.1.2 | nu | nu | Verificare stare conductă DN700 (coroziune, grosimi de perete) – fără articol distinct | Gazpet + TRANSGAZ | 1 | PRESUPUS | 2026-11-25 | 2026-11-25 | 4.1.1 FS
+4.1.3 | nu | nu | M1L05J1 + M1L29A1 Control nedistructiv suduri cap la cap existente DN700 (gamagrafiere 4 buc + pulberi magnetice 8,96 m) | laborator autorizat | 1 | PRESUPUS | 2026-11-25 | 2026-11-25 | 4.1.1 FS
+4.1.4 | nu | da | Remediere eventuale defecte de coroziune / suduri neconforme în program aprobat TRANSGAZ (durată necunoscută – 0 în plan) | Gazpet + TRANSGAZ | 0 | PRESUPUS | 2026-11-25 | 2026-11-25 | 4.1.2 FS; 4.1.3 FS
+4.1.5 | nu | nu | IZA01F1 Curățire prin sablare la luciu metalic, rugozitate ≥90 µm (85,95 mp) | Gazpet | 2 | PRESUPUS | 2026-11-26 | 2026-11-27 | 4.1.4 FS
+4.1.6 | nu | nu | Verificare curățire la luciu metalic și rugozitate, pe tronsoane (PCC 4.2) | Gazpet (CQ) + beneficiar | 2 | PRESUPUS | 2026-11-26 | 2026-11-27 | 4.1.5 SS; 1.7.3 FS+7z
+4.1.7 | nu | nu | IZFBTT[5] Izolare conductă DN700 cu benzi C50 aplicate la rece, tip foarte întărit 3,2 mm (128,93 mp) | Gazpet | 2 | PRESUPUS | 2026-11-27 | 2026-11-30 | 4.1.6 SS+1z; 4.1.5 FF+1z; 1.6.7 FS; 1.5 FS
+4.1.8 | nu | nu | IZH08A1 Izolare cu pătură ceramică 1260°C a conductei în zona sudurii longitudinale (85,95 mp, coliere 29 buc) – după semi-tubul inferior | Gazpet | 1 | PRESUPUS | 2026-12-09 | 2026-12-09 | 4.3.7 FS
+4.2 | da | nu | Deviz 166302 Verificarea calității izolației conductei (etapa 5 PT) | laborator | 1 | calculat (rezumat) | 2026-12-01 | 2026-12-01 | -
+4.2.1 | nu | nu | AUT4803 + NMB020161 Verificare izolație conductă: aderență, grosime (PCC 4.3) și continuitate izotest 25 kV (PCC 4.9), buletin laborator acreditat | laborator acreditat + Gazpet | 1 | PRESUPUS | 2026-12-01 | 2026-12-01 | 4.1.7 FS; 1.7.3 FS+7z
+4.2.2 | nu | da | Izolație conductă admisă – se poate monta tubul de protecție (BM / PV) | beneficiar + Gazpet | 0 | jalon | 2026-12-01 | 2026-12-01 | 4.2.1 FS
+4.3 | da | nu | Deviz 166303 Montarea tubului de protecție (etapa 6 PT) | Gazpet | 40 | calculat (rezumat) | 2026-11-11 | 2027-01-05 | -
+4.3.1 | nu | nu | TRB05C15 Transport tub prin purtare / rostogolire (50 m) la culoar | Gazpet | 1 | PRESUPUS | 2026-12-01 | 2026-12-01 | 1.6.6 FS; 1.8.1 FS
+4.3.2 | nu | nu | RI1061ZA331 Tăiere longitudinală tub în două semi-tuburi pe generatoare diametral opuse (4 tăieri) și pregătire rosturi | Gazpet | 2 | PRESUPUS | 2026-12-02 | 2026-12-03 | 4.3.1 FS; 1.8.4 FS
+4.3.3 | nu | nu | M1L77A1 (parțial) Sudare semicirculară a tronsoanelor de semi-tub | Gazpet (sudori) | 1 | PRESUPUS | 2026-12-04 | 2026-12-04 | 4.3.2 FS; 1.5 FS
+4.3.4 | nu | nu | RPEJ01C1# Confecționare console metalice de susținere (350 kg) | Gazpet | 2 | PRESUPUS | 2026-11-11 | 2026-11-12 | 1.8.1 FS
+4.3.5 | nu | nu | RPEJ01C1# Montare console metalice în șanț | Gazpet | 1 | PRESUPUS | 2026-11-27 | 2026-11-27 | 4.3.4 FS; 2.2.4 FS
+4.3.6 | nu | nu | GA08L1% Lansare semi-tub inferior sub conductă cu macara-lansator | Gazpet | 1 | PRESUPUS | 2026-12-07 | 2026-12-07 | 4.3.3 FS; 4.3.5 FS; 4.2.2 FS; 2.2.4 FS
+4.3.7 | nu | nu | IZL04C1 + NMB025051 Montare distanțieri CDM 50 la 1,5 m (29 buc) | Gazpet | 1 | PRESUPUS | 2026-12-08 | 2026-12-08 | 4.3.6 FS; 1.6.7 FS
+4.3.8 | nu | nu | GA08L1% Lansare semi-tub superior peste conductă și centrare | Gazpet | 1 | PRESUPUS | 2026-12-10 | 2026-12-10 | 4.1.8 FS
+4.3.9 | nu | nu | M1L77A1 + NMB222791 Sudare longitudinală pe generatoare a semi-tuburilor, la poziție în șanț, clasa II (75,87 m) | Gazpet (sudori) | 5 | PRESUPUS | 2026-12-11 | 2026-12-17 | 4.3.8 FS; 1.8.4 FS
+4.3.10 | nu | nu | M1J38A1 Marcare prin poansonare a sudurilor (5 buc) | Gazpet (sudori) | 1 | PRESUPUS | 2026-12-17 | 2026-12-17 | 4.3.9 FF
+4.3.11 | nu | nu | Examinare vizuală 100% a sudurilor (PCC 4.6; SR EN ISO 17637) | laborator + Gazpet (RTS) | 1 | PRESUPUS | 2026-12-18 | 2026-12-18 | 4.3.9 FS; 1.7.4 FS+7z
+4.3.12 | nu | nu | M1L05L1 + M1L29A1 Control nedistructiv suduri tub (gamagrafiere 5 buc + pulberi magnetice 75,87 m; CS/memoriu: UT 100%) (PCC 4.7) | laborator autorizat | 2 | PRESUPUS | 2026-12-21 | 2026-12-22 | 4.3.11 FS
+4.3.13 | nu | nu | Remediere suduri neconforme și reexaminare (dacă e cazul) | Gazpet + laborator | 1 | PRESUPUS | 2026-12-23 | 2026-12-23 | 4.3.12 FS
+4.3.14 | nu | da | Jurnal suduri și buletine VT/NDT acceptate (PCC 4.8; PVLA+BM) | Gazpet (RTS) + beneficiar | 0 | jalon | 2026-12-23 | 2026-12-23 | 4.3.13 FS; 4.3.10 FS
+4.3.15 | nu | nu | M1G27A1 Polizarea cordoanelor de sudură în vederea protecției anticorozive (75,87 m) | Gazpet | 1 | PRESUPUS | 2026-12-24 | 2026-12-24 | 4.3.14 FS
+4.3.16 | nu | nu | IZA01F1 + NMB019931 Sablare tub de protecție (104,8 mp) | Gazpet | 2 | PRESUPUS | 2026-12-25 | 2026-12-28 | 4.3.15 FS
+4.3.17 | nu | nu | IZFBTT[6] Izolare tub de protecție cu benzi C50, tip foarte întărit (157,2 mp) | Gazpet | 2 | PRESUPUS | 2026-12-28 | 2026-12-29 | 4.3.16 SS+1z; 4.3.16 FF+1z
+4.3.18 | nu | nu | IZMTT[9] Montare manșoane de izolare/etanșare a spațiului inelar la capetele tubului (2 buc) | Gazpet | 1 | PRESUPUS | 2027-01-05 | 2027-01-05 | 4.5.6 FS
+4.4 | da | nu | Deviz 166304 Verificarea calității izolației tubului de protecție (etapa 7 PT) | laborator | 1 | calculat (rezumat) | 2026-12-30 | 2026-12-30 | -
+4.4.1 | nu | nu | AUT4803 + NMB020161 Verificare izolație tub: aderență, grosime (PCC 4.3), continuitate izotest 25 kV (PCC 4.9) | laborator acreditat + Gazpet | 1 | PRESUPUS | 2026-12-30 | 2026-12-30 | 4.3.17 FS; 1.7.5 FS+7z
+4.5 | da | nu | Deviz 166305 Montare instalație de aerisire (etapa 8 PT) | Gazpet | 30 | calculat (rezumat) | 2026-11-27 | 2027-01-07 | -
+4.5.1 | nu | nu | TSC04B1 Săpătură fundație dispozitiv de aerisire la ≥2,5 m de generatoarea conductei (3 mc; manual în zona de protecție) | Gazpet | 1 | PRESUPUS | 2026-11-27 | 2026-11-27 | 2.2.4 FS
+4.5.2 | nu | nu | CZ0108C1 + CA02T1 Preparare și turnare beton B300 fundație aerisire (0,6 mc) | Gazpet | 1 | PRESUPUS | 2026-11-30 | 2026-11-30 | 4.5.1 FS
+4.5.3 | nu | nu | Pauză tehnologică de întărire a betonului (cu măsuri pe timp friguros) | Gazpet | 3 | PRESUPUS | 2026-12-01 | 2026-12-03 | 4.5.2 FS
+4.5.4 | nu | nu | GA11A1 Montare instalație de aerisire DN150 cu sită Davis pe fundație | Gazpet | 1 | PRESUPUS | 2026-12-31 | 2026-12-31 | 4.5.3 FS; 4.4.1 FS; 1.6.7 FS
+4.5.5 | nu | nu | ACB08A1 + M1J38A1 + M1G27A1 + NMB222791 Montare țeavă 60,3x3,6 + cot, sudare la tubul de protecție și la aerisitor, poansonare, polizare, examinare vizuală | Gazpet (sudori) | 1 | PRESUPUS | 2027-01-01 | 2027-01-01 | 4.5.4 FS; 1.8.4 FS
+4.5.6 | nu | nu | IZA01B1 + IZL06C1 Sablare și izolare țeavă la ieșirea din sol + retușare izolație tub la racord | Gazpet | 1 | PRESUPUS | 2027-01-04 | 2027-01-04 | 4.5.5 FS
+4.5.7 | nu | nu | IZJ07A1 + IZK08D1 Grunduire și vopsire RAL 1021 a părții aeriene | Gazpet | 1 | PRESUPUS | 2027-01-05 | 2027-01-05 | 4.5.6 FS
+4.5.8 | nu | nu | TSD02B1 + TSD06A1 Umplutură și compactare locală la instalația de aerisire | Gazpet | 1 | PRESUPUS | 2027-01-07 | 2027-01-07 | 4.6.2 FS
+4.6 | da | nu | Lucrări ascunse drum principal – condiție pentru astupare (fără articol de deviz) | Gazpet | 1 | calculat (rezumat) | 2027-01-06 | 2027-01-06 | -
+4.6.1 | nu | nu | Verificare contact tub–conductă (PCC 4.10) și continuitate izolație pe zonele retușate | laborator + Gazpet; proiectant prin sondaj | 1 | PRESUPUS | 2027-01-06 | 2027-01-06 | 4.3.18 FS; 6.1.7 FS; 1.7.5 FS+7z
+4.6.2 | nu | da | PV lucrări ascunse – drum principal (izolație conductă și tub, distanțieri, manșoane, aerisire, PC) – admis astuparea | beneficiar + Gazpet | 0 | jalon | 2027-01-06 | 2027-01-06 | 4.6.1 FS
+5 | da | nu | Ob.4 (0004) Montare tub de protecție bretea (L2 = 16,0 m) | Gazpet | 41 | calculat (rezumat) | 2026-11-13 | 2027-01-08 | -
+5.1 | da | nu | Deviz 166401 Pregătirea conductei | Gazpet | 12 | calculat (rezumat) | 2026-11-30 | 2026-12-15 | -
+5.1.1 | nu | nu | IZA03A1 Îndepărtare izolație veche și depuneri cu decapanți (40,19 mp) | Gazpet | 1 | PRESUPUS | 2026-11-30 | 2026-11-30 | 3.2.1 SS+2z; 3.2.1 FF; 4.1.1 FS
+5.1.2 | nu | nu | Verificare stare conductă DN700 (coroziune, grosimi) – fără articol distinct | Gazpet + TRANSGAZ | 1 | PRESUPUS | 2026-12-01 | 2026-12-01 | 5.1.1 FS
+5.1.3 | nu | nu | M1L05J1 + M1L29A1 Control nedistructiv suduri existente DN700 (gamagrafiere 2 buc + pulberi magnetice 4,48 m) | laborator autorizat | 1 | PRESUPUS | 2026-12-01 | 2026-12-01 | 5.1.1 FS
+5.1.4 | nu | da | Remediere eventuale defecte în program aprobat TRANSGAZ (durată necunoscută – 0 în plan) | Gazpet + TRANSGAZ | 0 | PRESUPUS | 2026-12-01 | 2026-12-01 | 5.1.2 FS; 5.1.3 FS
+5.1.5 | nu | nu | IZA01F1 Curățire prin sablare la luciu metalic (40,19 mp) | Gazpet | 1 | PRESUPUS | 2026-12-02 | 2026-12-02 | 5.1.4 FS; 4.1.5 FS
+5.1.6 | nu | nu | Verificare curățire la luciu metalic și rugozitate (PCC 4.2) | Gazpet (CQ) + beneficiar | 1 | PRESUPUS | 2026-12-02 | 2026-12-02 | 5.1.5 SS; 1.7.3 FS+7z
+5.1.7 | nu | nu | IZFBTT[5] Izolare conductă DN700 cu benzi C50 foarte întărită (60,28 mp) | Gazpet | 1 | PRESUPUS | 2026-12-03 | 2026-12-03 | 5.1.6 FS; 4.1.7 FS; 1.6.7 FS
+5.1.8 | nu | nu | IZH08A1 Pătură ceramică în zona sudurii longitudinale (40,19 mp, coliere 12 buc) | Gazpet | 1 | PRESUPUS | 2026-12-15 | 2026-12-15 | 5.3.7 FS
+5.2 | da | nu | Deviz 166402 Verificarea calității izolației conductei (etapa 5 PT) | laborator | 1 | calculat (rezumat) | 2026-12-04 | 2026-12-04 | -
+5.2.1 | nu | nu | AUT4803 + NMB020161 Verificare izolație conductă bretea: aderență, grosime (PCC 4.3), izotest 25 kV (PCC 4.9) | laborator acreditat + Gazpet | 1 | PRESUPUS | 2026-12-04 | 2026-12-04 | 5.1.7 FS; 1.7.3 FS+7z
+5.2.2 | nu | da | Izolație conductă bretea admisă – se poate monta tubul | beneficiar + Gazpet | 0 | jalon | 2026-12-04 | 2026-12-04 | 5.2.1 FS
+5.3 | da | nu | Deviz 166403 Montarea tubului de protecție (etapa 6 PT) | Gazpet | 39 | calculat (rezumat) | 2026-11-13 | 2027-01-06 | -
+5.3.1 | nu | nu | TRB05C15 Transport tub prin purtare / rostogolire (50 m) | Gazpet | 1 | PRESUPUS | 2026-12-02 | 2026-12-02 | 1.6.6 FS; 4.3.1 FS
+5.3.2 | nu | nu | RI1061ZA331 Tăiere longitudinală tub în două semi-tuburi (4 tăieri) și pregătire rosturi | Gazpet | 1 | PRESUPUS | 2026-12-04 | 2026-12-04 | 5.3.1 FS; 4.3.2 FS; 1.8.4 FS
+5.3.3 | nu | nu | M1L77A1 (parțial) Sudare semicirculară a tronsoanelor de semi-tub | Gazpet (sudori) | 1 | PRESUPUS | 2026-12-07 | 2026-12-07 | 5.3.2 FS; 4.3.3 FS
+5.3.4 | nu | nu | RPEJ01C1# Confecționare console metalice de susținere (125 kg) | Gazpet | 1 | PRESUPUS | 2026-11-13 | 2026-11-13 | 4.3.4 FS
+5.3.5 | nu | nu | RPEJ01C1# Montare console metalice în șanț | Gazpet | 1 | PRESUPUS | 2026-12-03 | 2026-12-03 | 5.3.4 FS; 3.2.4 FS
+5.3.6 | nu | nu | GA08L1% Lansare semi-tub inferior sub conductă cu macara-lansator | Gazpet | 1 | PRESUPUS | 2026-12-11 | 2026-12-11 | 5.3.3 FS; 5.3.5 FS; 5.2.2 FS; 3.2.4 FS; 4.3.8 FS
+5.3.7 | nu | nu | IZL04C1 + NMB025051 Montare distanțieri CDM 50 la 1,5 m (14 buc) | Gazpet | 1 | PRESUPUS | 2026-12-14 | 2026-12-14 | 5.3.6 FS; 1.6.7 FS
+5.3.8 | nu | nu | GA08L1% Lansare semi-tub superior peste conductă și centrare | Gazpet | 1 | PRESUPUS | 2026-12-16 | 2026-12-16 | 5.1.8 FS
+5.3.9 | nu | nu | M1L77A1 + NMB222791 Sudare longitudinală a semi-tuburilor la poziție în șanț (37,87 m) | Gazpet (sudori) | 3 | PRESUPUS | 2026-12-18 | 2026-12-22 | 5.3.8 FS; 4.3.9 FS; 1.8.4 FS
+5.3.10 | nu | nu | M1J38A1 Marcare prin poansonare a sudurilor (3 buc) | Gazpet (sudori) | 1 | PRESUPUS | 2026-12-22 | 2026-12-22 | 5.3.9 FF
+5.3.11 | nu | nu | Examinare vizuală 100% a sudurilor (PCC 4.6) | laborator + Gazpet (RTS) | 1 | PRESUPUS | 2026-12-23 | 2026-12-23 | 5.3.9 FS; 1.7.4 FS+7z
+5.3.12 | nu | nu | M1L05L1 + M1L29A1 Control nedistructiv suduri tub (gamagrafiere 3 buc + pulberi magnetice 34,87 m; CS: UT 100%) (PCC 4.7) | laborator autorizat | 1 | PRESUPUS | 2026-12-24 | 2026-12-24 | 5.3.11 FS
+5.3.13 | nu | nu | Remediere suduri neconforme și reexaminare (dacă e cazul) | Gazpet + laborator | 1 | PRESUPUS | 2026-12-25 | 2026-12-25 | 5.3.12 FS
+5.3.14 | nu | da | Jurnal suduri și buletine VT/NDT acceptate – bretea (PCC 4.8) | Gazpet (RTS) + beneficiar | 0 | jalon | 2026-12-25 | 2026-12-25 | 5.3.13 FS; 5.3.10 FS
+5.3.15 | nu | nu | M1G27A1 Polizarea cordoanelor de sudură (34,87 m) | Gazpet | 1 | PRESUPUS | 2026-12-28 | 2026-12-28 | 5.3.14 FS
+5.3.16 | nu | nu | IZA01F1 Sablare tub de protecție (41,92 mp) | Gazpet | 1 | PRESUPUS | 2026-12-29 | 2026-12-29 | 5.3.15 FS; 4.3.16 FS
+5.3.17 | nu | nu | IZFBTT[6] Izolare tub de protecție cu benzi C50 foarte întărită (62,88 mp) | Gazpet | 1 | PRESUPUS | 2026-12-30 | 2026-12-30 | 5.3.16 FS; 4.3.17 FS
+5.3.18 | nu | nu | IZMTT[9] Montare manșoane de izolare/etanșare la capetele tubului (2 buc) | Gazpet | 1 | PRESUPUS | 2027-01-06 | 2027-01-06 | 5.5.6 FS; 4.3.18 FS
+5.4 | da | nu | Deviz 166404 Verificarea calității izolației tubului de protecție (etapa 7 PT) | laborator | 1 | calculat (rezumat) | 2026-12-31 | 2026-12-31 | -
+5.4.1 | nu | nu | AUT4803 + NMB020161 Verificare izolație tub bretea: aderență, grosime (PCC 4.3), izotest 25 kV (PCC 4.9) | laborator acreditat + Gazpet | 1 | PRESUPUS | 2026-12-31 | 2026-12-31 | 5.3.17 FS; 1.7.5 FS+7z
+5.5 | da | nu | Deviz 166405 Montare instalație de aerisire (etapa 8 PT) | Gazpet | 27 | calculat (rezumat) | 2026-12-03 | 2027-01-08 | -
+5.5.1 | nu | nu | TSC04B1 Săpătură fundație dispozitiv de aerisire (3 mc; manual în zona de protecție) | Gazpet | 1 | PRESUPUS | 2026-12-03 | 2026-12-03 | 3.2.4 FS; 4.5.1 FS
+5.5.2 | nu | nu | CZ0108C1 + CA02T1 Preparare și turnare beton B300 fundație aerisire (0,6 mc) | Gazpet | 1 | PRESUPUS | 2026-12-04 | 2026-12-04 | 5.5.1 FS; 4.5.2 FS
+5.5.3 | nu | nu | Pauză tehnologică de întărire a betonului (cu măsuri pe timp friguros) | Gazpet | 3 | PRESUPUS | 2026-12-07 | 2026-12-09 | 5.5.2 FS
+5.5.4 | nu | nu | GA11A1 Montare instalație de aerisire DN150 cu sită Davis | Gazpet | 1 | PRESUPUS | 2027-01-01 | 2027-01-01 | 5.5.3 FS; 5.4.1 FS; 1.6.7 FS; 4.5.4 FS
+5.5.5 | nu | nu | ACB08A1 + M1J38A1 + M1G27A1 + NMB222791 Montare țeavă 60,3x3,6 + cot, sudare la tub și aerisitor, poansonare, polizare, examinare vizuală | Gazpet (sudori) | 1 | PRESUPUS | 2027-01-04 | 2027-01-04 | 5.5.4 FS; 4.5.5 FS; 1.8.4 FS
+5.5.6 | nu | nu | IZA01B1 + IZL06C1 Sablare și izolare țeavă la ieșirea din sol + retușare izolație tub la racord | Gazpet | 1 | PRESUPUS | 2027-01-05 | 2027-01-05 | 5.5.5 FS; 4.5.6 FS
+5.5.7 | nu | nu | IZJ07A1 + IZK08D1 Grunduire și vopsire RAL 1021 a părții aeriene | Gazpet | 1 | PRESUPUS | 2027-01-06 | 2027-01-06 | 5.5.6 FS; 4.5.7 FS
+5.5.8 | nu | nu | TSD02B1 + TSD06A1 Umplutură și compactare locală la instalația de aerisire | Gazpet | 1 | PRESUPUS | 2027-01-08 | 2027-01-08 | 5.6.2 FS; 4.5.8 FS
+5.6 | da | nu | Lucrări ascunse bretea – condiție pentru astupare (fără articol de deviz) | Gazpet | 1 | calculat (rezumat) | 2027-01-07 | 2027-01-07 | -
+5.6.1 | nu | nu | Verificare contact tub–conductă (PCC 4.10) și continuitate izolație pe zonele retușate | laborator + Gazpet; proiectant prin sondaj | 1 | PRESUPUS | 2027-01-07 | 2027-01-07 | 5.3.18 FS; 7.1.7 FS; 1.7.5 FS+7z
+5.6.2 | nu | da | PV lucrări ascunse – bretea – admis astuparea | beneficiar + Gazpet | 0 | jalon | 2027-01-07 | 2027-01-07 | 5.6.1 FS
+6 | da | nu | Ob.5 (0005) Protecție catodică traversare drum principal (etapa 9 PT) | Gazpet + laborator PC | 41 | calculat (rezumat) | 2026-11-27 | 2027-01-22 | -
+6.1 | da | nu | Deviz 166501 Montare priză de potențial | Gazpet | 30 | calculat (rezumat) | 2026-11-27 | 2027-01-07 | -
+6.1.1 | nu | nu | TSA04E2 + TSA16C2 Săpătură manuală groapă priză, groapă anozi și tranșee cabluri (6,6 mc) | Gazpet | 1 | PRESUPUS | 2026-11-27 | 2026-11-27 | 2.2.4 FS
+6.1.2 | nu | nu | M1K16A1 [3273451] Montare grup de 4 anozi Zn (activare prin imersie ~30 min; debit după ~24 h) | Gazpet | 1 | PRESUPUS | 2026-11-30 | 2026-11-30 | 6.1.1 FS; 1.6.8 FS
+6.1.3 | nu | nu | M1K12C1 [3273450] + CA02T1 Montare priză de potențial PVC la 1,5 m lateral + fundație beton B300 (după compactarea solului; nu la temperaturi negative) | Gazpet | 1 | PRESUPUS | 2026-12-01 | 2026-12-01 | 6.1.2 FS
+6.1.4 | nu | da | Verificare montaj anozi și priză de potențial (PCC 4.12) | beneficiar + Gazpet | 0 | jalon | 2026-12-01 | 2026-12-01 | 6.1.3 FS; 1.7.2 FS+7z
+6.1.5 | nu | nu | IZA03A1 + IZA01B1 + IZMTT[10] Pregătire punct de conexiune pe DN700, conectare cablu, izolare cu bandă termocontractilă (2,15 mp) | Gazpet | 1 | PRESUPUS | 2026-12-01 | 2026-12-01 | 4.1.7 FS; 1.8.4 FS
+6.1.6 | nu | nu | W2H04A1 + W2G01A01 + EA01B1 + W2D14A01 Pozare cabluri CYY 1x25 (roșu) / 1x6 (negru) în pat de nisip, tub PVC, papuci, conectare la bornele prizei | Gazpet | 1 | PRESUPUS | 2027-01-04 | 2027-01-04 | 6.1.4 FS; 6.1.5 FS; 4.5.5 FS
+6.1.7 | nu | nu | W2J02A1 Verificare și încercare cabluri (continuitate izolație înainte de îngropare, marcaj, secțiune) | laborator PC | 1 | PRESUPUS | 2027-01-05 | 2027-01-05 | 6.1.6 FS
+6.1.8 | nu | nu | TSD01C1 + TSD04A1 Umplutură și compactare manuală tranșee cabluri și gropi (6,5 mc) | Gazpet | 1 | PRESUPUS | 2027-01-07 | 2027-01-07 | 4.6.2 FS
+6.2 | da | nu | Deviz 166502 Punere în funcțiune protecție catodică | laborator PC + TRANSGAZ | 7 | calculat (rezumat) | 2027-01-14 | 2027-01-22 | -
+6.2.1 | nu | da | Document TRANSGAZ de concordanță proiect–execuție a sistemului PC (precondiție PIF, CS II.2.2) | TRANSGAZ | 0 | jalon | 2027-01-13 | 2027-01-13 | 6.1.8 FS; 2.3.2 FS
+6.2.2 | nu | nu | AUT4803 + NMB020441/451/471 Inspecție vizuală priză; rezistență de dispersie anozi ≤10 Ω (PCC 4.13); rezistență izolație tub–conductă >1 MΩ; potențial în gol anozi | laborator PC grad II ISC + TRANSGAZ | 1 | PRESUPUS | 2027-01-14 | 2027-01-14 | 6.2.1 FS; 6.1.2 FS+1z; 1.7.7 FS+7z
+6.2.3 | nu | nu | Conectare anozi–conductă în priză (scurtcircuitoare platbandă Cu 12,5x2) după DCVG | laborator PC + TRANSGAZ | 1 | PRESUPUS | 2027-01-18 | 2027-01-18 | 6.2.2 FS; 8.1.2 FS
+6.2.4 | nu | nu | Polarizare conductă (minim 2 zile; măsurători după 3 zile de la polarizare) | – (timp tehnologic) | 3 | DOCUMENT (CS II.2.2 PIF: „polarizare minim 2 zile” + „măsurători după 3 zile de la polarizare”) | 2027-01-19 | 2027-01-21 | 6.2.3 FS
+6.2.5 | nu | nu | W2J02A1 + Măsurare potențial structură/sol ON/OFF (≥ −850 mV OFF; −900 mV la injecție) (PCC 4.14), diagramă potențial | laborator PC grad II ISC + TRANSGAZ | 1 | PRESUPUS | 2027-01-22 | 2027-01-22 | 6.2.4 FS
+6.2.6 | nu | da | Buletin PIF protecție catodică semnat Constructor + TRANSGAZ – drum principal | laborator PC + TRANSGAZ | 0 | jalon | 2027-01-22 | 2027-01-22 | 6.2.5 FS
+7 | da | nu | Ob.6 (0006) Protecție catodică traversare bretea (etapa 9 PT) | Gazpet + laborator PC | 37 | calculat (rezumat) | 2026-12-03 | 2027-01-22 | -
+7.1 | da | nu | Deviz 166601 Montare priză de potențial | Gazpet | 27 | calculat (rezumat) | 2026-12-03 | 2027-01-08 | -
+7.1.1 | nu | nu | TSA04E2 + TSA16C2 Săpătură manuală groapă priză, groapă anozi și tranșee cabluri (4,6 mc) | Gazpet | 1 | PRESUPUS | 2026-12-03 | 2026-12-03 | 3.2.4 FS; 6.1.1 FS
+7.1.2 | nu | nu | M1K16A1 [3273451] Montare grup de 4 anozi Zn | Gazpet | 1 | PRESUPUS | 2026-12-04 | 2026-12-04 | 7.1.1 FS; 1.6.8 FS; 6.1.2 FS
+7.1.3 | nu | nu | M1K12C1 [3273450] + CA02T1 Montare priză de potențial PVC + fundație beton B300 | Gazpet | 1 | PRESUPUS | 2026-12-07 | 2026-12-07 | 7.1.2 FS; 6.1.3 FS
+7.1.4 | nu | da | Verificare montaj anozi și priză de potențial – bretea (PCC 4.12) | beneficiar + Gazpet | 0 | jalon | 2026-12-07 | 2026-12-07 | 7.1.3 FS; 1.7.2 FS+7z
+7.1.5 | nu | nu | IZA03A1 + IZA01B1 + IZMTT[10] Pregătire punct de conexiune pe DN700, conectare cablu, izolare cu bandă termocontractilă | Gazpet | 1 | PRESUPUS | 2026-12-04 | 2026-12-04 | 5.1.7 FS; 1.8.4 FS; 6.1.5 FS
+7.1.6 | nu | nu | W2H04A1 + W2G01A01 + EA01B1 + W2D14A01 Pozare cabluri CYY/ACYY în pat de nisip, tub PVC, papuci, conectare la priză | Gazpet | 1 | PRESUPUS | 2027-01-05 | 2027-01-05 | 7.1.4 FS; 7.1.5 FS; 5.5.5 FS; 6.1.6 FS
+7.1.7 | nu | nu | W2J02A1 Verificare și încercare cabluri înainte de îngropare | laborator PC | 1 | PRESUPUS | 2027-01-06 | 2027-01-06 | 7.1.6 FS
+7.1.8 | nu | nu | TSD01C1 + TSD04A1 Umplutură și compactare manuală tranșee cabluri și gropi (6 mc) | Gazpet | 1 | PRESUPUS | 2027-01-08 | 2027-01-08 | 5.6.2 FS
+7.2 | da | nu | Deviz 166602 Punere în funcțiune protecție catodică | laborator PC + TRANSGAZ | 8 | calculat (rezumat) | 2027-01-13 | 2027-01-22 | -
+7.2.1 | nu | da | Document TRANSGAZ de concordanță proiect–execuție PC – bretea (precondiție PIF) | TRANSGAZ | 0 | jalon | 2027-01-12 | 2027-01-12 | 7.1.8 FS; 3.3.2 FS
+7.2.2 | nu | nu | AUT4803 + NMB020441/451/471 Inspecție vizuală; rezistență dispersie anozi (PCC 4.13); rezistență izolație tub–conductă; potențial în gol | laborator PC grad II ISC + TRANSGAZ | 1 | PRESUPUS | 2027-01-13 | 2027-01-13 | 7.2.1 FS; 7.1.2 FS+1z; 1.7.7 FS+7z
+7.2.3 | nu | nu | Conectare anozi–conductă în priză după DCVG | laborator PC + TRANSGAZ | 1 | PRESUPUS | 2027-01-18 | 2027-01-18 | 7.2.2 FS; 8.1.2 FS
+7.2.4 | nu | nu | Polarizare conductă (minim 2 zile; măsurători după 3 zile de la polarizare) | – (timp tehnologic) | 3 | DOCUMENT (CS II.2.2 PIF: „polarizare minim 2 zile” + „măsurători după 3 zile de la polarizare”) | 2027-01-19 | 2027-01-21 | 7.2.3 FS
+7.2.5 | nu | nu | W2J02A1 + Măsurare potențial ON/OFF (PCC 4.14), diagramă potențial | laborator PC grad II ISC + TRANSGAZ | 1 | PRESUPUS | 2027-01-22 | 2027-01-22 | 7.2.4 FS
+7.2.6 | nu | da | Buletin PIF protecție catodică semnat Constructor + TRANSGAZ – bretea | laborator PC + TRANSGAZ | 0 | jalon | 2027-01-22 | 2027-01-22 | 7.2.5 FS
+8 | da | nu | Verificări finale, documentație și recepția la terminarea lucrărilor (etapele 10–11 PT, „Final proiect”) | Gazpet | 14 | calculat (rezumat) | 2027-01-08 | 2027-01-27 | -
+8.1 | da | nu | Verificarea calității izolației după astupare – metoda DCVG (PCC 5; fără articol de deviz, inclusă în preț) | laborator | 2 | calculat (rezumat) | 2027-01-14 | 2027-01-15 | -
+8.1.1 | nu | nu | Măsurători DCVG pe ambele traversări, cu grupurile de anozi decuplate | laborator (personal cu experiență certificată) + TRANSGAZ | 1 | PRESUPUS | 2027-01-14 | 2027-01-14 | 2.3.2 FS; 3.3.2 FS; 1.7.7 FS+7z
+8.1.2 | nu | nu | Raport DCVG (număr, mărime, coordonate GPS, caracter coroziv) + buletin de verificare | laborator | 1 | PRESUPUS | 2027-01-15 | 2027-01-15 | 8.1.1 FS
+8.2 | nu | nu | Documentație as-built în STEREO 70 (tuburi, aerisiri, prize, grupuri anozi) | Gazpet (topograf) | 3 | PRESUPUS | 2027-01-08 | 2027-01-12 | 4.6.2 FS; 5.6.2 FS
+8.3 | nu | nu | Completare Carte tehnică a construcției (opis, certificate în original, PV, buletine, jurnal suduri, PCC completat) | Gazpet + diriginte + proiectant | 2 | PRESUPUS | 2027-01-25 | 2027-01-26 | 8.1.2 FS; 6.2.6 FS; 7.2.6 FS; 8.2 FS
+8.4 | nu | nu | Demobilizare organizare de șantier, curățenie, evacuare deșeuri, refacere drumuri de acces | Gazpet | 2 | PRESUPUS | 2027-01-19 | 2027-01-20 | 2.4.3 FS; 3.4.3 FS
+8.5 | nu | da | Predare front către executantul lucrărilor rutiere (protejare finalizată în zona de 20 m) | beneficiar + Gazpet | 0 | jalon | 2027-01-18 | 2027-01-18 | 2.4.3 FS; 3.4.3 FS
+8.6 | nu | da | Comunicare scrisă către beneficiar privind finalizarea lucrărilor | Gazpet | 0 | jalon | 2027-01-26 | 2027-01-26 | 8.3 FS; 8.4 FS
+8.7 | nu | nu | Recepția la terminarea lucrărilor (PCC 6; HG 343/2017; cu reprezentant TRANSGAZ) | beneficiar (comisie) + Gazpet + proiectant | 1 | PRESUPUS | 2027-01-27 | 2027-01-27 | 8.6 FS
+8.8 | nu | da | Final proiect – PV de recepție la terminarea lucrărilor | beneficiar | 0 | jalon | 2027-01-27 | 2027-01-27 | 8.7 FS
