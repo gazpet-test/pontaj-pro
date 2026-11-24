@@ -84,7 +84,7 @@ BEGIN
        jsonb_build_object('tip', 'f', 'limbaj', 'plpgsql', 'definer', 'false', 'volatil', 'v', 'strict', 'false', 'leakproof', 'false',
          'proprietar', 'postgres', 'config', 'search_path=public, pg_temp', 'intoarce', 'trigger',
          'acl', 'postgres:EXECUTE',
-         'corp_md5', '7785427263a6711c323460af98e43b6b', 'sqlbody_md5', '-')
+         'corp_md5', '5c68115afc38f1ce2c688699bfa3e415', 'sqlbody_md5', '-')
        -- DETALIU-END garda
       ),
       ('public.fn_ctc_autorizatii_ndt()', 'fn_ctc_autorizatii_ndt',
@@ -94,7 +94,7 @@ BEGIN
          'intoarce', 'TABLE(id bigint, firma text, cui text, numar_document text, emitent text, metoda text, data_emitere date, '
                      'data_valabilitate date, fara_expirare boolean, stare text, are_fisier boolean)',
          'acl', 'authenticated:EXECUTE, postgres:EXECUTE',
-         'corp_md5', 'b558eafad95db587563a09c5c005a0cb', 'sqlbody_md5', '-')
+         'corp_md5', '35fe8ffe7cebf09d33da17675455eafc', 'sqlbody_md5', '-')
        -- DETALIU-END lista
       ),
       ('public.fn_ctc_autorizatie_ndt_fisier(bigint)', 'fn_ctc_autorizatie_ndt_fisier',
@@ -102,7 +102,7 @@ BEGIN
        jsonb_build_object('tip', 'f', 'limbaj', 'plpgsql', 'definer', 'true', 'volatil', 's', 'strict', 'false', 'leakproof', 'false',
          'proprietar', 'postgres', 'config', 'search_path=public, pg_temp', 'intoarce', 'text',
          'acl', 'authenticated:EXECUTE, postgres:EXECUTE',
-         'corp_md5', '09e7ff93c143d8d0a4841acee751d6f2', 'sqlbody_md5', '-')
+         'corp_md5', '09c2ed4309d7c643a2d672e6d221a1db', 'sqlbody_md5', '-')
        -- DETALIU-END fisierul
       )
     ) v(fn, nume, livrat) LOOP

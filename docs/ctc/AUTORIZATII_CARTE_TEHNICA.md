@@ -29,13 +29,16 @@ Probe: `scripts/pglite/test_ctc_autorizatii_ndt_local.mjs`, `src/ctcAutorizatiiN
   „Metoda (RT/UT/PT/MT/VT)”. Fișierul se urcă în `parteneri/<firmă>/ndt/`. Schimbarea categoriei unui document cu fișier (în sau din NDT)
   cere un fișier nou („Pentru categoria nouă, încărcați din nou fișierul (se mută în dosarul potrivit)”); cel vechi se șterge după salvare.
 - **Garda din BD** (trigger pe `ofertare_parteneri_documente`, toate căile de scriere): NDT = exact `parteneri/<firma rândului>/ndt/<nume>`;
-  altă categorie = nu sub `ndt/`; fără segmente `.` / `..`, backslash, `%`, caractere de control, cale goală; o cale nu poate fi a două
-  documente (index unic).
+  altă categorie = nu sub `ndt/`; fără segmente `.` / `..`, backslash, `%`, caractere de control (lista explicită U+0001–U+001F și
+  U+007F–U+009F, aceeași în BD, edge și ecran, independentă de colaționarea bazei), cale goală (doar spațiu / tab / LF / VT / FF / CR);
+  o cale nu poate fi a două documente (index unic). Spațiile, diacriticele și lungimea numelui sunt permise.
 - **În CTC:** firma, CUI, nr., emitent, metoda, datele, starea (Valabilă / Expirată / Valabilitate necunoscută, după ziua din România) și
   „Deschide scanul” doar când documentul are fișier. Calea, observațiile și contactul firmei NU ajung în CTC.
 - **Deschiderea:** RPC-ul dă calea doar pentru un document NDT cu calea în forma de mai sus (altfel 404, același răspuns pentru
-  „nu există” / „nu e NDT” / „fără fișier”); edge-ul reverifică forma și semnează 60 s în bucket-ul `ofertare`. Un nume de fișier cu alte
-  caractere decât `[A-Za-z0-9._-]` (posibil doar prin API, ecranul nu-l produce) e acceptat de BD, dar edge-ul nu-l semnează (422).
+  „nu există” / „nu e NDT” / „fără fișier”); edge-ul reverifică forma cu EXACT regula din BD (fără firmă, pe care o verifică RPC-ul) și
+  semnează 60 s în bucket-ul `ofertare`: orice cale pe care o întoarce RPC-ul se semnează (de ex. `scan cu spatii.pdf`, diacritice, nume
+  lung). Regula e probată pe tabelul comun `supabase/tests/20270111a_ctc_autorizatii_ndt_cazuri_cale.json` (trigger + RPC în PGlite,
+  edge + ecran în vitest) și pe căi aleatoare trecute prin trigger, RPC și codul edge-ului în aceeași probă. Ramura sudorilor e neschimbată.
 
 ### Ordinea livrării NDT (coordonatorul)
 

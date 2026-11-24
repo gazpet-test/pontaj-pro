@@ -13,9 +13,9 @@ const DIACRITICE = new RegExp('[' + String.fromCharCode(0x300) + '-' + String.fr
 export const sanitize = n => String(n || 'fisier').normalize('NFD').replace(DIACRITICE, '').replace(/[^A-Za-z0-9._-]+/g, '_').slice(-120)
 
 const BACKSLASH = String.fromCharCode(92)
-// [[:space:]] din PostgreSQL (ASCII): spațiu, tab, LF, VT, FF, CR
+// „cale goală” în garda din BD = doar caracterele chr(9)–chr(13) și chr(32): tab, LF, VT, FF, CR, spațiu (clasă explicită, nu [[:space:]])
 const ALB = new Set([32, 9, 10, 11, 12, 13])
-// [[:cntrl:]]: ASCII 0–31 și 127; în plus 128–159 (C1), refuzate și ele aici (mai strict decât BD, doar în ecran)
+// caracterele de control din garda din BD (clasă explicită, nu [[:cntrl:]]): U+0001–U+001F și U+007F–U+009F (U+0000 nu există în Postgres)
 const eControl = c => c < 32 || c === 127 || (c >= 128 && c <= 159)
 const idValid = pid => Number.isSafeInteger(Number(pid)) && Number(pid) > 0 && String(Number(pid)) === String(pid).trim()
 

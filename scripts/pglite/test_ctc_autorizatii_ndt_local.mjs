@@ -10,6 +10,10 @@
 //    vede lista, deschide doar căile NDT valide și NU citește tabelul direct; garda pe tabelul COMUN de cazuri
 //    (supabase/tests/20270111a_ctc_autorizatii_ndt_cazuri_cale.json: aceleași cazuri ca vitest, L19) + rândurile scrise ocolind trigger-ul;
 //    editările (categoria schimbată cu / fără cale nouă, altă firmă, unicitatea, cale de licitație pe un rând NDT).
+//    r2: ceasul bazei e INJECTAT (PGlite citește Date.now(), aici fixat de probă): expirarea la 23:59:59 / 23:59:59.999 / 00:00:00 la
+//    București, pe o zi obișnuită și pe ambele zile cu schimbare de oră din 2027, sub 4 fusuri ale sesiunii (X, în verifica).
+// 2b. (r2) regula căii: clasele explicite din BD = lista edge-ului pe tot BMP-ul; căi aleatoare prin trigger, RPC și codul REAL al edge-ului
+//    (.ts) și al ecranului, cu același rezultat; cazurile din verdict (spații, 201 / 1000+ caractere, diacritice).
 // 3. Livrarea L15 v2: manifestul generat (ROLLBACK) = lista revizuită supabase/tests/<NUME>.l15.obiecte.tsv; livrarea aprobată trece; GLOBAL
 //    greșit / manifest incomplet = refuzul RUNNERULUI; dry-run-ul de pe clonă rulează aici și nu lasă nimic; fără migrare pică.
 // 4. Refuzurile migrării (nimic schimbat) și ale revenirii; apply → revenire → re-apply; după revenire Parteneri și sudorii merg ca înainte.
@@ -33,8 +37,24 @@ const NUME = '20270111a_ctc_autorizatii_ndt', NUME_REV = NUME + '_ROLLBACK'
 const F_MIG = `supabase/migrations/${NUME}.sql`, F_REV = `supabase/revenire/${NUME_REV}.sql`
 const F_DRY = `supabase/tests/${NUME}_dryrun.sql`, F_OBIECTE = `supabase/tests/${NUME}.l15.obiecte.tsv`
 const MIG = citeste(F_MIG), REV = citeste(F_REV), DRY = citeste(F_DRY)
-const decodeaza = s => s.split('{BS}').join(String.fromCharCode(92)).split('{CTRL}').join(String.fromCharCode(1))
-const CAZURI = JSON.parse(citeste(`supabase/tests/${NUME}_cazuri_cale.json`)).cazuri.map(c => ({ ...c, cale: decodeaza(c.cale) }))
+const TABEL = JSON.parse(citeste(`supabase/tests/${NUME}_cazuri_cale.json`))
+// marcajele din tabel ({BS}, {C1}, {LUNG} …) → caracterele lor, din coduri (aceeași decodare ca vitest)
+const decodeaza = s => Object.entries(TABEL._marcaje).reduce((t, [k, [cod, ori]]) => t.split(k).join(String.fromCharCode(cod).repeat(ori)), s)
+const CAZURI = TABEL.cazuri.map(c => ({ ...c, cale: decodeaza(c.cale) }))
+// clasele explicite din migrare (r2), aceleași în garda și în RPC-ul de deschidere (textul exact, pentru mutanți și proba 2b)
+const CONTROL = "('[' || chr(1) || '-' || chr(31) || chr(127) || '-' || chr(159) || ']')", GOL = "('[^' || chr(9) || '-' || chr(13) || chr(32) || ']')"
+if (!MIG.includes('OR NEW.fisier_path ~ ' + CONTROL) || !MIG.includes('AND d.fisier_path !~ ' + CONTROL) || !MIG.includes('IF NEW.fisier_path !~ ' + GOL)) throw new Error('clasele explicite nu sunt în migrare')
+// codul REAL al edge-ului și al ecranului (Node >= 22.18 citește .ts fără tipuri), pentru căile aleatoare din secțiunea 2b
+const EDGE = await import(new URL('../../supabase/functions/_shared/ctcAutorizatieFisier.ts', import.meta.url).href)
+const ECRAN = await import(new URL('../../src/ofertareParteneriCale.js', import.meta.url).href)
+
+// ── ceasul (r2, Jakarinos P2: proba de expirare deterministă). PGlite ia ora din Date.now() al procesului (Emscripten), deci data de
+//    referință se INJECTEAZĂ aici, nu se citește din ceasul real: de la pornire ceasul bazei curge de la REF (bugetele de lock / plafonul
+//    văd timp care trece), iar în proba de expirare (X) se fixează exact pe moment, doar pe durata unei tranzacții fără pg_sleep. ──
+const ACUM_REAL = Date.now.bind(Date), PORNIRE = ACUM_REAL()
+const REF = Date.parse('2026-11-25T10:00:00.000Z') // 25.11.2026, 12:00 la București
+let ceasFix = null
+Date.now = () => (ceasFix ?? REF + (ACUM_REAL() - PORNIRE))
 const SCHELET_22B = citeste('supabase/tests/20261222b_ctc_autorizatii_schelet.sql')
 const SCHELET = citeste(`supabase/tests/${NUME}_schelet.sql`)
 const M0924 = citeste('supabase/migrations/20260924_ofertare_parteneri_documente.sql')
@@ -139,7 +159,7 @@ const eVeche = s => s.check_def === STARE_VECHE.check_def && s.triggere === STAR
 
 // ── conturile, documentele, așteptările (scrise de mână din specificație) ──
 const ziBuc = ms => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Bucharest' }).format(new Date(ms))
-const AZI = ziBuc(Date.now())
+const AZI = '2026-11-25' // ziua lui REF la București, scrisă de mână (verificată în secțiunea 2 față de baza cu ceasul injectat)
 const zi = n => { const [y, m, d] = AZI.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10) }
 const DOC = `INSERT INTO public.ofertare_parteneri_documente (partener_id, categorie, denumire, numar_document, emitent, data_emitere, data_valabilitate,
     fara_expirare, domeniu, fisier_path, observatii) VALUES
@@ -199,6 +219,44 @@ async function incearca(db, sql, params = []) {
   catch (e) { await db.exec('ROLLBACK TO SAVEPOINT s'); return { ok: false, code: e.code, message: e.message } }
 }
 
+// ── X: expirarea la momente FIXE în jurul miezului nopții la București (specificația §3.6 / §5.4), cu ceasul injectat. Scrise de mână:
+//    momentele UTC, ziua din România și stările. Schimbarea orei în UE: ultima duminică din martie / octombrie, la 01:00 UTC (2027: 28.03
+//    EET→EEST, 31.10 EEST→EET), deci miezul nopții e la 22:00 UTC iarna și la 21:00 UTC vara — o zi cu schimbare de oră are cele două
+//    capete la ore UTC DIFERITE. Pe fiecare muchie: ultima secundă a zilei Z (23:59:59 și 23:59:59.999) și prima a zilei Z+1 (00:00:00). ──
+const MUCHII = [
+  // [eticheta, 23:59:59 în Z (UTC), 23:59:59.999 în Z (UTC), 00:00:00 în Z+1 (UTC), Z, Z+1, Z-1]
+  ['iarnă (EET): 24 → 25.11.2026', '2026-11-24T21:59:59.000Z', '2026-11-24T21:59:59.999Z', '2026-11-24T22:00:00.000Z', '2026-11-24', '2026-11-25', '2026-11-23'],
+  ['ziua schimbării de primăvară, capătul de început (EET): 27 → 28.03.2027', '2027-03-27T21:59:59.000Z', '2027-03-27T21:59:59.999Z', '2027-03-27T22:00:00.000Z', '2027-03-27', '2027-03-28', '2027-03-26'],
+  ['ziua schimbării de primăvară, capătul de sfârșit (EEST): 28 → 29.03.2027', '2027-03-28T20:59:59.000Z', '2027-03-28T20:59:59.999Z', '2027-03-28T21:00:00.000Z', '2027-03-28', '2027-03-29', '2027-03-27'],
+  ['ziua schimbării de toamnă, capătul de început (EEST): 30 → 31.10.2027', '2027-10-30T20:59:59.000Z', '2027-10-30T20:59:59.999Z', '2027-10-30T21:00:00.000Z', '2027-10-30', '2027-10-31', '2027-10-29'],
+  ['ziua schimbării de toamnă, capătul de sfârșit (EET): 31.10 → 01.11.2027', '2027-10-31T21:59:59.000Z', '2027-10-31T21:59:59.999Z', '2027-10-31T22:00:00.000Z', '2027-10-31', '2027-11-01', '2027-10-30'],
+]
+// documentele unei muchii: valabil până în Z (cel care TRECE din valabil în expirat), până în Z+1, până în Z-1, fără expirare, fără dată
+const docMuchie = ([, , , , z, z1, zm1]) => [['X-Z', z, false], ['X-Z1', z1, false], ['X-ZM1', zm1, false], ['X-FARA', zm1, true], ['X-NULL', null, false]]
+const STARI_INAINTE = ['valabil', 'valabil', 'expirat', 'valabil', 'necunoscut'] // la 23:59:59(.999) în Z: ziua de azi = valabil
+const STARI_DUPA = ['expirat', 'valabil', 'expirat', 'valabil', 'necunoscut'] // la 00:00:00 în Z+1
+const FUSURI_X = [null, 'Pacific/Kiritimati', 'Etc/GMT+12', 'UTC']
+// lista ca un cont CTC, cu ceasul bazei fixat EXACT pe moment (now() = începutul tranzacției); documentele se scriu ca Ofertare în aceeași
+// tranzacție (ROLLBACK la final); întoarce momentul văzut de bază (ms) și starea fiecărui document
+async function stariLa(db, moment, tz, docs) {
+  ceasFix = Date.parse(moment)
+  try {
+    await db.exec(`BEGIN; ${tz ? `SET LOCAL TimeZone = '${tz}';` : ''}`)
+    try {
+      const ms = (await db.query(`SELECT (extract(epoch FROM now()) * 1000)::bigint::text AS ms`)).rows[0].ms
+      await devino(db, 'OF')
+      const id = []
+      for (const [nr, data, fara] of docs) {
+        id.push(Number((await db.query(`INSERT INTO public.ofertare_parteneri_documente (partener_id, categorie, denumire, numar_document, data_valabilitate, fara_expirare)
+          VALUES (1, 'autorizatie_ndt', 'X', $1, $2::date, $3) RETURNING id`, [nr, data, fara])).rows[0].id))
+      }
+      await devino(db, 'CTC')
+      const r = (await db.query(`SELECT id, stare FROM public.fn_ctc_autorizatii_ndt()`)).rows
+      return { ms: Number(ms), stari: id.map(i => r.find(x => Number(x.id) === i)?.stare ?? 'LIPSA') }
+    } finally { await db.exec('ROLLBACK') }
+  } finally { ceasFix = null }
+}
+
 async function verifica(db, ids) {
   const ab = []
   const asteptCod = (r, cod, ce) => { if (!r.code) ab.push(`${ce}: a trecut (aștepta ${cod})`); else if (r.code !== cod) ab.push(`${ce}: ${r.code} ${r.message} (aștepta ${cod})`) }
@@ -222,6 +280,18 @@ async function verifica(db, ids) {
     if (rt && (rt.emitent !== 'ISCIR' || String(rt.data_valabilitate?.toISOString?.().slice(0, 10) ?? rt.data_valabilitate) !== zi(30))) ab.push(`${et} RT-1 emitent / valabilitate: ${JSON.stringify(rt)}`)
     const tot = JSON.stringify(r.rows)
     for (const interzis of INTERZISE) if (tot.includes(interzis)) ab.push(`${et}: a ieșit un câmp nepermis (${interzis})`)
+  }
+  // X: expirarea la momentele fixe (ceasul injectat), sub mai multe fusuri ale sesiunii
+  for (const m of MUCHII) {
+    for (const [moment, astept] of [[m[1], STARI_INAINTE], [m[2], STARI_INAINTE], [m[3], STARI_DUPA]]) {
+      for (const tz of FUSURI_X) {
+        const et = `X ${m[0]} @ ${moment}${tz ? ' (' + tz + ')' : ''}`
+        let r
+        try { r = await stariLa(db, moment, tz, docMuchie(m)) } catch (e) { ab.push(`${et}: ${e.message}`); continue }
+        if (r.ms !== Date.parse(moment)) ab.push(`${et}: baza a văzut alt moment (${new Date(r.ms).toISOString()}), ceasul nu e cel injectat`)
+        if (JSON.stringify(r.stari) !== JSON.stringify(astept)) ab.push(`${et}: ${JSON.stringify(r.stari)} (aștepta ${JSON.stringify(astept)})`)
+      }
+    }
   }
   // fără CTC: 42501 (nu listă goală, L18)
   for (const cont of ['OF', 'CTCX', 'STRAIN']) asteptCod(await ca(db, cont, `SELECT * FROM public.fn_ctc_autorizatii_ndt()`), '42501', `L ${cont}`)
@@ -342,7 +412,15 @@ console.log('2. comportamentul după aplicare (matricea de conturi, cazurile com
   const ids = await documente(db)
   const ab = await verifica(db, ids)
   ab.forEach(x => console.log('     ' + x))
-  ok(ab.length === 0, `verificările de comportament (${CAZURI.length} cazuri de cale, ${ab.length} abateri)`)
+  ok(ab.length === 0, `verificările de comportament (${CAZURI.length} cazuri de cale, ${MUCHII.length * 3 * FUSURI_X.length} momente fixe de expirare, ${ab.length} abateri)`)
+  // ceasul injectat: ziua bazei = AZI (scrisă de mână), oricând rulează proba; fixtura muchiilor = calendarul din Node (tzdata), independent de bază
+  const zb = (await db.query(`SELECT (now() AT TIME ZONE 'Europe/Bucharest')::date::text AS d`)).rows[0].d
+  ok(zb === AZI && ziBuc(Date.now()) === AZI, `ceasul bazei e cel injectat: ziua de azi la București = ${zb} (REF ${new Date(REF).toISOString()}), nu ziua reală`)
+  const fix = MUCHII.filter(m => !(ziBuc(Date.parse(m[1])) === m[4] && ziBuc(Date.parse(m[2])) === m[4] && ziBuc(Date.parse(m[3])) === m[5]
+    && ziBuc(Date.parse(m[3]) - 1) === m[4] && Date.parse(m[3]) - Date.parse(m[1]) === 1000))
+  const ore = MUCHII.map(m => new Date(m[3]).getUTCHours())
+  ok(fix.length === 0 && JSON.stringify(ore) === JSON.stringify([22, 22, 21, 21, 22]),
+    `fixtura muchiilor (scrisă de mână) = calendarul București din Node: miezul nopții la ${ore.join('/')} UTC (zilele cu schimbare de oră au capete diferite)${fix.length ? '; greșite: ' + fix.map(m => m[0]).join(', ') : ''}`)
   const re = await livreaza(db, MIG)
   ok(!re.ok && /reaplicare/.test(re.eroare), 'reaplicarea = refuz: ' + (re.eroare || 'APLICAT').slice(0, 100))
   // dreptul retras = refuz imediat
@@ -354,6 +432,74 @@ console.log('2. comportamentul după aplicare (matricea de conturi, cazurile com
   const v = await revino(db)
   ok(!v.ok && /exista date NDT \(9 documente autorizatie_ndt, 6 cai in dosare ndt/.test(v.eroare) && JSON.stringify(await stare(db)) === JSON.stringify(s0),
     'revenirea cu documente NDT = refuz cu numărătoarea, nimic schimbat: ' + (v.eroare || 'APLICAT').slice(0, 120))
+  await db.close()
+}
+
+console.log('2b. aceeași regulă a căii în BD, edge și ecran, pe căi aleatoare (trigger + RPC reale, codul real al edge-ului și al ecranului)')
+{
+  const db = await bazaNoua()
+  const a = await livreaza(db, MIG)
+  ok(a.ok, 'migrarea se aplică' + (a.ok ? '' : ': ' + a.eroare))
+  let s = 20271125
+  const rnd = () => { s = (s * 1103515245 + 12345) % 2147483648; return s / 2147483648 }
+  const alege = l => l[Math.floor(rnd() * l.length)]
+  // clasele explicite din migrare, evaluate DE BAZĂ pe tot BMP-ul (fără surogate) = lista edge-ului (eControlBd) și a ecranului (gol = 9–13, 32);
+  //   pentru comparație, ce prind aici [[:cntrl:]] / [[:space:]] (depind de colaționarea bazei; de aceea migrarea nu le mai folosește)
+  const cl = (await db.query(`SELECT array_agg(c ORDER BY c) FILTER (WHERE chr(c) ~ ${CONTROL}) AS ctrl, array_agg(c ORDER BY c) FILTER (WHERE chr(c) !~ ${GOL}) AS gol,
+      array_agg(c ORDER BY c) FILTER (WHERE chr(c) ~ '[[:cntrl:]]') AS posix_ctrl, array_agg(c ORDER BY c) FILTER (WHERE chr(c) ~ '[[:space:]]') AS posix_space
+      FROM generate_series(1, 65535) c WHERE c NOT BETWEEN 55296 AND 57343`)).rows[0]
+  const jsCtrl = [...Array(65536).keys()].filter(c => c > 0 && !(c >= 55296 && c <= 57343) && EDGE.eControlBd(c))
+  ok(JSON.stringify(cl.ctrl) === JSON.stringify(jsCtrl) && JSON.stringify(cl.gol) === JSON.stringify([9, 10, 11, 12, 13, 32]),
+    `clasele explicite în BD = edge / ecran pe tot BMP-ul: control ${cl.ctrl.length} coduri (1–31, 127–159), gol = 9–13, 32`)
+  console.log(`     (informativ, colaționarea PGlite: [[:cntrl:]] ${JSON.stringify(cl.posix_ctrl) === JSON.stringify(cl.ctrl) ? '= lista explicită' : '≠ lista explicită'}; [[:space:]] = ${JSON.stringify(cl.posix_space)})`)
+  // bucățile: mai ales sigure (ca să se deschidă destule căi), plus tot ce atinge regula (control C0 / DEL / C1 și vecinii lor, spații Unicode,
+  //   %, \, ., .., /); fără U+0000 (nu există în Postgres)
+  const sigure = ['a', 'Z', '0', '.', '...', ' ', 'ș', 'ț', 'Ă', 'ndt', '😀', '-', '_', 'n'.repeat(201), ...[126, 160, 0x103, 0x2028, 0x2029, 0x3000, 0xfeff].map(c => String.fromCharCode(c))]
+  const rele = ['..', '/', 'ndt/', '%', '%2e', String.fromCharCode(92), ...[1, 9, 10, 13, 31, 127, 128, 133, 159].map(c => String.fromCharCode(c))]
+  const bucati = [...sigure, ...sigure, ...sigure, ...sigure, ...rele]
+  const categorii = ['autorizatie_ndt', 'autorizatie_ndt', 'autorizatie_ndt', 'iso', 'alta', 'certificat_legal']
+  const N = 3000
+  const dif = []
+  let nNdt = 0, nDeschise = 0, nRefuz = 0
+  for (let i = 0; i < N; i++) {
+    const pid = alege([1, 2]), cat = alege(categorii)
+    const prefix = alege([`parteneri/${pid}/ndt/`, `parteneri/${pid}/ndt/`, `parteneri/${pid}/ndt/`, `parteneri/${3 - pid}/ndt/`, `parteneri/${pid}/`, `parteneri/0${pid}/ndt/`, ''])
+    const cale = prefix + Array.from({ length: Math.floor(rnd() * 6) }, () => alege(bucati)).join('')
+    const g = await inTx(db, async () => { await devino(db, 'OF'); return incearca(db, `INSERT INTO public.ofertare_parteneri_documente (partener_id, categorie, denumire, fisier_path) VALUES ($1, $2, 'aleator', $3) RETURNING id`, [pid, cat, cale]) })
+    if (!g.ok && g.code !== '23514') { dif.push(`${JSON.stringify(cale)}: garda ${g.code} ${g.message}`); continue }
+    const d = await inTx(db, async () => {
+      await db.exec('SET LOCAL session_replication_role = replica')
+      const r = await db.query(`INSERT INTO public.ofertare_parteneri_documente (partener_id, categorie, denumire, fisier_path) VALUES ($1, $2, 'aleator ocolit', $3) RETURNING id`, [pid, cat, cale])
+      await db.exec('SET LOCAL session_replication_role = origin')
+      await devino(db, 'CTC')
+      return (await db.query(`SELECT public.fn_ctc_autorizatie_ndt_fisier($1) AS c`, [r.rows[0].id])).rows[0].c
+    })
+    const ecran = ECRAN.caleValida(cale, pid, cat), e = EDGE.caleNdtSigura(cale)
+    // garda = ecranul (toate categoriile); deschiderea = NDT cu garda trecută; edge = deschiderea pe calea întoarsă (nimic deschis și refuzat)
+    if (g.ok !== ecran) dif.push(`${cat} ${JSON.stringify(cale)}: garda ${g.ok} ≠ ecran ${ecran}`)
+    if ((d !== null) !== (cat === 'autorizatie_ndt' && g.ok)) dif.push(`${cat} ${JSON.stringify(cale)}: deschiderea ${JSON.stringify(d)} ≠ garda NDT ${g.ok}`)
+    if (d !== null && (d !== cale || e !== cale)) dif.push(`${cat} ${JSON.stringify(cale)}: BD deschide, edge ${JSON.stringify(e)}`)
+    // pe firma rândului, edge (fără firmă) refuză exact ce refuză BD-ul
+    if (cat === 'autorizatie_ndt' && cale.startsWith(`parteneri/${pid}/ndt/`) && (e !== null) !== g.ok) dif.push(`${JSON.stringify(cale)}: edge ${e !== null} ≠ garda ${g.ok}`)
+    if (cat === 'autorizatie_ndt') nNdt++
+    if (d !== null) nDeschise++
+    if (!g.ok) nRefuz++
+  }
+  dif.slice(0, 10).forEach(x => console.log('     ' + x))
+  ok(dif.length === 0 && nDeschise > 300 && nRefuz > 300 && nNdt > 1000,
+    `${N} căi aleatoare: garda = ecranul, deschiderea = garda NDT, edge semnează tot ce deschide BD-ul (${nNdt} NDT, ${nDeschise} deschise, ${nRefuz} refuzate de gardă; ${dif.length} abateri)`)
+  // cazurile din verdict, explicit: spații, nume de 201 / 1000+ caractere, diacritice — trigger, RPC și edge cu același rezultat
+  for (const cale of ['parteneri/1/ndt/scan cu spatii.pdf', 'parteneri/1/ndt/' + 'n'.repeat(201), 'parteneri/1/ndt/' + 'x'.repeat(1000) + '.pdf', 'parteneri/1/ndt/Autorizație ștampilată RT – Brașov.pdf']) {
+    const g = await inTx(db, async () => { await devino(db, 'OF'); return incearca(db, `INSERT INTO public.ofertare_parteneri_documente (partener_id, categorie, denumire, fisier_path) VALUES (1, 'autorizatie_ndt', 'v', $1) RETURNING id`, [cale]) })
+    const d = await inTx(db, async () => {
+      await devino(db, 'OF')
+      const r = await db.query(`INSERT INTO public.ofertare_parteneri_documente (partener_id, categorie, denumire, fisier_path) VALUES (1, 'autorizatie_ndt', 'v', $1) RETURNING id`, [cale])
+      await devino(db, 'CTC')
+      return (await db.query(`SELECT public.fn_ctc_autorizatie_ndt_fisier($1) AS c`, [r.rows[0].id])).rows[0].c
+    }).catch(e => 'EROARE ' + e.message)
+    ok(g.ok && d === cale && EDGE.caleNdtSigura(cale) === cale && ECRAN.caleValida(cale, 1, 'autorizatie_ndt'),
+      `verdict ${JSON.stringify(cale.slice(0, 50))}${cale.length > 50 ? '… (' + cale.length + ' caractere)' : ''}: trigger acceptă, RPC întoarce calea, edge o semnează, ecranul o acceptă`)
+  }
   await db.close()
 }
 
@@ -532,11 +678,11 @@ const comport = async text => {
 const DREPT = "  IF NOT public.fn_ctc_autorizatii_drept() THEN\n    RAISE EXCEPTION 'ctc: autorizațiile pentru cartea tehnică cer acces la modulul CTC' USING ERRCODE = '42501';\n  END IF;\n"
 const MUTANTI = [
   ['M1 fără trigger', [["CREATE TRIGGER trg_ofertare_doc_cale_garda BEFORE INSERT OR UPDATE OF fisier_path, partener_id, categorie ON public.ofertare_parteneri_documente\n  FOR EACH ROW EXECUTE FUNCTION public.fn_ofertare_doc_cale_garda();\n", '']]],
-  ['M2 RPC-ul de deschidere fără reverificarea căii', [["   WHERE d.id = p_document_id AND d.categorie = 'autorizatie_ndt'\n     AND d.fisier_path ~ ('^parteneri/' || d.partener_id::text || '/ndt/[^/]+$')\n     AND strpos(d.fisier_path, chr(92)) = 0 AND strpos(d.fisier_path, '%') = 0 AND d.fisier_path !~ '[[:cntrl:]]'\n     AND NOT ('.' = ANY (string_to_array(d.fisier_path, '/')) OR '..' = ANY (string_to_array(d.fisier_path, '/')));",
+  ['M2 RPC-ul de deschidere fără reverificarea căii', [["   WHERE d.id = p_document_id AND d.categorie = 'autorizatie_ndt'\n     AND d.fisier_path ~ ('^parteneri/' || d.partener_id::text || '/ndt/[^/]+$')\n     AND strpos(d.fisier_path, chr(92)) = 0 AND strpos(d.fisier_path, '%') = 0 AND d.fisier_path !~ " + CONTROL + "\n     AND NOT ('.' = ANY (string_to_array(d.fisier_path, '/')) OR '..' = ANY (string_to_array(d.fisier_path, '/')));",
     "   WHERE d.id = p_document_id AND d.categorie = 'autorizatie_ndt';"]]],
   ['M3 lista fără filtrul categoriei', [["    JOIN public.ofertare_parteneri p ON p.id = d.partener_id\n   WHERE d.categorie = 'autorizatie_ndt';", '    JOIN public.ofertare_parteneri p ON p.id = d.partener_id;']]],
   ['M4 lista întoarce și calea', [['fara_expirare boolean, stare text, are_fisier boolean)', 'fara_expirare boolean, stare text, are_fisier boolean, cale text)'],
-    ["(d.fisier_path IS NOT NULL AND d.fisier_path ~ '[^[:space:]]')\n    FROM", "(d.fisier_path IS NOT NULL AND d.fisier_path ~ '[^[:space:]]'), d.fisier_path::text\n    FROM"]]],
+    ['(d.fisier_path IS NOT NULL AND d.fisier_path ~ ' + GOL + ')\n    FROM', '(d.fisier_path IS NOT NULL AND d.fisier_path ~ ' + GOL + '), d.fisier_path::text\n    FROM']]],
   ['M5 garda fără regula „non-NDT nu stă sub ndt/”', [["  ELSIF strpos('/' || NEW.fisier_path, '/ndt/') > 0 THEN\n    RAISE EXCEPTION 'ofertare: dosarul NDT e doar pentru autorizațiile de control nedistructiv'\n      USING ERRCODE = '23514';\n", '']]],
   ['M6 garda fără segmentele . / ..', [["\n     OR '.' = ANY (string_to_array(NEW.fisier_path, '/')) OR '..' = ANY (string_to_array(NEW.fisier_path, '/')) THEN", ' THEN']]],
   ['M7 fără indexul unic', [['CREATE UNIQUE INDEX ofertare_parteneri_documente_fisier_path_uq ON public.ofertare_parteneri_documente (fisier_path) WHERE fisier_path IS NOT NULL;\n', '']]],
@@ -550,14 +696,28 @@ const MUTANTI = [
   ['M15b deschiderea fără ancora ^', [["d.fisier_path ~ ('^parteneri/' || d.partener_id::text", "d.fisier_path ~ ('parteneri/' || d.partener_id::text"]]],
   ['M16 garda fără „%”', [["OR strpos(NEW.fisier_path, chr(92)) > 0 OR strpos(NEW.fisier_path, '%') > 0\n", 'OR strpos(NEW.fisier_path, chr(92)) > 0\n']]],
   ['M17 garda fără backslash', [[' OR strpos(NEW.fisier_path, chr(92)) > 0', '']]],
-  ['M18 garda fără caracterele de control', [["\n     OR NEW.fisier_path ~ '[[:cntrl:]]'", '']]],
-  ['M19 garda fără „cale goală”', [["IF NEW.fisier_path !~ '[^[:space:]]' OR strpos", 'IF strpos']]],
+  ['M18 garda fără caracterele de control', [['\n     OR NEW.fisier_path ~ ' + CONTROL, '']]],
+  ['M19 garda fără „cale goală”', [['IF NEW.fisier_path !~ ' + GOL + ' OR strpos', 'IF strpos']]],
   ['M20 fără dată = valabil', [["WHEN d.data_valabilitate IS NULL THEN 'necunoscut'", "WHEN d.data_valabilitate IS NULL THEN 'valabil'"]]],
   ['M21 fara_expirare ignorat', [["(CASE WHEN d.fara_expirare IS TRUE THEN 'valabil'", "(CASE WHEN false THEN 'valabil'"]]],
   ['M22 deschiderea fără segmentele . / ..', [["\n     AND NOT ('.' = ANY (string_to_array(d.fisier_path, '/')) OR '..' = ANY (string_to_array(d.fisier_path, '/')));", ';']]],
-  ['M23 deschiderea fără backslash / % / control', [["\n     AND strpos(d.fisier_path, chr(92)) = 0 AND strpos(d.fisier_path, '%') = 0 AND d.fisier_path !~ '[[:cntrl:]]'", '']]],
+  ['M23 deschiderea fără backslash / % / control', [["\n     AND strpos(d.fisier_path, chr(92)) = 0 AND strpos(d.fisier_path, '%') = 0 AND d.fisier_path !~ " + CONTROL, '']]],
   ['M24 trigger-ul doar la INSERT', [['BEFORE INSERT OR UPDATE OF fisier_path, partener_id, categorie ON', 'BEFORE INSERT ON']]],
-  ['M25 are_fisier și pentru o cale goală', [["(d.fisier_path IS NOT NULL AND d.fisier_path ~ '[^[:space:]]')\n    FROM", '(d.fisier_path IS NOT NULL)\n    FROM']]],
+  ['M25 are_fisier și pentru o cale goală', [['(d.fisier_path IS NOT NULL AND d.fisier_path ~ ' + GOL + ')\n    FROM', '(d.fisier_path IS NOT NULL)\n    FROM']]],
+  // r2: expirarea la momente fixe (X) — ziua calculată greșit doar în jurul miezului nopții / al schimbării de oră
+  ['M26 ziua după UTC (nu România)', [["DECLARE v_azi date := (now() AT TIME ZONE 'Europe/Bucharest')::date;", "DECLARE v_azi date := (now() AT TIME ZONE 'UTC')::date;"]]],
+  ['M27 ora fixă UTC+2 (fără ora de vară)', [["DECLARE v_azi date := (now() AT TIME ZONE 'Europe/Bucharest')::date;", "DECLARE v_azi date := ((now() AT TIME ZONE 'UTC') + interval '2 hours')::date;"]]],
+  ['M28 ora fixă UTC+3 (mereu ora de vară)', [["DECLARE v_azi date := (now() AT TIME ZONE 'Europe/Bucharest')::date;", "DECLARE v_azi date := ((now() AT TIME ZONE 'UTC') + interval '3 hours')::date;"]]],
+  ['M29 ziua de mâine e deja „azi” (expiră cu o zi mai devreme)', [["DECLARE v_azi date := (now() AT TIME ZONE 'Europe/Bucharest')::date;", "DECLARE v_azi date := (now() AT TIME ZONE 'Europe/Bucharest')::date + 1;"]]],
+  // r2: clasele explicite (aceleași în BD, edge și ecran). [[:cntrl:]] coincide în PGlite (C.UTF-8) cu lista explicită (proba 2b) — mutant
+  // echivalent aici, deci NU e în listă; în schimb control fără C1 (ca [[:cntrl:]] sub colaționarea C) și „gol” = [[:space:]] diferă și pică
+  ['M30 garda: control doar C0 + DEL (fără C1)', [['\n     OR NEW.fisier_path ~ ' + CONTROL, "\n     OR NEW.fisier_path ~ ('[' || chr(1) || '-' || chr(31) || chr(127) || ']')"]]],
+  ['M31 deschiderea: control doar C0 + DEL (fără C1)', [['AND d.fisier_path !~ ' + CONTROL, "AND d.fisier_path !~ ('[' || chr(1) || '-' || chr(31) || chr(127) || ']')"]]],
+  ['M36 garda: „gol” înapoi la [[:space:]] (r1, depinde de colaționare)', [['IF NEW.fisier_path !~ ' + GOL + ' OR strpos', "IF NEW.fisier_path !~ '[^[:space:]]' OR strpos"]]],
+  ['M32 garda cu U+2028 drept control', [['\n     OR NEW.fisier_path ~ ' + CONTROL, "\n     OR NEW.fisier_path ~ ('[' || chr(1) || '-' || chr(31) || chr(127) || '-' || chr(159) || chr(8232) || ']')"]]],
+  ['M33 deschiderea refuză și NBSP (control până la U+00A0)', [['AND d.fisier_path !~ ' + CONTROL, "AND d.fisier_path !~ ('[' || chr(1) || '-' || chr(31) || chr(127) || '-' || chr(160) || ']')"]]],
+  ['M34 garda cu limita de 200 pe numele NDT', [["NEW.fisier_path !~ ('^parteneri/' || NEW.partener_id::text || '/ndt/[^/]+$')", "NEW.fisier_path !~ ('^parteneri/' || NEW.partener_id::text || '/ndt/[^/]{1,200}$')"]]],
+  ['M35 deschiderea doar ASCII (ca edge-ul r1)', [["d.fisier_path ~ ('^parteneri/' || d.partener_id::text || '/ndt/[^/]+$')", "d.fisier_path ~ ('^parteneri/' || d.partener_id::text || '/ndt/[A-Za-z0-9._-]+$')"]]],
 ]
 for (const [nume, inl] of MUTANTI) {
   let ab

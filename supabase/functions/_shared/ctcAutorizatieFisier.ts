@@ -24,8 +24,9 @@ export function valideazaCerere(corp: unknown): Cerere {
   return { ok: true, tip, id }
 }
 
-// calea din BD, înainte de semnare: relativă la bucket, segmente din [A-Za-z0-9._-], fără „.” / „..”, fără „/” la capete, fără spații /
-// caractere de control, cel mult 500 de caractere. Altfel null (422, nu se semnează nimic).
+// calea unei autorizații de SUDOR (hr_autorizatii, ramura autorizatie_id — neschimbată de 20270111a), înainte de semnare: relativă la
+// bucket, segmente din [A-Za-z0-9._-], fără „.” / „..”, fără „/” la capete, fără spații / caractere de control, cel mult 500 de caractere.
+// Altfel null (422, nu se semnează nimic). NU se folosește pentru documentele NDT (acolo regula e cea din BD, mai jos).
 const SEGMENT = /^[A-Za-z0-9._-]{1,200}$/
 export function caleSigura(cale: unknown): string | null {
   if (typeof cale !== 'string' || cale.length === 0 || cale.length > 500) return null
@@ -34,12 +35,27 @@ export function caleSigura(cale: unknown): string | null {
   return cale
 }
 
-// calea unui document NDT (20270111a), reverificată în edge: forma parteneri/<id firmă>/ndt/<nume> (aceeași ca garda și RPC-ul din BD; firma
-// o verifică RPC-ul) ȘI caleSigura (mai strictă: un nume cu spații, acceptat de BD, nu se semnează aici — 422, nimic semnat)
-const FORMA_NDT = new RegExp('^parteneri/[1-9][0-9]*/ndt/[^/]+$')
+// calea unui document NDT (20270111a), reverificată în edge cu EXACT regula din BD (garda fn_ofertare_doc_cale_garda pentru categoria
+// autorizatie_ndt și RPC-ul fn_ctc_autorizatie_ndt_fisier), fără firma rândului (pe care edge-ul n-o știe; o verifică RPC-ul):
+//   * forma ^parteneri/<id>/ndt/<nume>$, un singur segment după ndt/; <id> = textul unui bigint (partener_id::text din BD: 0 sau
+//     -?[1-9][0-9]*, fără zerouri în față);
+//   * fără backslash, fără „%”, fără caractere de control = U+0001–U+001F și U+007F–U+009F (aceeași listă explicită ca în BD; U+0000 nu
+//     poate exista într-un text Postgres, aici e refuzat și el);
+//   * numele nu e „.” / „..” (singurul segment care ar putea fi; punctele din nume sunt permise);
+//   * „cale goală” nu se poate întâmpla în această formă (începe cu „parteneri/”).
+// Spațiile, diacriticele, emoji și lungimea numelui sunt PERMISE, ca în BD (fără limita ASCII / 200 a sudorilor). Paritatea: tabelul comun
+// supabase/tests/20270111a_ctc_autorizatii_ndt_cazuri_cale.json (vitest) + căi aleatoare trecute prin trigger, RPC și această funcție (PGlite).
+const FORMA_NDT = new RegExp('^parteneri/(0|-?[1-9][0-9]*)/ndt/([^/]+)$')
+export const eControlBd = (c: number) => c <= 0x1f || (c >= 0x7f && c <= 0x9f)
 export function caleNdtSigura(cale: unknown): string | null {
-  const c = caleSigura(cale)
-  return c && FORMA_NDT.test(c) ? c : null
+  if (typeof cale !== 'string') return null
+  const m = FORMA_NDT.exec(cale)
+  if (!m || m[2] === '.' || m[2] === '..') return null
+  for (let i = 0; i < cale.length; i++) {
+    const c = cale.charCodeAt(i)
+    if (c === 92 || c === 37 || eControlBd(c)) return null
+  }
+  return cale
 }
 
 // eroarea RPC → HTTP: 42501 = fără drept (403); P0002 = autorizație de sudor inexistentă / fără scan / alt tip (404, același mesaj);

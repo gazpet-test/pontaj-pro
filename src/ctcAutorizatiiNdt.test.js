@@ -17,8 +17,10 @@ const EDGE_IDX = citeste('supabase/functions/ctc-autorizatie-fisier/index.ts')
 const EDGE_SH = citeste('supabase/functions/_shared/ctcAutorizatieFisier.ts')
 const UI_CTC = citeste('src/ctc/CtcAutorizatii.jsx')
 const UI_OF = citeste('src/OfertareParteneri.jsx')
-const decodeaza = s => s.split('{BS}').join(String.fromCharCode(92)).split('{CTRL}').join(String.fromCharCode(1))
-const CAZURI = JSON.parse(citeste(`supabase/tests/${NUME}_cazuri_cale.json`)).cazuri.map(c => ({ ...c, cale: decodeaza(c.cale) }))
+const TABEL = JSON.parse(citeste(`supabase/tests/${NUME}_cazuri_cale.json`))
+// marcajele din tabel ({BS}, {C1}, {LUNG} …) → caracterele lor, din coduri (aceeași decodare ca proba PGlite)
+const decodeaza = s => Object.entries(TABEL._marcaje).reduce((t, [k, [cod, ori]]) => t.split(k).join(String.fromCharCode(cod).repeat(ori)), s)
+const CAZURI = TABEL.cazuri.map(c => ({ ...c, cale: decodeaza(c.cale) }))
 const corp = fn => { const i = MIG.indexOf(`CREATE FUNCTION public.${fn}(`); const a = MIG.indexOf('AS $f$', i) + 6; return MIG.slice(a, MIG.indexOf('$f$;', a)) }
 const fara = t => t.replace(/--[^\n]*/g, '')
 const nr = (t, s) => t.split(s).length - 1
@@ -36,11 +38,46 @@ describe('regula căii pe tabelul comun de cazuri (L19)', () => {
     expect(dif).toEqual([])
     expect(caleValida(null, 1, CATEGORIE_NDT)).toBe(true)
   })
-  it('edge-ul (caleNdtSigura) = valoarea „edge” pe fiecare caz; nicio cale refuzată de BD la deschidere nu e semnabilă dacă e și în afara formei', () => {
+  it('edge-ul (caleNdtSigura) = valoarea „edge” pe fiecare caz; contractul: tot ce deschide BD-ul se semnează în edge', () => {
     const dif = CAZURI.filter(c => (edge.caleNdtSigura(c.cale) !== null) !== c.edge).map(c => JSON.stringify(c.cale))
     expect(dif).toEqual([])
-    // ce deschide BD-ul și edge-ul acceptă = exact cazurile cu nume din [A-Za-z0-9._-] (numele cu spații: BD da, edge nu — 422, declarat)
-    expect(CAZURI.filter(c => c.deschide && !c.edge).map(c => c.cale)).toEqual(['parteneri/1/ndt/scan cu spatii.pdf'])
+    // r2 (Jakarinos P2): nicio cale deschisă de RPC nu primește 422 în edge
+    expect(CAZURI.filter(c => c.deschide && !c.edge).map(c => c.cale)).toEqual([])
+    // edge acceptă, BD nu deschide: DOAR altă firmă decât a rândului sau altă categorie (le refuză RPC-ul, edge-ul nu le știe)
+    const firma = c => (/^parteneri\/(-?[0-9]+)\/ndt\//.exec(c.cale) || [])[1]
+    expect(CAZURI.filter(c => c.edge && !c.deschide).every(c => c.categorie !== CATEGORIE_NDT || firma(c) !== String(c.partener))).toBe(true)
+    // pe firma rândului, edge = garda = deschiderea pentru NDT (aceeași regulă, nu una mai strictă)
+    const ndtFirma = CAZURI.filter(c => c.categorie === CATEGORIE_NDT && firma(c) === String(c.partener))
+    expect(ndtFirma.length).toBeGreaterThanOrEqual(20)
+    expect(ndtFirma.filter(c => !(c.edge === c.garda && c.garda === c.deschide)).map(c => c.cale)).toEqual([])
+  })
+  it('cazurile din verdict: spații, nume lung (> 200), diacritice — BD, ecran și edge dau același rezultat', () => {
+    const verdict = ['parteneri/1/ndt/scan cu spatii.pdf', 'parteneri/1/ndt/' + 'n'.repeat(201), 'parteneri/1/ndt/1700000000017_' + 'x'.repeat(250) + '.pdf',
+      'parteneri/1/ndt/Autorizație ștampilată RT – Brașov.pdf']
+    for (const c of verdict) {
+      expect(edge.caleNdtSigura(c), c).toBe(c)
+      expect(caleValida(c, 1, CATEGORIE_NDT), c).toBe(true)
+    }
+    // aceleași căi (sau gemenii lor) sunt în tabelul comun, cu garda și deschiderea BD = true (proba PGlite le trece prin trigger și RPC)
+    for (const c of [verdict[0], verdict[2], verdict[3]]) expect(CAZURI.find(x => x.cale === c && x.categorie === CATEGORIE_NDT), c).toMatchObject({ garda: true, deschide: true, edge: true })
+    expect(CAZURI.some(x => x.categorie === CATEGORIE_NDT && x.deschide && x.cale.length > 1000)).toBe(true)
+  })
+  it('proprietate: pe firma rândului, edge (fără firmă) = ecranul (regula din BD) pe căi NDT aleatoare (unicode, control, %, \\, ., .., /)', () => {
+    let s = 20271125
+    const rnd = () => { s = (s * 1103515245 + 12345) % 2147483648; return s / 2147483648 }
+    const coduri = [0, 1, 9, 10, 13, 31, 32, 37, 46, 47, 92, 127, 128, 133, 159, 160, 255, 0x103, 0x219, 0x2028, 0x3000, 0xfeff, 0xd83d, 0xde00]
+    const bucati = ['a', 'Z', '0', '.', '..', '/', ' ', 'ș', 'ndt/', 'x'.repeat(150), ...coduri.map(c => String.fromCharCode(c))]
+    let acceptate = 0
+    for (let i = 0; i < 20000; i++) {
+      const pid = 1 + Math.floor(rnd() * 3)
+      const nume = Array.from({ length: Math.floor(rnd() * 8) }, () => bucati[Math.floor(rnd() * bucati.length)]).join('')
+      const c = `parteneri/${pid}/ndt/${nume}`
+      const e = edge.caleNdtSigura(c) !== null, u = caleValida(c, pid, CATEGORIE_NDT)
+      if (e !== u) throw new Error(`edge ${e} ≠ ecran ${u} pe ${JSON.stringify(c)}`)
+      if (e) acceptate++
+    }
+    expect(acceptate).toBeGreaterThan(1000)
+    expect(acceptate).toBeLessThan(19000)
   })
 })
 
@@ -122,7 +159,15 @@ async function abateriEdge(m) {
   verif('NDT: semnat în ofertare, exact calea, 60 s', JSON.stringify(x.st.semn) === JSON.stringify([['ofertare', 'parteneri/1/ndt/1700000000000_rt.pdf', 60]]))
   x = dep({ data: null }); r = await m.trateazaCerere({ ndt_document_id: 5 }, x.d)
   verif('NDT NULL → 404 fără semnare', r.status === 404 && x.st.semn.length === 0)
-  for (const cale of ['licitatii/103/caiet_de_sarcini.pdf', 'parteneri/1/ndt/scan cu spatii.pdf', '1/a.pdf', 'evil/parteneri/1/ndt/a.pdf', 'parteneri/1/ndt/..', 5]) {
+  // r2: căile pe care BD-ul le deschide (spații, diacritice, nume lung, NBSP / U+2028 care nu sunt control) se semnează EXACT
+  for (const cale of ['parteneri/1/ndt/scan cu spatii.pdf', 'parteneri/1/ndt/' + 'n'.repeat(201), 'parteneri/2/ndt/Autorizație ștampilată RT.pdf',
+    'parteneri/1/ndt/a' + String.fromCharCode(0xa0) + 'b.pdf', 'parteneri/1/ndt/a' + String.fromCharCode(0x2028) + 'b.pdf', 'parteneri/1/ndt/...']) {
+    x = dep({ data: cale }); r = await m.trateazaCerere({ ndt_document_id: 5 }, x.d)
+    verif(`NDT cale ${JSON.stringify(cale.slice(0, 60))} → 200, semnată exact`, r.status === 200 && JSON.stringify(x.st.semn) === JSON.stringify([['ofertare', cale, 60]]))
+  }
+  for (const cale of ['licitatii/103/caiet_de_sarcini.pdf', '1/a.pdf', 'evil/parteneri/1/ndt/a.pdf', 'parteneri/1/ndt/..', 'parteneri/1/ndt/.', 'parteneri/01/ndt/a.pdf',
+    'parteneri/1/ndt/a%2e.pdf', 'parteneri/1/ndt/a' + String.fromCharCode(92) + 'b.pdf', 'parteneri/1/ndt/sub/a.pdf', 'parteneri/1/NDT/a.pdf', 5, '',
+    ...[0, 1, 9, 10, 31, 127, 133, 159].map(k => 'parteneri/1/ndt/a' + String.fromCharCode(k) + 'b.pdf')]) {
     x = dep({ data: cale }); r = await m.trateazaCerere({ ndt_document_id: 5 }, x.d)
     verif(`NDT cale ${JSON.stringify(cale)} → 422 fără semnare`, r.status === 422 && x.st.semn.length === 0)
   }
@@ -167,7 +212,20 @@ describe('edge fn ctc-autorizatie-fisier v2', () => {
       ['fără răspunsul 404 la NULL', "      if (data == null) return { status: 404, corp: { error: 'Autorizație NDT inexistentă sau fără scan' } }\n", ''],
       ['bucket greșit pentru NDT', "arg: 'p_document_id', bucket: 'ofertare' }", "arg: 'p_document_id', bucket: 'autorizatii' }"],
       ['chei în plus acceptate', 'if (chei.length !== 1 || !tip)', 'if (!tip)'],
-      ['forma NDT fără ancoră', "new RegExp('^parteneri/[1-9][0-9]*/ndt/[^/]+$')", "new RegExp('parteneri/[1-9][0-9]*/ndt/[^/]+$')"],
+      ['forma NDT fără ancoră', "new RegExp('^parteneri/(0|-?[1-9][0-9]*)/ndt/([^/]+)$')", "new RegExp('parteneri/(0|-?[1-9][0-9]*)/ndt/([^/]+)$')"],
+      ['forma NDT cu zerouri în față la firmă', "new RegExp('^parteneri/(0|-?[1-9][0-9]*)/ndt/([^/]+)$')", "new RegExp('^parteneri/(-?[0-9]+)/ndt/([^/]+)$')"],
+      ['forma NDT cu sub-dosare', "new RegExp('^parteneri/(0|-?[1-9][0-9]*)/ndt/([^/]+)$')", "new RegExp('^parteneri/(0|-?[1-9][0-9]*)/ndt/(.+)$')"],
+      ['limita de 200 a sudorilor pe numele NDT', "new RegExp('^parteneri/(0|-?[1-9][0-9]*)/ndt/([^/]+)$')", "new RegExp('^parteneri/(0|-?[1-9][0-9]*)/ndt/([^/]{1,200})$')"],
+      ['numele NDT doar ASCII fără spații (ca r1)', "new RegExp('^parteneri/(0|-?[1-9][0-9]*)/ndt/([^/]+)$')", "new RegExp('^parteneri/(0|-?[1-9][0-9]*)/ndt/([A-Za-z0-9._-]+)$')"],
+      ['NDT prin caleSigura (r1)', "  if (typeof cale !== 'string') return null\n  const m = FORMA_NDT.exec(cale)", "  if (caleSigura(cale) === null) return null\n  const m = FORMA_NDT.exec(cale as string)"],
+      ['fără numele „.” / „..”', "  if (!m || m[2] === '.' || m[2] === '..') return null", '  if (!m) return null'],
+      ['fără backslash', 'if (c === 92 || c === 37 || eControlBd(c)) return null', 'if (c === 37 || eControlBd(c)) return null'],
+      ['fără „%”', 'if (c === 92 || c === 37 || eControlBd(c)) return null', 'if (c === 92 || eControlBd(c)) return null'],
+      ['fără caracterele de control', 'if (c === 92 || c === 37 || eControlBd(c)) return null', 'if (c === 92 || c === 37) return null'],
+      ['control doar C0 (fără DEL / C1)', 'export const eControlBd = (c: number) => c <= 0x1f || (c >= 0x7f && c <= 0x9f)', 'export const eControlBd = (c: number) => c <= 0x1f'],
+      ['control până la U+00A0 (NBSP refuzat)', 'export const eControlBd = (c: number) => c <= 0x1f || (c >= 0x7f && c <= 0x9f)', 'export const eControlBd = (c: number) => c <= 0x1f || (c >= 0x7f && c <= 0xa0)'],
+      ['control fără U+001F', 'export const eControlBd = (c: number) => c <= 0x1f || (c >= 0x7f && c <= 0x9f)', 'export const eControlBd = (c: number) => c < 0x1f || (c >= 0x7f && c <= 0x9f)'],
+      ['U+2028 tratat ca control (ca glibc)', 'export const eControlBd = (c: number) => c <= 0x1f || (c >= 0x7f && c <= 0x9f)', 'export const eControlBd = (c: number) => c <= 0x1f || (c >= 0x7f && c <= 0x9f) || c === 0x2028'],
       ['link de o oră', 'export const VALABIL_SEC = 60', 'export const VALABIL_SEC = 3600'],
       ['RPC-ul de sudor pe ramura NDT', "ndt: { cheie: 'ndt_document_id', rpc: 'fn_ctc_autorizatie_ndt_fisier'", "ndt: { cheie: 'ndt_document_id', rpc: 'fn_ctc_autorizatie_fisier'"],
       ['id-ul neverificat', 'if (typeof id !== \'number\' || !Number.isSafeInteger(id) || id <= 0)', 'if (id == null)'],
@@ -287,6 +345,16 @@ describe(`${NUME} — migrarea și revenirea (static)`, () => {
     expect(g).toContain("ELSIF strpos('/' || NEW.fisier_path, '/ndt/') > 0 THEN")
     expect(g).toContain("'..' = ANY (string_to_array(NEW.fisier_path, '/'))")
     expect(g).toContain('strpos(NEW.fisier_path, chr(92)) > 0')
+    // r2: clasele „control” și „gol” sunt explicite (din coduri), aceleași în garda, RPC-ul de deschidere, edge și ecran — nu [[:cntrl:]] /
+    // [[:space:]], care depind de colaționarea bazei
+    const CONTROL = "('[' || chr(1) || '-' || chr(31) || chr(127) || '-' || chr(159) || ']')", GOL = "('[^' || chr(9) || '-' || chr(13) || chr(32) || ']')"
+    const f = corp('fn_ctc_autorizatie_ndt_fisier'), l = corp('fn_ctc_autorizatii_ndt')
+    expect(g).toContain('OR NEW.fisier_path ~ ' + CONTROL)
+    expect(g).toContain('IF NEW.fisier_path !~ ' + GOL)
+    expect(f).toContain('AND d.fisier_path !~ ' + CONTROL)
+    expect(l).toContain('d.fisier_path ~ ' + GOL)
+    for (const c of [g, f, l]) expect(c).not.toMatch(/\[\[:(cntrl|space):\]\]/)
+    expect([...Array(0x10000).keys()].filter(edge.eControlBd)).toEqual([...Array(32).keys(), ...Array.from({ length: 33 }, (_, i) => 127 + i)])
   })
   it('RPC-urile: DEFINER, predicatul CTC pe auth.uid(), lista doar NDT fără cale / observații / contact; deschiderea reverifică forma', () => {
     const l = corp('fn_ctc_autorizatii_ndt'), f = corp('fn_ctc_autorizatie_ndt_fisier')

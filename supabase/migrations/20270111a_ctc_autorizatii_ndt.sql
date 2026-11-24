@@ -12,7 +12,10 @@
 --   2. Garda căii fișierului (L07: pe TOATE căile de scriere, inclusiv PATCH direct prin PostgREST): trigger-ul trg_ofertare_doc_cale_garda,
 --      BEFORE INSERT OR UPDATE OF fisier_path, partener_id, categorie, funcția fn_ofertare_doc_cale_garda() (SECURITY INVOKER, search_path fix,
 --      fără EXECUTE pentru clienți; un trigger nu cere EXECUTE la declanșare), pentru TOATE categoriile, când fisier_path nu e NULL:
---        * calea nu e goală, n-are backslash, „%”, caractere de control și niciun segment egal cu „.” sau „..” (punctele din nume sunt permise);
+--        * calea nu e goală (nu e doar spațiu / tab / LF / VT / FF / CR), n-are backslash, „%”, caractere de control și niciun segment egal
+--          cu „.” sau „..” (punctele din nume sunt permise). Ambele clase sunt EXPLICITE, din coduri (chr), nu [[:space:]] / [[:cntrl:]]
+--          (acelea depind de colaționarea bazei): control = U+0001–U+001F și U+007F–U+009F. Aceeași listă în edge (caleNdtSigura) și în
+--          ecran (caleValida), probată pe tabelul comun de cazuri. Spațiile, diacriticele și lungimea numelui sunt permise;
 --        * 'autorizatie_ndt' = EXACT parteneri/<partener_id>/ndt/<nume> (un singur segment după ndt/, aceeași firmă);
 --        * orice altă categorie = fără un segment „ndt/” (nimeni nu pune în subdosarul NDT un document de altă natură).
 --      Plus unicitatea căii: indexul unic parțial ofertare_parteneri_documente_fisier_path_uq (fisier_path, unde nu e NULL) — un rând NDT nu
@@ -175,8 +178,8 @@ BEGIN
   IF NEW.fisier_path IS NULL THEN
     RETURN NEW;
   END IF;
-  IF NEW.fisier_path !~ '[^[:space:]]' OR strpos(NEW.fisier_path, chr(92)) > 0 OR strpos(NEW.fisier_path, '%') > 0
-     OR NEW.fisier_path ~ '[[:cntrl:]]'
+  IF NEW.fisier_path !~ ('[^' || chr(9) || '-' || chr(13) || chr(32) || ']') OR strpos(NEW.fisier_path, chr(92)) > 0 OR strpos(NEW.fisier_path, '%') > 0
+     OR NEW.fisier_path ~ ('[' || chr(1) || '-' || chr(31) || chr(127) || '-' || chr(159) || ']')
      OR '.' = ANY (string_to_array(NEW.fisier_path, '/')) OR '..' = ANY (string_to_array(NEW.fisier_path, '/')) THEN
     RAISE EXCEPTION 'ofertare: calea fișierului e invalidă (goală, backslash, procent, caractere de control sau segment . / ..)'
       USING ERRCODE = '23514';
@@ -215,7 +218,7 @@ BEGIN
                WHEN d.data_valabilitate IS NULL THEN 'necunoscut'
                WHEN d.data_valabilitate < v_azi THEN 'expirat'
                ELSE 'valabil' END)::text,
-         (d.fisier_path IS NOT NULL AND d.fisier_path ~ '[^[:space:]]')
+         (d.fisier_path IS NOT NULL AND d.fisier_path ~ ('[^' || chr(9) || '-' || chr(13) || chr(32) || ']'))
     FROM public.ofertare_parteneri_documente d
     JOIN public.ofertare_parteneri p ON p.id = d.partener_id
    WHERE d.categorie = 'autorizatie_ndt';
@@ -236,7 +239,7 @@ BEGIN
     FROM public.ofertare_parteneri_documente d
    WHERE d.id = p_document_id AND d.categorie = 'autorizatie_ndt'
      AND d.fisier_path ~ ('^parteneri/' || d.partener_id::text || '/ndt/[^/]+$')
-     AND strpos(d.fisier_path, chr(92)) = 0 AND strpos(d.fisier_path, '%') = 0 AND d.fisier_path !~ '[[:cntrl:]]'
+     AND strpos(d.fisier_path, chr(92)) = 0 AND strpos(d.fisier_path, '%') = 0 AND d.fisier_path !~ ('[' || chr(1) || '-' || chr(31) || chr(127) || '-' || chr(159) || ']')
      AND NOT ('.' = ANY (string_to_array(d.fisier_path, '/')) OR '..' = ANY (string_to_array(d.fisier_path, '/')));
   RETURN v_cale;
 END $f$;
