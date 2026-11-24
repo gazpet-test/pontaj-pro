@@ -38,7 +38,8 @@ export async function tintaPglite(db) {
 }
 
 // rulează fișierele generate; l15 = true adaugă pasul „înainte”; copie = textul migrării (implicit copia runnerului); întoarce notițele
-export async function prinRunner(db, fis, { l15 = true, copie = null, faraPost = false, dupaInainte = '', final = 'COMMIT' } = {}) {
+export async function prinRunner(db, fis, { l15 = true, copie = null, faraPost = false, dupaInainte = '', final = 'COMMIT', plafon = null } = {}) {
+  const pl = plafon ?? Number(/'([0-9]+)\/session'/.exec(fis.prolog)[1])
   let pre = fis.pre
   const subst = []
   if (!(await areControlSystem(db))) {
@@ -57,7 +58,7 @@ export async function prinRunner(db, fis, { l15 = true, copie = null, faraPost =
   const jurnal = []
   const T = randomBytes(8).toString('hex')
   try {
-    await db.exec('SET transaction_timeout = 15000;')
+    await db.exec(`SET transaction_timeout = ${pl};`)
     await db.exec('BEGIN')
     await db.exec(fis.prolog + '\n' + pre + '\n' + (l15 ? gen('inainte', T, '-') : '') + '\n' + dupaInainte + '\n' + P.text + '\n;\n' + fis.inreg, { onNotice: n => jurnal.push(n.message) })
     await db.exec(final)

@@ -17,6 +17,7 @@ import { BLOCURI_T5 } from './dcc_registru/blocuri_t5.mjs'
 import { BLOCURI_T6 } from './dcc_registru/blocuri_t6.mjs'
 import { BLOCURI_T7 } from './dcc_registru/blocuri_t7.mjs'
 import { curata } from './dcc_registru/runner.mjs'
+import { BLOCURI_T8, scrieDefinitii } from './dcc_registru/blocuri_t8.mjs'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 
@@ -36,7 +37,7 @@ for (const m of MIG.matchAll(/^-- ─── ([0-9])([a-d])?\. /gm)) {
   SECTIUNI.add(s); SECTIUNI.add(m[1])
 }
 
-const BLOCURI = [...BLOCURI_T2, ...BLOCURI_T3, ...BLOCURI_T4, ...BLOCURI_T5, ...BLOCURI_T6, ...BLOCURI_T7]
+const BLOCURI = [...BLOCURI_T2, ...BLOCURI_T3, ...BLOCURI_T4, ...BLOCURI_T5, ...BLOCURI_T6, ...BLOCURI_T7, ...BLOCURI_T8]
 // registrul ÎNCHIS al blocurilor de stare intermediară: {bloc: succesori cumulativi}
 const INTERMEDIARE = { t2_select_inainte_de_politici: ['t3_grant', 't3_rls_fixtura'] }
 // succesorii pot lipsi din lista blocurilor DOAR cât commit-ul nu are încă secțiunea care face blocul sărit (la Task 2 nu există t3_*)
@@ -65,6 +66,11 @@ const ok = (cond, msg) => { if (cond) console.log('  OK  ' + msg); else { esec++
 
 async function main() {
   const t0 = Date.now()
+  if (args.includes('--scrie-definitii')) {
+    const n = await scrieDefinitii()
+    console.log(`DEFINITII: ${n} chei scrise în ${'supabase/revenire/' + NUME + '_ROLLBACK.sql'}`)
+    process.exit(0)
+  }
   console.log(`secțiuni prezente: ${[...SECTIUNI].sort().join(' ')}; limita: ${PANA_LA || 'toate'}${DOAR ? '; doar ' + DOAR : ''}`)
   verificaRegistru()
   // 0. lanțul de drept (amprentele = constantele din migrare) și validatorul runnerului pe migrare
