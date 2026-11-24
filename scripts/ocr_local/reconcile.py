@@ -6,7 +6,7 @@ import json, pathlib
 import hashlib
 import os
 from .compare import segments, tokens, flat_text, table_rows, compare_band, item_hash, canonical, check_result
-from .banda_goala import e_goala
+from .banda_goala import e_gol
 from .plan import load_plan, save
 
 DECIZII = ('ales_lighton', 'ales_mineru', 'text_propus', 'needs_human')
@@ -49,7 +49,8 @@ def apply_band(raw_a, raw_b, items, decisions):
             if d is None or d['decizie'] != 'ales_lighton': needs_struct = True; break
     else: needs_struct = False
     if needs_struct: return None, True
-    if any(i['tip'] == 'banda_intreaga' for i in items):
+    # banda_intreaga (garda / citire incompleta) si banda_goala_de_verificat (iesire goala): decizia pe toata banda, fara ea = om
+    if any(i['tip'] in ('banda_intreaga', 'banda_goala_de_verificat') for i in items):
         it = items[0]; d = decisions.get(it['id'])
         if d is None or d['decizie'] == 'needs_human': return None, True
         return render(segments(chosen(it, d))), False
@@ -126,9 +127,10 @@ def join_bands(texts, signals, min_tokens=8, max_lines=3, nu_numara=frozenset(),
     (k = 1..3, cel mai mare) DOAR daca sunt identice (tokeni, ș/ş unificate) cu ultimele k randuri INTREGI ale benzii precedente si au
     impreuna >= 8 tokeni. Comparatie pe randuri complete, nu pe tokeni oarecare. Altfel cusatura e nesigura: None (pagina -> needs_human).
     nu_numara: tokeni care se compara, dar nu intra in pragul de 8 (ex. '|' pus de conversia tabelelor, Jakarinos #906 P2).
-    goale: indicii benzilor ALBE dovedite (banda_goala.py), cu text vid. Banda alba acopera toata zona dintre vecinii ei, inclusiv
-    randurile de suprapunere cu ei (deci acelea sunt albe): banda se sare (semnal banda_goala_sarita), iar banda cu text de dupa ea se
-    lipeste intreaga, fara taiere (semnal cusatura_dupa_banda_goala). Un text vid FARA aceasta dovada ramane cusatura nesigura, ca inainte."""
+    goale: indicii benzilor cu iesire goala (banda_goala.py) al caror text FINAL e vid dupa decizia pe randul
+    banda_goala_de_verificat (fara decizie pagina e deja la om): banda goala acopera toata zona dintre vecinii ei, inclusiv randurile
+    de suprapunere cu ei: banda se sare (semnal banda_goala_sarita), iar banda cu text de dupa ea se lipeste intreaga, fara taiere
+    (semnal cusatura_dupa_banda_goala). Un text vid FARA iesire goala marcata ramane cusatura nesigura, ca inainte."""
     from .compare import TOKEN, norm_word
     key = lambda line: [norm_word(t) for t in TOKEN.findall(line)]
     if goale:
@@ -192,9 +194,9 @@ def reconcile(plan_dir, decisions_path):
             raise ValueError('dezacorduri.jsonl nu corespunde citirilor pentru banda %s - ruleaza din nou compara' % band['id'])
         text, needs = apply_band(raw_a, raw_b, bi, decisions)
         p = pages.setdefault(band['page'], {'page': band['page'], 'bands': [], 'needs_human': False, 'arbitrat_de_claude_cantitati': 0})
-        # imaginea e dovedita alba (dovada tine de imagine, nu de cititor); join_bands sare banda doar daca textul FINAL e vid
-        # (ambii goi, sau decizia pe banda_intreaga a ales citirea goala) - altfel cusatura obisnuita
-        goala = e_goala(raw_a, res['lighton']) or e_goala(raw_b, res['mineru'])
+        # iesire goala la un cititor: banda are rand banda_goala_de_verificat (fara decizie = om); join_bands o sare doar daca
+        # textul FINAL dupa decizie e vid - altfel cusatura obisnuita
+        goala = e_gol(raw_a, res['lighton']) or e_gol(raw_b, res['mineru'])
         p['bands'].append(dict({'band': band['id'], 'text': text, 'needs_human': needs, 'dezacorduri': len(bi)}, **({'banda_goala': True} if goala else {})))
         p['needs_human'] = p['needs_human'] or needs
         for i in bi:

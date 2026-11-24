@@ -281,7 +281,7 @@ def valideaza_cerere(c, id):
         for k in READERS + ('eroare',):
             if p.get(k) is not None and not isinstance(p[k], str):
                 raise ValueError('structura: planul %d, %s nu e text' % (i, k))
-        for k in ('incercari', 'dezacorduri', 'pagini_nerezolvate', 'benzi'):
+        for k in ('incercari', 'dezacorduri', 'pagini_nerezolvate', 'benzi', 'goale_de_verificat'):
             if p.get(k) is not None and not _intreg(p[k]):
                 raise ValueError('structura: planul %d, %s invalid' % (i, k))
     return c
@@ -491,6 +491,7 @@ class Coada:
             out.append({'id': c.get('id'), 'cine': c.get('cine'), 'stare': c.get('stare'), 'motiv': c.get('motiv'),
                         'planuri': len(c.get('planuri', [])), 'dezacorduri': c.get('dezacorduri'),
                         'pagini_nerezolvate': sum(p.get('pagini_nerezolvate') or 0 for p in c.get('planuri', [])),
+                        'goale_de_verificat': sum(p.get('goale_de_verificat') or 0 for p in c.get('planuri', [])),
                         'creat_la': c.get('creat_la'), 'actualizat_la': c.get('actualizat_la')})
         try:
             proces = json.loads((self.root / 'stare.json').read_text(encoding='utf-8'))
@@ -766,7 +767,9 @@ class Lucrator:
             self._eroare_plan(c, p, 'plan: %s' % str(e)[:200])
             return 'plan_eroare'
         try:
-            st = self.run_reader(d, reader, run_id='coada_%s_%s' % (c['id'], reader), lock=False, cedare=self.cedare)
+            # gol_de_verificat: o ieșire goală nu oprește planul; banda ajunge în dezacorduri (banda_goala_de_verificat) -> om
+            st = self.run_reader(d, reader, run_id='coada_%s_%s' % (c['id'], reader), lock=False, cedare=self.cedare,
+                                 gol_de_verificat=True)
         except Exception as exc:
             p['incercari'] = int(p.get('incercari') or 0) + 1
             if p['incercari'] >= MAX_INCERCARI_PLAN:
@@ -837,6 +840,7 @@ class Lucrator:
                 d, doc = self._plan_dir(p)
                 rez = self.compare(d)[0]
                 p['dezacorduri'], p['e_cantitate'] = rez.get('disagreements'), rez.get('e_cantitate')
+                p['goale_de_verificat'] = (rez.get('per_tip') or {}).get('banda_goala_de_verificat', 0)
             except Exception as e:
                 self._eroare_plan(c, p, 'compara: %s' % str(e)[:200])
                 continue

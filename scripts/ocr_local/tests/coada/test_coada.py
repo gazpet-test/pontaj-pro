@@ -629,6 +629,31 @@ class LucratorTests(unittest.TestCase):
             self.assertEqual(s.modele.jurnal[:4], [('start', 'lighton'), ('stop', 'lighton'), ('start', 'lighton'), ('stop', 'lighton')])
             self.assertNotIn(('mineru', 'A'), [(r, p) for r, p, _ in s.citiri])
 
+    def scenariu_banda_goala(self, run_reader=None):
+        """Ieșire goală la ambii cititori pe A/p0001_b1 (banda goală, 25.11.2026): cererea ajunge `gata` cu dezacorduri > 0, nu
+        `eroare`; restul benzilor se citesc."""
+        with temporar() as root:
+            s = Sistem(root, run_reader=run_reader)
+            s.coada.adauga([str(fa_plan(root, 'A'))], 'chat')
+            gol = {'lighton': {'ok': False, 'finish_reason': 'stop', 'signal': None, 'guard_event': None, 'error': None},
+                   'mineru': {'ok': False, 'signal': None, 'guard_event': None, 'error': None, 'blocuri_cu_text': 0}}
+            for r in ('lighton', 'mineru'):
+                s.cititori[r] = lambda plan, banda, n: ('', dict(gol[n])) if banda == 'p0001_b1' else s.text_implicit(plan, banda, n)
+            s.lucreaza()
+            c = s.coada.citeste('c000001')
+            self.assertEqual((c['stare'], c['dezacorduri'], c['planuri'][0].get('goale_de_verificat')), ('gata', 1, 1), c)
+            self.assertEqual(len([1 for r, p, _ in s.citiri if p == 'A']), 6)  # toate benzile, la ambii cititori
+            st = [x for x in s.coada.stare()['cereri'] if x['id'] == 'c000001'][0]
+            self.assertEqual((st['stare'], st['dezacorduri'], st['goale_de_verificat']), ('gata', 1, 1))
+
+    def test_banda_goala_gata_cu_dezacord_nu_eroare(self):
+        self.scenariu_banda_goala()
+
+    def test_mutant_coada_fara_gol_de_verificat_e_prins(self):
+        reale = functools.partial(RD.run_reader, check_server=False)
+        with self.assertRaises(AssertionError):
+            self.scenariu_banda_goala(lambda d, reader, **kw: reale(d, reader, **dict(kw, gol_de_verificat=False)))
+
     def test_banda_intrerupta_la_cadere_ramane_la_om(self):
         with temporar() as root:
             s = Sistem(root)

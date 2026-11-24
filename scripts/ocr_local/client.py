@@ -488,7 +488,7 @@ def incarca_citiri(rdir, edge, n=4):
                 de_scris.append({'rulare_id': r['rulare_id'], 'document_id': doc, 'pagina': b['page'], 'banda': b['index'], 'cititor': reader, 'text': raw,
                                  'stare': 'citit' if ok else 'incomplet', 'model_rev': model_rev(reader, res), 'raw_sha256': res['raw_sha256'],
                                  'image_sha256': b['image_sha256'], 'segmente': segmente(raw) if ok else None,
-                                 'garda': {k: res.get(k) for k in ('ok', 'signal', 'guard_event', 'finish_reason', 'error', 'banda_goala') if k in res}})
+                                 'garda': {k: res.get(k) for k in ('ok', 'signal', 'guard_event', 'finish_reason', 'error') if k in res}})
     reluari = []; rez = paralel(lambda a: scrie_reluabil(edge, 'pagina', a, reluari), de_scris, n)
     deja = sum(1 for x in rez if (x or {}).get('deja'))
     out = {'scrise': len(rez) - deja, 'deja': deja, 'reincercari': len(reluari), 'lipsa': len(lipsa), 'lipsa_exemple': lipsa[:20], 'pagini_ocr': len(pagini_ocr), 'pagini_incomplete': len(garda)}

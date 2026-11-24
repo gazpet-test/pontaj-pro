@@ -1,31 +1,29 @@
-"""Banda goala (25.11.2026): o iesire GOALA a cititorului e rezultat valid DOAR pe o banda ALBA dovedita din imagine.
+"""Banda goala (25.11.2026, runda 2 dupa Jakarinos #1196 NO-GO): o iesire GOALA a cititorului NU mai opreste documentul, dar NICIO
+banda nu se mai accepta automat ca „alba”. Regula OCR a casei: nimic nu se pierde fara semnal; ambiguu = la om.
 
-Cazul real (coada Lot 2): o banda de margine (1240x402, medie 254,8, deviatie 2,3) cu doar doua linii verticale palide de tabel;
-LightOn raspunde corect cu nimic (finish_reason=stop, 1 token) si, inainte, tot documentul se oprea (ok=False -> stopped_no_retry).
+Cazul real (coada Lot 2): o banda de margine (1240x402) cu doar doua linii verticale palide de tabel; LightOn raspunde corect cu
+nimic (finish_reason=stop, 1 token) si, inainte, tot documentul se oprea (ok=False -> stopped_no_retry).
 
-Pragurile sunt alese pe toate cele 2.344 de benzi ale planurilor Lot 2 (masuratorile sunt in descrierea PR-ului):
-  - un pragul simplu „< 0,1% pixeli sub 128” NU e sigur: o singura cifra de pagina („7”) are 26 de pixeli sub 128 (0,003%), iar o banda
-    cu paragrafe intregi de text foarte palid are deviatie 1,7 (mai mica decat a benzii albe) si doar 24 de pixeli sub 128;
-  - de aceea banda e alba doar daca: (a) NICIUN pixel sub 128 (banda alba reala: cel mai inchis pixel = 146; orice banda cu text din
-    Lot 2 are cel putin 24), (b) deviatia standard < 6, (c) urmele de cerneala oricat de palida (pixeli sub 245, componente conexe pe
-    8 vecini) sunt numai segmente subtiri si drepte (linii de tabel / chenar: grosime <= 5 px, lungime >= 12 px si >= 4 x grosimea) sau
-    praf (fiecare pata <= 4 px - sub cel mai mic semn tiparit: punctul de 10 pt la 150 dpi are ~9 px - si cel mult 20 px in total).
-    Textul palid se rupe in zeci de pete rotunde (3x4, 6x5 px), deci pica la (c) chiar fara (a).
-Orice imagine care nu se poate masura (decodare, PIL lipsa, dimensiune) = NU e alba (fail-closed: banda ramane esec, ca inainte).
-Ce nu se poate dovedi din pixeli (o cifra izolata, foarte palida, in forma de bara, ex. „1”) ramane acoperit de al doilea cititor:
-compara trateaza banda goala la unul + text la celalalt ca dezacord (banda_intreaga, la om)."""
+Regula (DOAR pe calea laboratorului / cozii: read.run_reader(..., gol_de_verificat=True); E3 si clientul Ofertare raman ca pe main):
+  - iesirea goala CURATA (iesire_goala: text vid, fara eroare / termen / garda; LightOn finish_reason = stop; MinerU fara bloc de
+    layout cu text) pe ORICE imagine -> rezultatul ramane ok = False (nicio cale veche nu o ia drept citire valida) si primeste
+    `gol_de_verificat: true`; citirea continua cu benzile urmatoare (rezultat, nu eroare);
+  - compara: o banda `gol_de_verificat` la ORICARE cititor = intotdeauna un rand `banda_goala_de_verificat` in dezacorduri.jsonl
+    (niciodata acord, nici cand ambii dau gol), cu ce a dat celalalt cititor;
+  - masurile pe pixeli (masoara) sunt DOAR informatie in acel rand (`probabil_alba`), fara efect asupra vreunei decizii.
+Contraexemplele din review: text gri 245 si „III” gri 200 erau clasificate albe de euristica -> de aceea ea nu mai decide nimic."""
 import io
 
-VERSIUNE = 'banda-alba-v1'
-PRAG_INTUNECAT = 128      # pixel < 128 = cerneala reala (text, cifra, pata neagra): unul singur ajunge ca banda sa NU fie alba
-PRAG_STD = 6.0            # deviatia standard a nivelului de gri (0-255) trebuie sa fie strict sub
+VERSIUNE = 'banda-alba-v2-informativ'
+PRAG_INTUNECAT = 128      # pixel < 128 = cerneala reala (text, cifra, pata neagra)
+PRAG_STD = 6.0            # deviatia standard a nivelului de gri (0-255)
 PRAG_CERNEALA = 245       # pixel < 245 = urma de cerneala, oricat de palida (fundalul scanat sta la 250-255)
 LINIE_GROSIME = 5         # segment subtire: latura mica a chenarului <= 5 px
 LINIE_LUNGIME = 12        # ... latura mare >= 12 px
 LINIE_RAPORT = 4          # ... si >= 4 x latura mica
 PRAF_COMPONENTA = 4       # o pata ne-liniara de cel mult 4 px = praf
 PRAF_TOTAL = 20           # praful adunat: cel mult 20 px
-MAX_PIXELI = 16_000_000   # benzile au ~1 Mpx; peste = nu masuram (fail-closed)
+MAX_PIXELI = 16_000_000   # benzile au ~1 Mpx; peste = nu masuram
 
 
 def _linie(latime, inaltime):
@@ -34,8 +32,7 @@ def _linie(latime, inaltime):
 
 
 def _componente(im):
-    """Componentele conexe (8 vecini) ale pixelilor < PRAG_CERNEALA: (pixeli, latime, inaltime). Apelat doar dupa (a) si (b),
-    deci pe putini pixeli."""
+    """Componentele conexe (8 vecini) ale pixelilor < PRAG_CERNEALA: (pixeli, latime, inaltime)."""
     w, h = im.size
     masca = im.point(lambda v: 255 if v < PRAG_CERNEALA else 0)
     bb = masca.getbbox()
@@ -60,7 +57,8 @@ def _componente(im):
 
 
 def masoara(image_bytes):
-    """Masurile benzii si verdictul {'alba': bool, 'motiv': ...}. Nu arunca: orice esec de masurare = alba False."""
+    """Masurile benzii {'alba': bool, 'motiv': ...} - INFORMATIE pentru omul care verifica banda, nu decizie.
+    Nu arunca: orice esec de masurare = alba False."""
     m = {'versiune': VERSIUNE, 'alba': False}
     try:
         from PIL import Image, ImageStat
@@ -68,7 +66,7 @@ def masoara(image_bytes):
         if im.size[0] < 1 or im.size[1] < 1 or im.size[0] * im.size[1] > MAX_PIXELI:
             m['motiv'] = 'dimensiune'; return m
         im = im.convert('L')
-    except Exception as exc:  # imagine nedecodabila / PIL lipsa: nu se poate dovedi nimic
+    except Exception as exc:  # imagine nedecodabila / PIL lipsa
         m['motiv'] = 'imagine_nedecodabila:' + type(exc).__name__; return m
     hist = im.histogram(); n = im.size[0] * im.size[1]
     m.update(latime=im.size[0], inaltime=im.size[1], medie=round(sum(i * c for i, c in enumerate(hist)) / n, 3),
@@ -90,13 +88,10 @@ def masoara(image_bytes):
     m.update(alba=True, motiv='alba'); return m
 
 
-def alba(image_bytes):
-    return masoara(image_bytes)['alba'] is True
-
-
 def iesire_goala(reader, raw, res):
     """Cititorul a terminat curat si n-a scris nimic: text vid dupa strip, fara eroare / termen / semnal sau eveniment de garda;
-    LightOn cu finish_reason = stop; MinerU fara niciun bloc de layout cu text. Altfel (ex. max_tokens / length) nu e „nimic”."""
+    LightOn cu finish_reason = stop; MinerU fara niciun bloc de layout cu text. Altfel (ex. max_tokens / length, eroare de
+    transport) nu e „nimic”: ramane esecul de azi (oprire)."""
     if not isinstance(raw, str) or raw.strip(): return False
     if res.get('error') or res.get('signal') or res.get('guard_event'): return False
     if reader == 'lighton': return res.get('finish_reason') == 'stop'
@@ -104,15 +99,25 @@ def iesire_goala(reader, raw, res):
     return False
 
 
-def aplica(reader, raw, res, image_bytes):
-    """Pe loc, pe rezultatul unei citiri: iesire goala curata + banda alba dovedita -> ok True, banda_goala True (si masurile).
-    Iesire goala pe banda NE-alba -> ramane esec (ok False), cu masurile notate ca motiv. Restul rezultatelor: neatinse."""
-    if res.get('ok') is True or not iesire_goala(reader, raw, res): return res
-    m = masoara(image_bytes); res['banda_alba'] = m
-    if m['alba']: res['ok'] = True; res['banda_goala'] = True
-    return res
+def marcheaza(reader, raw, res, image_bytes):
+    """Pe loc, pe rezultatul unei citiri: iesire goala curata (oricare imagine) -> `gol_de_verificat: true` + masurile pe pixeli
+    (informatie). `ok` ramane False: asamblarea, clientul Ofertare si E3 nu o pot lua drept citire valida. Restul: neatinse.
+    Intoarce True daca a marcat."""
+    if res.get('ok') is True or not iesire_goala(reader, raw, res): return False
+    res['gol_de_verificat'] = True; res['banda_alba'] = masoara(image_bytes)
+    return True
 
 
-def e_goala(raw, res):
-    """Pentru compara: banda goala valida = rezultat ok marcat banda_goala SI text efectiv vid (marcaj fara text vid = neconsistent)."""
-    return res.get('ok') is True and res.get('banda_goala') is True and isinstance(raw, str) and not raw.strip()
+def e_gol(raw, res):
+    """Banda `gol_de_verificat` consistenta: marcajul, ok = False si text efectiv vid. Marcaj cu text nevid sau cu ok = True =
+    rezultat neconsistent (compara il trimite la om ca banda_intreaga)."""
+    return (isinstance(res, dict) and res.get('gol_de_verificat') is True and res.get('ok') is False
+            and isinstance(raw, str) and not raw.strip())
+
+
+def probabil_alba(*rezultate):
+    """Informatia pe pixeli din rezultatele cititorilor (aceeasi imagine): True / False, sau None daca nu s-a masurat."""
+    for res in rezultate:
+        m = (res or {}).get('banda_alba')
+        if isinstance(m, dict) and isinstance(m.get('alba'), bool): return m['alba']
+    return None

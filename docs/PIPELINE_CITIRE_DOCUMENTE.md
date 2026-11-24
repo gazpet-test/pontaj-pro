@@ -271,21 +271,24 @@ LightOn-OCR-2 1B și MinerU 2.5 Pro 1.2B în vLLM pe loopback (`protocol.json`: 
 **Garda v5** (`guard.py`): oprește DOAR banda la buclă (bloc de 200 de caractere ×4, linie lungă ×4, celule goale, caractere unice puține),
 după confirmarea vLLM liber; banda devine `banda_intreaga` → om. Scutirea imaginilor base64 MinerU e pe **proveniență înregistrată**
 (#717), nu pe forma textului.
-**Banda goală** (`banda_goala.py`, 25.11.2026): o ieșire GOALĂ curată (text vid, fără gardă / eroare / termen; LightOn cu
-`finish_reason = stop`, MinerU fără niciun bloc de layout cu text) pe o bandă ALBĂ dovedită din imagine e rezultat valid
-(`ok: true`, `banda_goala: true`, text gol, măsurile în `banda_alba`) și citirea continuă; pe o bandă ne-albă rămâne eșec (oprire, ca
-înainte). Albă = (a) niciun pixel sub 128, (b) deviația < 6, (c) sub 245 de gri doar segmente subțiri și drepte (linii de tabel:
-grosime ≤ 5 px, lungime ≥ 12 px și ≥ 4 × grosimea) sau praf (pete ≤ 4 px, ≤ 20 px în total). Pragul „< 0,1 % pixeli sub 128”
-din cerere nu e sigur: o cifră de pagină are 26 de pixeli (0,003 %), iar o bandă cu text foarte palid are deviația 1,7. Pe cele
-2.344 de benzi Lot 2: albe exact cele 3 benzi goale reale (aceeași imagine), zero benzi cu text; fără (a), (b) + (c) resping tot
-textul. La reluare, banda goală se refolosește doar dacă imaginea e dovedită albă și după regula curentă.
+**Banda goală de verificat** (`banda_goala.py`, 25.11.2026, r2 după Jakarinos #1196 NO-GO): NICIO bandă nu se acceptă automat ca
+„albă” (regula casei: nimic nu se pierde fără semnal, ambiguu = om). Doar pe calea laboratorului / cozii (`run_reader(...,
+gol_de_verificat=True)`: `python -m ocr_local citeste` și `coada lucreaza`): o ieșire GOALĂ curată (text vid, fără gardă / eroare /
+termen; LightOn cu `finish_reason = stop`, MinerU fără niciun bloc de layout cu text), pe ORICE imagine, nu mai oprește documentul:
+rezultatul rămâne `ok: false` (nicio cale veche nu-l ia drept citire validă), marcat `gol_de_verificat: true`, banda intră în
+`benzi_goale` din starea citirii și citirea continuă. Măsurile pe pixeli (`banda_alba`) sunt DOAR informație: textul gri 245 și „III”
+gri 200 le păcălesc (contraexemplele din review). Fără parametru (E3 / avizele, clientul Ofertare) ieșirea goală rămâne eșec
+(`stopped_no_retry`), ca înainte. La reluare, banda goală se refolosește doar pe calea cu parametru și doar dacă e consistentă; o ieșire goală
+curată scrisă de codul vechi (documentele oprite înainte) se marchează atunci, fără recitire (`gol_marcat_la_reluare`).
 
 ### 2.4 Comparatorul (`compare.py`)
 Literal (varianta A, #718): cuvinte cu ș/ş, ț/ţ unificate DOAR la comparare; cifrele literal (separatorul zecimal nu se normalizează);
 tabele rând cu rând; regula A (celule goale de la coada rândului). Ieșirea: dezacorduri `text`, `rand_tabel`, `rand_lipsa_*`,
 `structura_tabele`, `banda_intreaga`, cu amprentă (`item_sha256`) legată de BD.
-Banda goală la ambii cititori = acord (structura `banda_goala`, zero dezacorduri); goală la unul + orice text la celălalt (chiar și
-doar marcaje) = `banda_intreaga` cu citirile brute → om; marcaj `banda_goala` cu text nevid = neconsistent → `banda_intreaga`.
+Bandă `gol_de_verificat` la ORICARE cititor = întotdeauna UN rând `banda_goala_de_verificat` (niciodată acord, nici când ambii dau gol):
+`band` / `page` / `image`, `gol_la`, `celalalt` (cititorul, `text` / `incomplet`, textul brut), citirile brute, `probabil_alba`
+(informație din pixeli, fără efect), `e_cantitate = true`. Marcaj neconsistent (text nevid sau `ok: true`) = citire incompletă →
+`banda_intreaga`. Tipul nou NU e în CHECK-ul din BD: rămâne pe calea laboratorului / cozii (clientul Ofertare nu-l produce).
 **Proveniența marcajelor (#737)**: marcajele scrise de pipeline (⟦rowspan⟧, cadrul ⟦img⟧ + `src`, ⟦tabel_neparsat⟧, ⟦…_invalid⟧, cadrul
 ⟦barat⟧, ^{ }/_{ }) trec prin `_m()`; în modul normal nimic nu se schimbă (segmente, itemi, BD); `segmente_provenienta` dă măștile, cu
 paritate verificată (fail-closed).
@@ -321,8 +324,10 @@ paritate verificată (fail-closed).
 ### 2.7 Reconcilierea (`reconcile.py`)
 Baza = LightOn; deciziile validate strict (schemă, model și versiune admise); dezacord fără decizie validă = needs_human; o pagină cu
 needs_human nu are text propus. Semnalele (`clasificare_incerta`, cusături) ajung în `garda.semnale`.
-O bandă albă dovedită cu textul final vid se sare la cusătură (`banda_goala_sarita`), iar banda cu text de după ea se lipește întreagă
-(`cusatura_dupa_banda_goala`): banda albă acoperă și rândurile de suprapunere. Un text vid fără dovada imaginii rămâne cusătură nesigură.
+`banda_goala_de_verificat` se decide pe toată banda, ca `banda_intreaga` (fără decizie = needs_human). Cu decizia omului și textul
+final vid, banda se sare la cusătură (`banda_goala_sarita`), iar banda cu text de după ea se lipește întreagă
+(`cusatura_dupa_banda_goala`). Un text vid fără ieșire goală marcată rămâne cusătură nesigură. Asamblarea: bandă fără citire validă
+și cu ieșire goală = marcajul „BANDĂ GOALĂ DE VERIFICAT” în text (nu se sare), numărată în `benzi_goale_de_verificat`.
 
 **Textul pe document (`asamblare.py`, `python -m ocr_local text-conv <rulare> <doc...>`, #906).** Scrie `<rulare>/text_conv/<doc>.txt`
 + `manifest.json` (sha256, benzi necitite, benzi luate din MinerU, cusături nesigure). Reguli: o bandă intră DOAR din citirea ei validă
@@ -360,7 +365,7 @@ lipite se despart doar cu context de deviz: nr. cu zerouri sau o celulă UM / �
 | Situație | Efect | Revenire |
 |---|---|---|
 | Buclă la un cititor | banda oprită (`banda_intreaga`) | om / cititor_3 |
-| Ieșire goală pe o bandă | albă dovedită → `banda_goala`, citirea continuă; ne-albă → `stopped_no_retry` ca înainte (măsurile în `banda_alba.motiv`) | se verifică imaginea benzii; regula în `banda_goala.py` |
+| Ieșire goală pe o bandă | laborator / coadă: `gol_de_verificat`, citirea continuă, rând `banda_goala_de_verificat` → om, cererea `gata` cu dezacorduri > 0 (`goale_de_verificat` în `stare`); E3 / Ofertare: `stopped_no_retry` ca înainte | omul verifică imaginea benzii (`probabil_alba` doar indiciu) |
 | Orientare greșită | citire greșită pe pagină | se confirmă pe imaginea ROTITĂ, nu pe miniatură |
 | Prag §8 depășit | rularea `oprita` | `fn_ofertare_ocr_reia` (max 3), cu „da” |
 | Plafon atins | rezervarea refuzată | plafon nou doar cu „da” |
@@ -443,3 +448,4 @@ cu textul (layout pe 2 coloane) sunt ambigue — marcate manual în `banca\v2\ex
 | 24.11.2026 | (acest PR, `ocr-local/coada-citire`) | Coada de citire (decizia Răzvan, varianta A): sesiunile cer (`coada adauga / stare / anuleaza`, un JSON per cerere, scriere atomică, fără duplicate, căi doar sub paw-data, fără UNC / ADS / reparse), procesul unic `coada lucreaza` (instanță unică) citește lotul cu LightOn, apoi MinerU, apoi `compara` + textul; lacătul `ocr_coada` doar cât un model e pornit, eliberat după memoria confirmată (`Coordinator.descarca`); cedează la `gpu.cerere` și reia fără benzi repetate; curățenie la pornire după cădere; pauze cu plafon. `GpuLock(detinator=...)` și `run_reader(cedare=...)` cu implicitele vechi. Task Scheduler doar ca XML în `docs/ocrlab/` (instalarea o face chat-ul) |
 | 24.11.2026 | #1190 r2 | După Jakarinos r1 (2 × P1 + P2): instanța unică și obligația memoriei sunt ale plăcii, lângă `gpu.lock` (`ocr_coada.instanta.lock`, `ocr_coada.modele.json`), nu ale `--root`; lacătul preluat de la o instanță căzută (sau ilizibil) verifică memoria și fără fișierul obligației. Destinațiile scrierilor (tot arborele planului, rădăcina cozii, fișierele de lângă `gpu.lock`, inclusiv temporarele `.tmp` / `.pending`) fără reparse și fără legături fizice, la adăugare și înaintea fiecărei citiri / comparări. O cerere ilizibilă / cu structură invalidă se izolează (`cereri\invalide\`, cererea = `eroare` cu motiv), restul cozii continuă |
 | 25.11.2026 | (acest PR, `ocr-local/banda-goala`) | Banda goală (`banda_goala.py`): ieșirea goală curată pe o bandă albă dovedită din imagine e rezultat valid (`banda_goala: true`), nu mai oprește documentul (coada Lot 2: 3 documente oprite pe aceeași margine albă). Aceeași regulă la LightOn și MinerU (`blocuri_cu_text`); `compara`: goale la ambii = acord, goală la unul = `banda_intreaga` → om; reconcilierea și asamblarea sar doar benzile albe dovedite; garda către BD poartă `banda_goala`. Fără schimbări în BD sau edge |
+| 25.11.2026 | #1196 r2 | După Jakarinos r1 (2 × P1: textul gri 245 și „III” gri 200 trec de euristica pe pixeli → două ieșiri goale deveneau acord): schimbare de abordare, nicio bandă nu se mai acceptă automat ca albă. Ieșirea goală curată, pe orice imagine, = `gol_de_verificat` (ok rămâne false), citirea continuă; `compara` scoate mereu rândul `banda_goala_de_verificat` (cu `celalalt` și `probabil_alba` doar informativ); coada ajunge `gata` cu dezacorduri > 0 și `goale_de_verificat`; asamblarea pune marcajul „BANDĂ GOALĂ DE VERIFICAT”. Doar pe calea laboratorului / cozii (`gol_de_verificat=True`); E3 și clientul Ofertare identice cu main (probă pe ambele versiuni), `client.py` readus la main |

@@ -77,7 +77,8 @@ def main(argv=None):
         res = contact_sheet(x.source, x.output, pagini(x.pagini))
     elif x.cmd == 'citeste':
         from .read import run_reader
-        res = run_reader(x.plan_dir, x.cititor, run_id=x.rulare or uuid.uuid4().hex)
+        # laboratorul: o ieșire goală nu oprește documentul, banda ajunge la om prin compara (banda_goala_de_verificat)
+        res = run_reader(x.plan_dir, x.cititor, run_id=x.rulare or uuid.uuid4().hex, gol_de_verificat=True)
     elif x.cmd == 'compara':
         from .compare import compare
         res = {k2: v for k2, v in compare(x.plan_dir)[0].items() if k2 != 'per_band'}
