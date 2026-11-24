@@ -15,6 +15,7 @@ import { supabase } from './lib/supabase.js'
 import { dataAziBucuresti, eroareTotalEchipament, eroareCantitatePredare, eroareDataPredare } from './magazieEipLogica.js'
 import { aplicaIntrare, cheieIntentie, citesteEchipamente, eroareCantitateIntrare, fmtCantitate, inserareNecunoscuta, intentieRand, judecaRandFactura, MESAJ_CONFLICT, MESAJ_INSERARE_NECUNOSCUTA, MESAJ_REF_ALT, motivFaraIntrare, potrivireExistente, pregatesteIntrare, randuriDupaSalvare, refNou, salveazaFactura, sumaStoc, tintaRand, validareIntrare } from './magazieIntrareStoc.js'
 import ReceptieBucatiModal from './ReceptieBucatiModal.jsx'
+import { MISCARE_META_RETUR, mesajEroareCF } from './achizitiiRetur.js'
 import EipIntrareActiune from './EipIntrareModal.jsx'
 import ProductieTab from './MagazieProductie.jsx'
 import IzoStocTeava from './IzoStocTeava.jsx'
@@ -100,18 +101,15 @@ function MaterialeTab() {
   // Ștergere poziție de stoc (canManage) — pentru teste / poziții greșite.
   // stocuri_miscari nu are FK spre stocuri (legătură pe triplet locatie_tip +
   // locatie_id + material_denumire) → curățăm și istoricul, altfel rămâne orfan.
+  // TKT-2026-0347: istoricul + poziția se șterg ÎNTR-O tranzacție, sub lock-ul cheii de stoc (fn_stoc_sterge_pozitie, doar owner);
+  // pozițiile cu istoric de achiziție / retur sunt refuzate (CF_ISTORIC_PROTEJAT) — se corectează prin ajustare.
   const deleteStoc = useCallback(async (s) => {
     if (!window.confirm(`Ștergi definitiv poziția „${s.material_denumire}" (${fmtNr(s.cantitate)} ${s.um || ''})?\n\nSe șterge și istoricul de mișcări al poziției. Acțiunea e IREVERSIBILĂ.`)) return
     try {
-      let qM = supabase.from('stocuri_miscari').delete()
-        .eq('locatie_tip', s.locatie_tip).eq('material_denumire', s.material_denumire)
-      qM = s.locatie_id == null ? qM.is('locatie_id', null) : qM.eq('locatie_id', s.locatie_id)
-      const { error: eM } = await qM
-      if (eM) throw eM
-      const { error } = await supabase.from('stocuri').delete().eq('id', s.id)
+      const { error } = await supabase.rpc('fn_stoc_sterge_pozitie', { p_stoc_id: s.id })
       if (error) throw error
       await loadAll()
-    } catch (e) { console.error(e); alert('Eroare la ștergere: ' + (e.message || e)) }
+    } catch (e) { console.error(e); alert('Eroare la ștergere: ' + mesajEroareCF(e)) }
   }, [loadAll])
 
   const proiecteMap = useMemo(() => Object.fromEntries(proiecte.map(p => [p.id, p])), [proiecte])
@@ -413,6 +411,8 @@ const MISCARE_META = {
   transfer_in:       { label:'Transfer intrare',  emoji:'📥', color:'#58A6FF' },
   consum_proiect:    { label:'Consum proiect',    emoji:'🔧', color:'#F85149' },
   corectie_initiala: { label:'Sold deschidere',   emoji:'🏁', color:'#8B949E' },
+  // TKT-2026-0347: retur la furnizor (motivul mișcării conține comanda)
+  ...MISCARE_META_RETUR,
 }
 function IstoricDrawer({ poz, onClose }) {
   const [loading, setLoading] = useState(true)
