@@ -15,6 +15,7 @@
 //   (42501 înaintea codurilor de stare): nu are mutant separat aici; la alocare, mutantul de concurență fara_reverificare le scoate pe amândouă (C5).
 //   La proiect, ordinea are probă proprie (CAS cu versiune veche -> mutantul fara_reverificare_proiect).
 import { citeste, CALE_MIG, CALE_REV } from './baza.mjs'
+import { PLATFORMA_AMPRENTA } from './blocuri_t7.mjs'
 
 const UP = 'USING ERRCODE = \'P0001\';'
 // linia reverificării finale a unui RPC (runda r6), după marcajul ei; aplica() verifică apoi că apare EXACT o dată
@@ -301,6 +302,12 @@ export const MUTANTI = [
 CREATE FUNCTION public.proba_et() RETURNS event_trigger LANGUAGE plpgsql AS $et$ BEGIN PERFORM nextval('public.proba_platforma_seq'); END $et$;
 CREATE EVENT TRIGGER proba_et ON ddl_command_end EXECUTE FUNCTION public.proba_et();`,
     post: { cod: 'L15_LOCK_NEDECLARAT', rel: 'public.proba_platforma_seq' }, bloc: '-', asteptat: null, drum: 'clasa E e goală (P-E nefurnizat): orice relație atinsă de un event trigger e nedeclarată' },
+  // ── runda 7: clasa A (relațiile citite de amprenta globală, instantaneul din $pre$); variantele largi ale clasei: t7_lock_amprenta_platforma ──
+  { nume: 'fara_clasa_a', inlocuiri: [["        WHEN lk.o = ANY (v_a) AND lk.mode = 'AccessShareLock' THEN 'A'\n", '']], pregatire: PLATFORMA_AMPRENTA, cale: 'runner',
+    post: { cod: 'L15_LOCK_NEDECLARAT', rel: 'proba_vault.secrets AccessShareLock' }, bloc: '-', asteptat: null,
+    drum: 'cazul clonei: vederile existente sunt deparsate de pasul „înainte” în aceeași tranzacție, deci tabelele lor rămân blocate până la (h)' },
+  { nume: 'instantaneu_a_lipsa', inlocuiri: [["  PERFORM set_config('gazpet.dcc_lock_inainte', txid_current()::text || ':' || coalesce((", "  PERFORM set_config('gazpet.dcc_lock_inainte_x', txid_current()::text || ':' || coalesce(("]],
+    post: { cod: 'L15_LOCK_INSTANTANEU_LIPSA' }, bloc: '-', asteptat: null, drum: 'fără lista din $pre$, (h) refuză în loc să considere clasa A goală sau s-o recalculeze' },
 ]
 
 export const SECTIUNE_7 = '\n-- ─── 7. '

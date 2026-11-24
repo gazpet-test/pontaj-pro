@@ -1,6 +1,6 @@
 // Blocurile Task 7 (secțiunea 7: $post$, postcondiția de lock-uri, accesul complet). t7_lock_runner_normal / _istoric_prod aplică migrarea
 // prin FIȘIERELE REALE ale runnerului, pe o bază nouă (planul, „Lock-urile migrării”, ordinea 1): trec ÎNAINTEA oricărui mutant de lock-uri.
-import { U, ca, sonda, bazaGoala, citeste, CALE_MIG } from './baza.mjs'
+import { U, ca, sonda, bazaGoala, citeste, gen, CALE_MIG } from './baza.mjs'
 import { CHECKURI, UNICE, TABELE, TABELE_CITITE } from './inventar.mjs'
 import { genereaza, prinRunner, tintaPglite } from './runner.mjs'
 import { K, KN, rpc, trece, big, configurare, initSerie, aloca, alocaManual, revizieNoua, filaNoua, anexaNoua, anuleaza, creeazaContract, creeazaProiect,
@@ -24,6 +24,71 @@ export function inventarDinMigrare(mig) {
   const u = [...(uq || '').matchAll(/\('(dcc_[a-z_]+)', '(dcc_[a-z_]+)'\)/g)].map(m => `${m[1]}/${m[2]}`).sort()
   return { c, u }
 }
+
+// ── runda 7 (proba pe clonă, 24.11.2026): relațiile EXISTENTE citite de pasul „înainte” al amprentei globale. Deparsarea interogărilor stocate
+// (pg_get_viewdef pe vederi / vederi materializate, pg_get_ruledef, pg_get_function_sqlbody pe corpurile BEGIN ATOMIC) ia AccessShareLock pe
+// fiecare relație din ele, până la COMMIT; pg_get_expr (valori implicite, limite de partiție, politici) NU ia lock-uri pe PG 17. Pe clonă: 214 relații
+// (tabelele și vederile citite de vederile platformei, plus vault.secrets). Aici: câte una din fiecare cauză + martorii care NU sunt citiți.
+export const PLATFORMA_AMPRENTA = `CREATE TABLE public.proba_baza_vedere (id int PRIMARY KEY);
+CREATE VIEW public.v_proba AS SELECT id FROM public.proba_baza_vedere;
+CREATE VIEW public.v_peste_vedere AS SELECT id FROM public.v_proba;
+CREATE SCHEMA proba_vault; CREATE TABLE proba_vault.secrets (id int, s text); CREATE VIEW proba_vault.decrypted AS SELECT id FROM proba_vault.secrets;
+CREATE TABLE public.proba_mv_baza (id int); CREATE MATERIALIZED VIEW public.proba_mv AS SELECT id FROM public.proba_mv_baza;
+CREATE TABLE public.proba_regula (id int); CREATE TABLE public.proba_regula_tinta (id int);
+CREATE RULE proba_r AS ON INSERT TO public.proba_regula DO ALSO INSERT INTO public.proba_regula_tinta VALUES (NEW.id);
+CREATE TABLE public.proba_sqlbody (id int); CREATE FUNCTION public.proba_fn_atomic() RETURNS bigint LANGUAGE sql BEGIN ATOMIC SELECT count(*) FROM public.proba_sqlbody; END;
+CREATE TABLE public.proba_cu_default (id int PRIMARY KEY, t text DEFAULT 'x');
+CREATE TABLE public.proba_part (id int, k int) PARTITION BY RANGE (k); CREATE TABLE public.proba_part_1 PARTITION OF public.proba_part FOR VALUES FROM (0) TO (10);
+CREATE TABLE public.proba_politica (id int); ALTER TABLE public.proba_politica ENABLE ROW LEVEL SECURITY; CREATE POLICY p ON public.proba_politica USING (id > 0);
+CREATE TABLE public.proba_fara_nimic (id int);`
+// EXACT relațiile pe care pasul „înainte” le lasă blocate (verificat în bloc, separat de migrare); restul relațiilor de mai sus sunt martori
+export const CITITE_AMPRENTA = ['proba_vault.secrets', 'public.proba_baza_vedere', 'public.proba_mv_baza', 'public.proba_regula', 'public.proba_regula_tinta',
+  'public.proba_sqlbody', 'public.v_proba']
+const INAINTE_H = '  -- (h) POSTCONDIȚIA DE LOCK-URI (ultima)'
+const LINIE_A = "        WHEN lk.o = ANY (v_a) AND lk.mode = 'AccessShareLock' THEN 'A'\n"
+const V_A = "  v_a := coalesce(string_to_array(nullif(split_part(v_ina, ':', 2), ''), ',')::oid[], '{}'::oid[]);\n"
+function oData(text, lista) {
+  let t = text
+  for (const [din, in_] of lista) {
+    const n = t.split(din).length - 1
+    if (n !== 1) throw new Error(`MUTANT_INAPLICABIL: textul apare de ${n} ori: ${din.slice(0, 100)}`)
+    t = t.split(din).join(in_)
+  }
+  return t
+}
+const injecteaza = (text, sql) => oData(text, [[INAINTE_H, sql + '\n' + INAINTE_H]])
+// scenariile pe baza cu PLATFORMA_AMPRENTA: [nume, transformarea textului, rezultatul așteptat pe migrarea corectă]
+export const SCENARII_A = [
+  ['normal', t => t, { trece: true }],   // pe migrarea corectă rulează cu COPIA runnerului (aplicare completă); pe mutanți, cu textul mutat
+  ['citire_tabela_necitita_de_amprenta', t => injecteaza(t, '  PERFORM 1 FROM public.proba_fara_nimic LIMIT 1;'), { rel: 'public.proba_fara_nimic AccessShareLock' }],
+  ['alt_mod_pe_relatie_a', t => injecteaza(t, '  LOCK TABLE public.proba_regula IN ROW SHARE MODE;'), { rel: 'public.proba_regula RowShareLock' }],
+  ['indexul_unei_relatii_a', t => injecteaza(t, '  PERFORM 1 FROM public.proba_baza_vedere LIMIT 1;'), { rel: 'public.proba_baza_vedere_pkey AccessShareLock' }],
+]
+// mutanții clasei A: fiecare TREBUIE să schimbe rezultatul scenariului lui (altfel scenariul nu discriminează forma corectă)
+export const MUTANTI_A = [
+  ['fara_clasa_a', [[LINIE_A, '']], 'normal'],
+  ['clasa_a_fara_instantaneu', [[V_A, "  SELECT coalesce(array_agg(c.oid), '{}'::oid[]) INTO v_a FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace\n" +
+    "   WHERE c.relkind IN ('r', 'p', 'v') AND c.relpersistence <> 't' AND n.nspname NOT IN ('pg_catalog', 'information_schema');\n"]], 'citire_tabela_necitita_de_amprenta'],
+  ['clasa_a_orice_mod', [[LINIE_A, "        WHEN lk.o = ANY (v_a) THEN 'A'\n"]], 'alt_mod_pe_relatie_a'],
+  ['clasa_a_cu_dep', [[V_A, V_A + "  v_a := v_a || coalesce((SELECT array_agg(i.indexrelid) FROM pg_catalog.pg_index i WHERE i.indrelid = ANY (v_a)), '{}'::oid[]);\n"]],
+    'indexul_unei_relatii_a'],
+]
+// text = null: COPIA runnerului (aplicare completă, cu 3_inreg); altfel textul dat. „Trece” = $post$ a trecut (NOTICE L15_LOCK_SET); un text
+// schimbat se oprește apoi, corect, la 3_inreg (statements ≠ artefactul aprobat), după postcondiții
+async function scenariu(text) {
+  const db = await bazaGoala()
+  await db.exec(PLATFORMA_AMPRENTA)
+  const t = await tintaPglite(db)
+  const fis = genereaza(CALE_MIG, '20270108120000', t.sistem, { tintaDb: t.tintaDb })
+  try {
+    const r = await prinRunner(db, fis, { copie: text })
+    return { trece: true, complet: true, set: setLock(r.jurnal) }
+  } catch (e) {
+    const set = setLock(e.jurnal || [])
+    return set ? { trece: true, complet: false, set, msg: e.message } : { trece: false, msg: e.message }
+  } finally { await db.close() }
+}
+const potrivit = (r, a) => (a.trece ? r.trece : !r.trece && r.msg.startsWith('L15_LOCK_NEDECLARAT: ') && r.msg.includes(a.rel))
 
 async function aplicaRunner(A, { istoricProd = false } = {}) {
   const db = await bazaGoala()
@@ -63,6 +128,7 @@ export const BLOCURI_T7 = [
       const r1 = camp(set, 'R1') || ''
       A.ok(r1.includes('supabase_migrations.schema_migrations:AccessShareLock') && r1.includes('supabase_migrations.schema_migrations_pkey:AccessShareLock'),
         `R1 conține tabela ȘI cheia primară a istoricului: ${r1}`)
+      A.ok(camp(set, 'A') === '0', `clasa A pe schelet (fără vederi pe tabelele existente): ${camp(set, 'A')}`)
       A.ok(Number(camp(set, 'R2')) >= 2 && /public\.executie_proiecte:ShareRowExclusiveLock/.test(camp(set, 'M2') || '') && camp(set, 'E') === '0', `clasele: ${set}`)
       const inreg = (await r.db.query(`SELECT name FROM supabase_migrations.schema_migrations`)).rows.map(x => x.name)
       egal(A, inreg, ['20270108a_executie_dcc_registru'], 'migrarea înregistrată de 3_inreg')
@@ -80,6 +146,39 @@ export const BLOCURI_T7 = [
       egal(A, r1, ['supabase_migrations.schema_migrations:AccessShareLock', 'supabase_migrations.schema_migrations_idempotency_key_key:AccessShareLock',
         'supabase_migrations.schema_migrations_pkey:AccessShareLock'], 'R1 pe forma de producție (tabela + cei doi indecși, din pg_index)')
       await r.db.close()
+    },
+  },
+  {
+    // runda 7: cazul clonei reprodus local (relații existente citite de amprenta globală în aceeași tranzacție) + clasa A strânsă (scenarii + mutanți)
+    nume: 't7_lock_amprenta_platforma', task: 7, cere: ['7'], fixtura: false,
+    async fn(db0, A) {
+      // (1) cauza: pasul „înainte” SINGUR (fără migrare) lasă AccessShareLock EXACT pe relațiile citite de interogările stocate
+      const db = await bazaGoala()
+      await db.exec(PLATFORMA_AMPRENTA)
+      await db.exec('BEGIN')
+      await db.exec(gen('inainte', '0123456789abcdef', '-'))
+      const lk = (await db.query(`SELECT n.nspname || '.' || c.relname AS r, l.mode FROM pg_catalog.pg_locks l JOIN pg_catalog.pg_class c ON c.oid = l.relation
+        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE l.locktype = 'relation' AND c.relpersistence <> 't'
+        AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast') ORDER BY 1, 2`)).rows
+      await db.exec('ROLLBACK')
+      await db.close()
+      egal(A, lk.map(x => `${x.r} ${x.mode}`), CITITE_AMPRENTA.map(x => `${x} AccessShareLock`).sort(), 'pasul „înainte” singur: lock-urile pe relațiile existente')
+      console.log(`        pasul „înainte” singur: ${lk.map(x => `${x.r} ${x.mode}`).join('; ')}`)
+      // (2) scenariile pe migrarea corectă, prin fișierele reale ale runnerului
+      const MIG = citeste(CALE_MIG)
+      for (const [nume, f, ast] of SCENARII_A) {
+        const r = await scenariu(nume === 'normal' ? null : f(MIG))
+        A.ok(potrivit(r, ast) && (nume !== 'normal' || r.complet), `scenariul ${nume}: ${r.trece ? (r.complet ? 'aplicat complet' : 'postcondiții trecute, oprit la ' + r.msg.slice(0, 80)) + ', L15_LOCK_SET ' + r.set : r.msg.slice(0, 300)} (aștepta ${ast.trece ? 'aplicare' : 'L15_LOCK_NEDECLARAT cu ' + ast.rel})`)
+        if (nume === 'normal' && r.trece) A.ok(camp(r.set, 'A') === String(CITITE_AMPRENTA.length), `clasa A = ${camp(r.set, 'A')} relații (aștepta ${CITITE_AMPRENTA.length}): ${r.set}`)
+        console.log(`        scenariul ${nume}: ${r.trece ? (r.complet ? 'aplicat complet' : 'postcondiții trecute') + '; L15_LOCK_SET ' + r.set : r.msg.slice(0, 220)}`)
+      }
+      // (3) mutanții clasei A schimbă rezultatul scenariului lor
+      for (const [nume, inloc, sc] of MUTANTI_A) {
+        const [, f, ast] = SCENARII_A.find(s => s[0] === sc)
+        const r = await scenariu(f(oData(MIG, inloc)))
+        A.ok(!potrivit(r, ast), `mutantul ${nume} prins de scenariul ${sc}: ${r.trece ? 'aplicat' : r.msg.slice(0, 200)}`)
+        console.log(`        mutantul ${nume} (scenariul ${sc}): ${r.trece ? 'postcondiții trecute' : r.msg.slice(0, 160)}${potrivit(r, ast) ? ' — NEPRINS' : ' — prins'}`)
+      }
     },
   },
   {

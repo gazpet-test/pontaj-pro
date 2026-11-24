@@ -27,7 +27,8 @@
 --   seriei FĂRĂ interval (fn_dcc_lock_cheie_serie) -> 5 dcc_serii FOR UPDATE (alocarea) -> 6 dcc_documente FOR UPDATE ORDER BY id -> 7 scrierile
 --   registrului -> 8 snapshot / mesaj / legături -> 9 rezultatul intenției. Cheile străine iau FOR KEY SHARE (compatibile).
 -- Lock-urile la aplicare: punctul unic $lock$ (NOWAIT, bugetul 1 s) = executie_proiecte în SHARE ROW EXCLUSIVE (cheia străină a dcc_proiecte);
---   setul COMPLET e verificat în $post$ pe pg_locks (clasele M1 / M2 / R1 / R2 / C / E din plan). Funcțiile care citesc tabele existente
+--   setul COMPLET e verificat în $post$ pe pg_locks (clasele M1 / M2 / R1 / R2 / C / A / E din plan; A = relațiile citite de amprenta globală,
+--   din instantaneul luat în $pre$, doar AccessShareLock — runda 7). Funcțiile care citesc tabele existente
 --   (profiles, user_module_access, executie_proiecte) sunt plpgsql: corpul nu se analizează la creare, deci nu iau lock-uri pe ele.
 -- Revenire: supabase/revenire/20270108a_executie_dcc_registru_ROLLBACK.sql (prin runner, plafonul 2000, fără amprentă globală; refuză cu orice rând
 --   în tabelele dcc_*). Probe: scripts/pglite/test_executie_dcc_registru_local.mjs (PGlite), supabase/tests/20270108a_executie_dcc_registru_dryrun.sql
@@ -60,6 +61,18 @@ BEGIN
                     AND (SELECT count(*) FROM pg_catalog.pg_locks l WHERE l.relation = c.oid AND l.pid = pg_backend_pid() AND l.granted) > 0) THEN
     RAISE EXCEPTION '20270108a: AMPRENTA_GLOBALA_LIPSA: livrarea cere amprenta globala L15 v2 a runnerului (--amprenta-globala + --diferente-globale); nimic schimbat';
   END IF;
+  -- INSTANTANEU-A-START (runda 7, proba pe clonă din 24.11.2026): pasul „înainte” al amprentei globale (rulat mai sus, în ACEASTĂ tranzacție)
+  -- deparsează interogările stocate — vederile și vederile materializate (pg_get_viewdef), regulile (pg_get_ruledef), corpurile BEGIN ATOMIC
+  -- (pg_get_function_sqlbody) —, iar deparsarea ia AccessShareLock pe fiecare relație citită de acele interogări, ținut până la COMMIT
+  -- (pg_get_expr NU ia lock-uri pe PG 17). Lista lor se ia AICI, înaintea oricărui DDL al migrării, și e baza clasei A din (h): DOAR AccessShareLock,
+  -- DOAR relații ordinare / partiționate / vederi, nu temporare, din afara pg_catalog / information_schema (schemele citite de amprentă).
+  -- Ce ia corpul migrării DUPĂ acest punct nu intră în listă și rămâne pe regulile M1 / M2 / R1 / R2 / C / E.
+  PERFORM set_config('gazpet.dcc_lock_inainte', txid_current()::text || ':' || coalesce((
+    SELECT string_agg(DISTINCT l.relation::text, ',')
+      FROM pg_catalog.pg_locks l JOIN pg_catalog.pg_class c ON c.oid = l.relation JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+     WHERE l.locktype = 'relation' AND l.pid = pg_backend_pid() AND l.granted AND l.mode = 'AccessShareLock'
+       AND c.relkind IN ('r', 'p', 'v') AND c.relpersistence <> 't' AND n.nspname NOT IN ('pg_catalog', 'information_schema')), ''), true);
+  -- INSTANTANEU-A-END
   PERFORM set_config('lock_timeout', '100ms', true);
   PERFORM set_config('search_path', 'public, pg_temp', true);
   -- reaplicare = refuz (orice obiect cu numele migrării)
@@ -2353,6 +2366,7 @@ DECLARE v_rau text; v_n integer; v_rel oid[]; v_cls text; v_baza oid[]; v_dep oi
   v_cit text[] := ARRAY['dcc_ghiduri', 'dcc_ghid_valori', 'dcc_ghid_intervale', 'dcc_contracte', 'dcc_proiecte', 'dcc_documente', 'dcc_file', 'dcc_anexe',
     'dcc_revizii', 'dcc_istoric_aparitii', 'dcc_snapshoturi', 'dcc_snapshot_revizii', 'dcc_mesaje', 'dcc_legaturi', 'v_dcc_registru'];
   v_b_m1 oid[]; v_b_m2 oid[]; v_b_r1 oid[]; v_b_r2 oid[]; v_b_c oid[]; v_b_e oid[]; v_m1 oid[]; v_m2 oid[]; v_r1 oid[]; v_r2 oid[]; v_c oid[]; v_e oid[];
+  v_a oid[]; v_ina text;
   -- CLASA-E-START (precondiția P-E: relațiile non-catalog atinse de declanșatoarele de evenimente ACTIVE ale platformei, „schemă.relație:Mod”;
   -- goală până la citirea P-E pe clonă și pe producție — amendament revizuit dacă lista nu e goală)
   v_e_moduri text[] := ARRAY[]::text[];
@@ -2564,6 +2578,8 @@ BEGIN
   --   R1 = istoricul runnerului (supabase_migrations.schema_migrations), DOAR AccessShareLock;
   --   R2 = tabelele temporare ag_ses_<T> / ag_ina_<T> ale amprentei globale (același T, create în tranzacția curentă), orice mod;
   --   C  = relațiile schemei pg_catalog (definită pe SCHEMĂ, nu pe oid: vederile information_schema au și ele oid-uri mici), orice mod;
+  --   A  = relațiile citite de pasul „înainte” al amprentei globale (instantaneul din $pre$, INSTANTANEU-A), EXACT acele oid-uri, fără dep()
+  --        (deparsarea nu deschide indecșii), DOAR AccessShareLock; M1 / M2 / R1 / R2 / C se verifică ÎNAINTEA ei, deci își păstrează regulile;
   --   E  = relațiile platformei din precondiția P-E (CLASA-E), cu modurile listate.
   v_b_m1 := v_rel || ARRAY['public.v_dcc_registru'::regclass::oid]
             || coalesce((SELECT array_agg(d.objid) FROM pg_catalog.pg_depend d JOIN pg_catalog.pg_class s ON s.oid = d.objid
@@ -2600,6 +2616,11 @@ BEGIN
                     AND l.mode = 'ShareRowExclusiveLock') THEN
     RAISE EXCEPTION 'L15_LOCK_LIPSA: public.executie_proiecte ShareRowExclusiveLock (punctul unic de blocare) nu e tinut';
   END IF;
+  v_ina := current_setting('gazpet.dcc_lock_inainte', true);
+  IF v_ina IS NULL OR split_part(v_ina, ':', 1) IS DISTINCT FROM txid_current()::text THEN
+    RAISE EXCEPTION 'L15_LOCK_INSTANTANEU_LIPSA: lista lock-urilor amprentei globale (din $pre$) lipseste sau e din alta tranzactie';
+  END IF;
+  v_a := coalesce(string_to_array(nullif(split_part(v_ina, ':', 2), ''), ',')::oid[], '{}'::oid[]);
   WITH lk AS (
     SELECT l.relation AS o, l.mode,
            coalesce((SELECT n.nspname || '.' || c.relname FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE c.oid = l.relation),
@@ -2617,14 +2638,16 @@ BEGIN
         WHEN lk.o = ANY (v_r1) AND lk.mode = 'AccessShareLock' THEN 'R1'
         WHEN lk.o = ANY (v_r2) THEN 'R2'
         WHEN lk.o = ANY (v_c) THEN 'C'
+        WHEN lk.o = ANY (v_a) AND lk.mode = 'AccessShareLock' THEN 'A'
         WHEN lk.o = ANY (v_e) AND (lk.nume || ':' || lk.mode) = ANY (v_e_moduri) THEN 'E'
       END AS clasa
       FROM lk)
   SELECT string_agg(nume || ' ' || mode, '; ' ORDER BY nume, mode) FILTER (WHERE clasa IS NULL),
-         format('M1=%s M2=%s R1=%s R2=%s C=%s E=%s', count(*) FILTER (WHERE clasa = 'M1'),
+         format('M1=%s M2=%s R1=%s R2=%s C=%s A=%s E=%s', count(*) FILTER (WHERE clasa = 'M1'),
                 coalesce(string_agg(nume || ':' || mode, ',' ORDER BY nume, mode) FILTER (WHERE clasa = 'M2'), '-'),
                 coalesce(string_agg(nume || ':' || mode, ',' ORDER BY nume, mode) FILTER (WHERE clasa = 'R1'), '-'),
-                count(*) FILTER (WHERE clasa = 'R2'), count(*) FILTER (WHERE clasa = 'C'), count(*) FILTER (WHERE clasa = 'E'))
+                count(*) FILTER (WHERE clasa = 'R2'), count(*) FILTER (WHERE clasa = 'C'), count(*) FILTER (WHERE clasa = 'A'),
+                count(*) FILTER (WHERE clasa = 'E'))
     INTO v_rau, v_set FROM cl;
   IF v_rau IS NOT NULL THEN RAISE EXCEPTION 'L15_LOCK_NEDECLARAT: %', v_rau; END IF;
   RAISE NOTICE 'L15_LOCK_SET %', v_set;
