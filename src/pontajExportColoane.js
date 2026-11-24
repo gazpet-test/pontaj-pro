@@ -2,10 +2,11 @@
 // (generatePontajNet). O singură listă de norme numărate pe zile + o singură socoteală a pozițiilor, ca toate
 // coloanele de după norme (ORE NORME, TOTAL ORE LUNĂ, ORE LUCRĂTOARE, „Zile lucr. lună:”) să se mute împreună.
 // TKT-2026-0311: ZILE CO / CM / CFP / O. TKT-2026-0368 (partea A): ZILE BO (boală obișnuită) imediat după ZILE CM.
+// TKT-2026-0368 (partea B): ZILE IP (Învoiri Plătite) imediat după ZILE O; CM și O rămân pentru lunile vechi.
 // Ordinea din listă = ordinea coloanelor din Excel.
 import * as XLSX from 'xlsx-js-style'
 
-export const NORME_TOTAL_EXPORT = ['CO', 'CM', 'BO', 'CFP', 'O']
+export const NORME_TOTAL_EXPORT = ['CO', 'CM', 'BO', 'CFP', 'O', 'IP']
 
 const FIXED = 3 // A = Nume, B = Funcția, C = Program de lucru; zilele încep în D
 
