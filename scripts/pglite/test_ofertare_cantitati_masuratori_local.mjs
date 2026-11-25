@@ -1057,5 +1057,247 @@ if (vrea('t3') && MIG) {
   })
 }
 
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// t4: circuitul auto_planse_* extins la auto_surse_* (inventarul #2–#6, #9), ca authenticated cu / fără drept de decizie
+const vedere = async (db, cont, clarId) => { const r = await ca(db, cont, `SELECT * FROM public.v_ofertare_clarificari_baza WHERE id = $1`, [clarId]); if (r.code) throw new Error('view: ' + r.message); return r.rows[0] }
+const reconfirma = (db, cont, clarId, amprenta, decizie = 'revizuit', nota = 'verificat de om in proba') => scrieCa(db, cont, `SELECT public.ofertare_clarificare_reconfirma($1, $2, $3, $4) x`, [clarId, amprenta, decizie, nota])
+const upd = (db, cont, clarId, set, params = []) => scrieCa(db, cont, `UPDATE public.ofertare_clarificari SET ${set} WHERE id = $1 RETURNING id`, [clarId, ...params])
+const exporta = (db, cont, lic = LIC) => scrieCa(db, cont, `SELECT public.ofertare_clarificari_export($1) x`, [lic])
+const notifica = (db, cont, lic = LIC) => scrieCa(db, cont, `SELECT public.ofertare_clarificari_notifica($1) x`, [lic])
+async function aproba(db, ab, clarId, cont = 'RESP') {
+  const v = await vedere(db, cont, clarId)
+  const r = await reconfirma(db, cont, clarId, v.amprenta_curenta)
+  ast(ab, r.ok && r.rows[0].x.ok === true, 'reconfirmarea: ' + JSON.stringify(r.rows?.[0]?.x || r.message))
+  return v
+}
+if (vrea('t4') && MIG) {
+  console.log('t4. circuitul ciornelor automate pe auto_surse_*: trigger, reconfirmare, excepție, view, export, notificare, stări, lanțul authenticated')
+  await scenariu('t4_trigger_surse + t4_reconfirmare_surse + t4_view_surse + t4_export_surse', async (db, ab) => {
+    const f = await fixturaTichet(db)
+    await evalueaza(db)
+    let c = (await ciorne(db))[0], s = (await semnalCunoscut(db))[0]
+    // INSERT cu cheie auto_surse_x ca authenticated → refuz; UPDATE baza_generare → refuz; UPDATE sursa → păstrată; DELETE → refuz
+    asteptMesaj(await scrieCa(db, 'RESP', `INSERT INTO public.ofertare_clarificari (licitatie_id, nr, intrebare, status, cheie) VALUES ($1, 50, 'x', 'propunere', 'auto_surse_0123456789abcdef')`, [LIC]), /generatorul controlat|doar serverul/, 'INSERT auto_surse_x ca authenticated', ab)
+    asteptMesaj(await upd(db, 'RESP', c.id, `baza_generare = '{}'`), /reconfirmare|doar serverul/, 'UPDATE baza_generare', ab)
+    const su = await upd(db, 'RESP', c.id, `sursa = 'altceva'`)
+    ast(ab, su.ok && (await ciorne(db))[0].sursa === c.sursa, 'UPDATE sursa → păstrată de trigger: ' + (su.message || (await ciorne(db))[0].sursa))
+    asteptMesaj(await scrieCa(db, 'RESP', `DELETE FROM public.ofertare_clarificari WHERE id = $1`, [c.id]), /retrage ciorna/, 'DELETE', ab)
+    asteptMesaj(await scrieCa(db, 'OWNER', `DELETE FROM public.ofertare_clarificari WHERE id = $1`, [c.id]), /retrage ciorna/, 'DELETE ca owner', ab)
+    // view: ciorna auto_surse_* apare cu stare, amprenta_curenta, text, detalii.evaluare = surse_v1; fără acces Ofertare → 0 rânduri
+    let v = await vedere(db, 'OF', c.id)
+    ast(ab, v && v.stare === 'necesita_review' && /^[0-9a-f]{32}$/.test(v.amprenta_curenta) && v.detalii.evaluare === 'surse_v1' && v.mod_ciorna === 'surse' && v.marcaj_planse === false && v.text, 'view: ' + JSON.stringify(v && [v.stare, v.mod_ciorna, v.detalii.evaluare]))
+    const v0 = await ca(db, 'STRAIN', `SELECT count(*)::int n FROM public.v_ofertare_clarificari_baza`)
+    ast(ab, !v0.code && v0.rows[0].n === 0, 'view fără acces Ofertare: 0 rânduri: ' + JSON.stringify(v0))
+    ast(ab, JSON.stringify(Object.keys(v).sort()) === JSON.stringify(['amprenta_curenta', 'detalii', 'id', 'licitatie_id', 'marcaj_planse', 'mod_ciorna', 'mod_curent', 'nr', 'stare', 'status', 'text']), 'coloanele vechi ale view-ului: ' + Object.keys(v).sort().join(','))
+    // de_trimis fără reconfirmare → refuz; fără drept de decizie → refuz
+    asteptMesaj(await upd(db, 'RESP', c.id, `status = 'de_trimis'`), /Clarificare blocată: necesită review/, 'de_trimis fără reconfirmare', ab)
+    // reconfirmare: fără drept de decizie → eroare; cu drept → ok; tokenul = token_curent
+    const rOF = await reconfirma(db, 'OF', c.id, v.amprenta_curenta)
+    ast(ab, rOF.ok && /fără drept de decizie/.test(rOF.rows[0].x.error || ''), 'reconfirmare fără drept de decizie: ' + JSON.stringify(rOF.rows?.[0]?.x))
+    asteptMesaj(await upd(db, 'OF', c.id, `status = 'de_trimis'`), /drept de decizie/, 'de_trimis fără drept de decizie', ab)
+    const rBad = await reconfirma(db, 'RESP', c.id, 'amprenta_gresita')
+    ast(ab, /s-au schimbat/.test(rBad.rows?.[0]?.x?.error || ''), 'reconfirmare cu token greșit refuzată')
+    await aproba(db, ab, c.id)
+    c = (await ciorne(db))[0]
+    const st = await stareBaza(db, c.id, 'tranzitie')
+    ast(ab, st.stare === 'ok' && c.baza_generare.reconfirmare.token === st.token_aprobare && c.baza_generare.reconfirmare.token_curent === st.amprenta_curenta && c.baza_generare.reconfirmare.evaluare_amprenta === s.evaluare_amprenta && c.baza_generare.reconfirmare.surse_sha === s.surse_sha,
+      'reconfirmarea scrie token_aprobare / token_curent / evaluare_amprenta / surse_sha: ' + JSON.stringify([st.stare, Object.keys(c.baza_generare.reconfirmare)]))
+    ast(ab, (await vedere(db, 'OF', c.id)).stare === 'ok', 'view după reconfirmare: ok')
+    // de_trimis ok; export ok
+    const dt = await upd(db, 'RESP', c.id, `status = 'de_trimis'`)
+    ast(ab, dt.ok, 'de_trimis după reconfirmare: ' + (dt.message || 'ok'))
+    let ex = await exporta(db, 'RESP')
+    ast(ab, ex.ok && ex.rows[0].x.length === 1 && ex.rows[0].x[0].id === c.id, 'export: ciorna aprobată inclusă: ' + (ex.message || ex.rows?.[0]?.x?.length))
+    asteptMesaj(await exporta(db, 'OF'), /fără drept de decizie/, 'export fără drept de decizie', ab)
+    // invalidarea LIVE, fără extragere nouă, pe rând: fiecare sursă schimbată → Export blocat: baza s-a schimbat — de reverificat
+    const BLOC = /Export blocat: baza s-a schimbat — de reverificat/
+    const probe = [
+      ['cantitate F3', `UPDATE public.ofertare_cantitati SET cantitate = 6401 WHERE licitatie_id = ${LIC}`, `UPDATE public.ofertare_cantitati SET cantitate = 6400 WHERE licitatie_id = ${LIC}`],
+      ['revizie document', `UPDATE public.ofertare_documente_atribuire SET revizie = 'B' WHERE id = ${f.dAtr}`, `UPDATE public.ofertare_documente_atribuire SET revizie = 'A' WHERE id = ${f.dAtr}`],
+      ['text_extras', `UPDATE public.ofertare_documente_atribuire SET text_extras = text_extras || ' ' WHERE id = ${f.dAtr}`, `UPDATE public.ofertare_documente_atribuire SET text_extras = left(text_extras, -1) WHERE id = ${f.dAtr}`],
+      ['prag', `INSERT INTO public.ofertare_cantitati_setari (licitatie_id, prag) VALUES (${LIC}, 0.1)`, `DELETE FROM public.ofertare_cantitati_setari WHERE licitatie_id = ${LIC}`],
+      ['plafon', `INSERT INTO public.ofertare_cantitati_setari (licitatie_id, plafon_pagini) VALUES (${LIC}, 300)`, `DELETE FROM public.ofertare_cantitati_setari WHERE licitatie_id = ${LIC}`],
+      ['stare_loturi', `UPDATE public.ofertare_licitatii SET stare_loturi = 'are_loturi' WHERE id = ${LIC}`, `UPDATE public.ofertare_licitatii SET stare_loturi = 'fara_loturi' WHERE id = ${LIC}`],
+      ['document adăugat', `INSERT INTO public.ofertare_documente_atribuire (id, licitatie_id, tip, nume_original) VALUES (799999, ${LIC}, 'alta', 'NOU')`, `DELETE FROM public.ofertare_documente_atribuire WHERE id = 799999`],
+      ['document șters (fără extragere)', `INSERT INTO public.ofertare_documente_atribuire (id, licitatie_id, tip, nume_original) VALUES (799998, ${LIC}, 'alta', 'X'); DELETE FROM public.ofertare_documente_atribuire WHERE id = 799998`, null],
+    ]
+    for (const [nume, schimba, revino] of probe) {
+      if (nume.startsWith('document șters')) {
+        // documentul șters: adăugat + șters = fotografia revine la cea veche; ștergerea unui document EXISTENT din fotografie e proba de mai jos
+        await db.exec(schimba)
+        continue
+      }
+      await db.exec(schimba)
+      const vv = await vedere(db, 'RESP', c.id)
+      ast(ab, vv.stare === 'schimbata' && vv.text === 'baza s-a schimbat — de reverificat', `${nume}: view → schimbata: ${JSON.stringify([vv.stare, vv.text])}`)
+      asteptMesaj(await exporta(db, 'RESP'), BLOC, `${nume}: export blocat`, ab)
+      asteptMesaj(await upd(db, 'RESP', c.id, `status = 'trimisa'`), /Clarificare blocată: baza s-a schimbat/, `${nume}: trimisa refuzată`, ab)
+      await db.exec(revino)
+      const vr = await vedere(db, 'RESP', c.id)
+      ast(ab, vr.stare === 'ok', `${nume}: revenit → ok: ${vr.stare}`)
+    }
+    // document existent șters (sursa A fără extragere): măsurătorile dispar → fotografia se schimbă → blocat
+    const dS = await document(db, { tip: 'alta', nume: 'DOC_SURSA2' })
+    const vAd = await vedere(db, 'RESP', c.id)
+    ast(ab, vAd.stare === 'schimbata', 'document adăugat în fotografie → schimbata')
+    await db.query(`DELETE FROM public.ofertare_documente_atribuire WHERE id = $1`, [dS])
+    ast(ab, (await vedere(db, 'RESP', c.id)).stare === 'ok', 'documentul șters la loc → ok')
+    // evaluare în curs → blocat; verdict devenit in_regula → blocat (fara_diferenta); răspuns confirmat → blocat (rezolvata_de_raspuns)
+    const p = await propune(db)
+    let vv = await vedere(db, 'RESP', c.id)
+    ast(ab, vv.stare === 'evaluare_in_curs' && vv.text === 'baza s-a schimbat — de reverificat', 'evaluare în curs → evaluare_in_curs: ' + vv.stare)
+    asteptMesaj(await exporta(db, 'RESP'), BLOC, 'evaluare în curs: export blocat', ab)
+    await publica(db, LIC, p.evaluare_id, p.token)
+    ast(ab, (await vedere(db, 'RESP', c.id)).stare === 'ok', 'publicată fără schimbări → ok (aceeași amprentă)')
+    await db.query(`INSERT INTO public.ofertare_cantitati_setari (licitatie_id, prag) VALUES ($1, 0.5)`, [LIC])
+    await evalueaza(db)
+    c = (await ciorne(db))[0]
+    ast(ab, c.status === 'de_trimis', 'ciorna aprobată (de_trimis) NU e retrasă de sistem la verdict schimbat: ' + c.status)
+    vv = await vedere(db, 'RESP', c.id)
+    ast(ab, vv.stare === 'fara_diferenta' && vv.text === 'baza s-a schimbat — de reverificat', 'verdict in_regula → fara_diferenta: ' + JSON.stringify([vv.stare, vv.text]))
+    asteptMesaj(await exporta(db, 'RESP'), BLOC, 'fara_diferenta: export blocat', ab)
+    await db.query(`DELETE FROM public.ofertare_cantitati_setari WHERE licitatie_id = $1`, [LIC])
+    await evalueaza(db)
+    vv = await vedere(db, 'RESP', c.id)
+    ast(ab, vv.stare === 'ok', 'prag revenit, reevaluat: amprenta aceeași → ok: ' + vv.stare)
+    const dR = await document(db, { tip: 'raspuns_clarificare', nume: 'RASPUNS', text: PAG(1, 'r'), revizie: 'R1' })
+    await evalueaza(db)
+    const sId = (await semnalCunoscut(db))[0].id
+    await scrieCa(db, 'RESP', `SELECT public.fn_ofertare_semnal_raspuns_leaga($1, $2, 3995) x`, [sId, dR])
+    vv = await vedere(db, 'RESP', c.id)
+    ast(ab, vv.stare === 'rezolvata_de_raspuns' && /semnal rezolvat prin răspunsul Autorității/.test(vv.text) && (await ciorne(db))[0].status === 'de_trimis', 'răspuns confirmat → rezolvata_de_raspuns, ciorna aprobată neatinsă: ' + JSON.stringify([vv.stare, vv.text]))
+    asteptMesaj(await exporta(db, 'RESP'), /Export blocat: semnal rezolvat prin răspunsul Autorității/, 'rezolvata_de_raspuns: export blocat', ab)
+  })
+  await scenariu('t4_trigger_new_nu_old + t4_stari + t4_notifica_surse + t4_exceptie_surse_refuz', async (db, ab) => {
+    const f = await fixturaTichet(db)
+    await evalueaza(db)
+    let c = (await ciorne(db))[0]
+    await aproba(db, ab, c.id)
+    // UN SINGUR UPDATE care schimbă textul ȘI pune trimisa → refuz (starea pe NEW, fără aprobare)
+    asteptMesaj(await upd(db, 'RESP', c.id, `intrebare = intrebare || ' (modificat)', status = 'trimisa'`), /Clarificare blocată: necesită review/, 't4_trigger_new_nu_old', ab)
+    // text + de_trimis dintr-o dată: ca în R9b, textul se salvează și statusul cade la propunere (editarea nu moștenește aprobarea)
+    const td = await upd(db, 'RESP', c.id, `intrebare = intrebare || ' (modificat)', status = 'de_trimis'`)
+    ast(ab, td.ok && (await ciorne(db))[0].status === 'propunere' && !(await ciorne(db))[0].baza_generare.reconfirmare, 'text + de_trimis dintr-o dată → propunere, fără aprobare: ' + (td.message || ''))
+    await aproba(db, ab, c.id)
+    // tranzitie pe un UPDATE candidat cu status trimisa și text nou → necesita_review (statusul candidat nu contează)
+    const stT = (await q(db, `SELECT public.ofertare_semnal_baza_stare(c, 'tranzitie') x FROM public.ofertare_clarificari c WHERE c.id = $1`, [c.id]))[0].x
+    ast(ab, stT.stare === 'ok', 'tranzitie pe rândul aprobat: ok: ' + stT.stare)
+    const stT3 = (await q(db, `SELECT public.ofertare_semnal_baza_stare(ROW(c.id, c.licitatie_id, c.nr, 'text nou', c.sursa, c.cantitate_id, 'trimisa', c.raspuns, c.raspuns_la, c.created_at, c.updated_at, c.origine, c.cheie, c.baza_generare, c.fisier_path, c.creat_de, c.citita_la, c.citita_rezumat, c.raspuns_document_id, c.surse_document_ids, c.surse_cerinte_ids, c.surse_cantitati_ids)::public.ofertare_clarificari, 'tranzitie') x FROM public.ofertare_clarificari c WHERE c.id = $1`, [c.id]))[0].x
+    ast(ab, stT3.stare === 'necesita_review', 'tranzitie: candidat „trimisa” cu text nou → necesita_review (statusul candidat nu se citește): ' + stT3.stare)
+    // editarea textului → propunere + text_editat_de, aprobarea scoasă
+    const e = await upd(db, 'RESP', c.id, `intrebare = intrebare || ' (editat)'`)
+    c = (await ciorne(db))[0]
+    ast(ab, e.ok && c.status === 'propunere' && c.baza_generare.text_editat_de === U.RESP && !c.baza_generare.reconfirmare && c.baza_generare.istoric_decizii.length === 2, 'editarea: propunere + text_editat_de, aprobările (2) în istoric: ' + JSON.stringify([c.status, c.baza_generare.istoric_decizii?.length]))
+    ast(ab, (await vedere(db, 'RESP', c.id)).stare === 'necesita_review', 'după editare: necesita_review')
+    // reconfirmare → de_trimis → trimisa; apoi cantitate schimbată → doar luat_act, textul imuabil
+    await aproba(db, ab, c.id)
+    ast(ab, (await upd(db, 'RESP', c.id, `status = 'de_trimis'`)).ok && (await upd(db, 'RESP', c.id, `status = 'trimisa'`)).ok, 'de_trimis → trimisa pe baza reconfirmată')
+    c = (await ciorne(db))[0]
+    let v = await vedere(db, 'RESP', c.id)
+    ast(ab, v.stare === 'ok' && c.status === 'trimisa', 'trimisa pe baza ei: afisare = ok')
+    await db.query(`UPDATE public.ofertare_cantitati SET cantitate = 6401 WHERE licitatie_id = $1`, [LIC])
+    v = await vedere(db, 'RESP', c.id)
+    ast(ab, v.stare === 'schimbata', 'după trimitere, cantitate schimbată → schimbata (informativ)')
+    asteptMesaj(await upd(db, 'RESP', c.id, `intrebare = 'alt text'`), /Documentul transmis este imuabil/, 'textul transmis imuabil', ab)
+    asteptMesaj(await upd(db, 'RESP', c.id, `status = 'propunere'`), /imuabil/, 'revenirea la propunere refuzată', ab)
+    const rRev = await reconfirma(db, 'RESP', c.id, v.amprenta_curenta, 'revizuit')
+    ast(ab, /doar luat_act/.test(rRev.rows?.[0]?.x?.error || ''), 'după trimitere doar luat_act: ' + JSON.stringify(rRev.rows?.[0]?.x))
+    const rLa = await reconfirma(db, 'RESP', c.id, v.amprenta_curenta, 'luat_act', 'am luat act de schimbare')
+    c = (await ciorne(db))[0]
+    ast(ab, rLa.ok && rLa.rows[0].x.ok && c.baza_generare.luat_act.token === v.amprenta_curenta, 'luat_act scrie token = token_curent')
+    v = await vedere(db, 'RESP', c.id)
+    ast(ab, v.stare === 'luat_act', 'după luat_act: luat_act (informativ, nu aprobare)')
+    // o nouă schimbare → alt token_curent → din nou schimbata
+    await db.query(`UPDATE public.ofertare_cantitati SET cantitate = 6402 WHERE licitatie_id = $1`, [LIC])
+    ast(ab, (await vedere(db, 'RESP', c.id)).stare === 'schimbata', 'a doua schimbare → schimbata din nou (token_curent include fotografia)')
+    // ciorna trimisă pe evaluarea veche + semnalul reevaluat (altă amprentă) → schimbata în afisare, NU ok
+    await evalueaza(db)
+    v = await vedere(db, 'RESP', c.id)
+    ast(ab, v.stare === 'schimbata', 'reevaluarea nu „reaprobă” un text trimis: ' + v.stare)
+    // notificarea: bază schimbată → 1 notificare responsabilului; a doua rulare → 0; după luat_act pe noul token → 0
+    const n0 = (await q(db, `SELECT count(*)::int n FROM public.notifications`))[0].n
+    const n1 = await notifica(db, 'RESP')
+    const n2 = await notifica(db, 'RESP')
+    ast(ab, n1.ok && n1.rows[0].x.notificari === 1 && n2.rows[0].x.notificari === 0 && (await q(db, `SELECT count(*)::int n FROM public.notifications WHERE profile_id = $1`, [U.RESP]))[0].n === n0 + 1, 'notificarea: 1 apoi 0: ' + JSON.stringify([n1.rows?.[0]?.x, n2.rows?.[0]?.x]))
+    asteptMesaj({ code: (await notifica(db, 'STRAIN')).rows?.[0]?.x?.error ? 'x' : undefined, message: (await notifica(db, 'STRAIN')).rows?.[0]?.x?.error }, /fără acces/, 'notificare fără acces', ab)
+    // excepția de identitate pe surse → refuz explicit
+    const ex = await scrieCa(db, 'RESP', `SELECT public.ofertare_clarificare_exceptie_identitate($1, $2, 'motiv suficient de lung') x`, [c.id, v.amprenta_curenta])
+    ast(ab, ex.ok && ex.rows[0].x.error === 'nu se aplică ciornelor de surse', 't4_exceptie_surse_refuz: ' + JSON.stringify(ex.rows?.[0]?.x))
+    // retragerea de om pe o ciornă nouă → retrasa_de = om; apoi semnalul la verdict diferenta cu altă amprentă rămâne retras
+    const g = await fixturaTichet(db, { lic: LIC2 })
+    await evalueaza(db, LIC2)
+    const c2 = (await ciorne(db, LIC2))[0]
+    ast(ab, (await upd(db, 'OWNER', c2.id, `status = 'retrasa'`)).ok, 'omul retrage')
+    const c2b = (await ciorne(db, LIC2))[0]
+    ast(ab, c2b.baza_generare.retrasa_de === 'om' && c2b.baza_generare.retrasa_de_uid === U.OWNER && c2b.baza_generare.retrasa_la, 'retrasa_de = om, uid, la: ' + JSON.stringify(c2b.baza_generare))
+    ast(ab, (await ca(db, 'OWNER', `SELECT count(*)::int n FROM public.v_ofertare_clarificari_baza WHERE id = $1`, [c2.id])).rows[0].n === 0, 'ciorna retrasă nu apare în view')
+    // stări: indisponibila când semnalul n-are evaluare publicată (ciornă orfană scrisă ca postgres)
+    await db.query(`INSERT INTO public.ofertare_clarificari (licitatie_id, nr, intrebare, status, origine, cheie) VALUES ($1, 90, 'orfana', 'propunere', 'automat', 'auto_surse_ffffffffffffffff')`, [LIC])
+    const orf = (await q(db, `SELECT id FROM public.ofertare_clarificari WHERE cheie = 'auto_surse_ffffffffffffffff'`))[0].id
+    const vo = await vedere(db, 'RESP', orf)
+    ast(ab, vo.stare === 'indisponibila' && /necesită review/.test(vo.text), 'ciornă fără semnal → indisponibila: ' + JSON.stringify([vo.stare, vo.text]))
+    asteptMesaj(await upd(db, 'RESP', orf, `status = 'de_trimis'`), /Clarificare blocată/, 'orfana nu trece la de_trimis', ab)
+  })
+  await scenariu('t4_lant_authenticated + t4_planse_neschimbat + t4_fara_advisory + t4_drepturi', async (db, ab) => {
+    const f = await fixturaTichet(db)
+    await evalueaza(db)
+    const c = (await ciorne(db))[0]
+    // lanțul ca authenticated: view, export, reconfirmare funcționează; apelul direct al unei funcții interne = 42501
+    const v = await vedere(db, 'RESP', c.id)
+    ast(ab, v && v.stare === 'necesita_review', 'view ca authenticated')
+    for (const fn of [`fn_ofertare_semnal_rezolvat((SELECT s FROM public.ofertare_cantitati_semnale s LIMIT 1))`, `fn_ofertare_masura_felii_autoritative(1)`, `fn_ofertare_semnal_text(1, 1)`, `fn_ofertare_semnal_upsert(1, 1, NULL, '*', 'x', 'fizica', 'm')`, `fn_ofertare_masura_norm('x')`]) {
+      asteptCod(await ca(db, 'RESP', `SELECT * FROM public.${fn}`), '42501', 'apel direct al funcției interne ' + fn.split('(')[0], ab)
+    }
+    // starea prin dispecer ca authenticated (EXECUTE acordat) — întoarce doar stare / tokeni / diferențe, fără dovezi sau text de document
+    const d = await ca(db, 'OF', `SELECT public.fn_ofertare_ciorna_auto_stare(c, 'afisare') x FROM public.ofertare_clarificari c WHERE c.id = $1`, [c.id])
+    ast(ab, !d.code && d.rows[0].x.stare === 'necesita_review' && !('masuratori' in d.rows[0].x) && !JSON.stringify(d.rows[0].x).includes('6.400'), 'dispecerul ca authenticated: fără dovezi: ' + JSON.stringify(d.rows?.[0]?.x && Object.keys(d.rows[0].x)))
+    // t4_planse_neschimbat: scenariul R9b pe o ciornă auto_planse_* (valorile din scripts/pglite/test_r9b_decisive.mjs: ok → de_trimis permis → cantitate schimbată → schimbata → trimisa refuzată; export blocat)
+    const baza = (await q(db, `SELECT public.ofertare_f3_baza($1) x`, [LIC]))[0].x
+    const textP = 'Solicitare de clarificare (art. 160–161 din Legea nr. 98/2016) — date cantitative din planșe\n\ntext de proba'
+    await db.query(`INSERT INTO public.ofertare_clarificari (licitatie_id, nr, intrebare, sursa, status, origine, cheie, baza_generare) VALUES ($1, 77, $2, $3, 'propunere', 'automat', 'auto_planse_1', $4::jsonb)`,
+      [LIC, textP, `planse_auto:${f.dAtr},gen_${md5(textP).slice(0, 12)},ev_${md5('x').slice(0, 12)}`, JSON.stringify({ ...baza, la: new Date().toISOString(), sursa_generare: 'v6-r9b', text_hash: md5(textP) })])
+    const cp = (await q(db, `SELECT id FROM public.ofertare_clarificari WHERE cheie = 'auto_planse_1'`))[0].id
+    let vp = await vedere(db, 'RESP', cp)
+    ast(ab, vp.stare === 'necesita_review' && vp.mod_ciorna === 'corespondenta' && vp.detalii.evaluare === 'r9b', 'planșe: stare inițială necesita_review (R9b): ' + JSON.stringify([vp.stare, vp.mod_ciorna]))
+    const rp = await reconfirma(db, 'RESP', cp, vp.amprenta_curenta)
+    ast(ab, rp.ok && rp.rows[0].x.ok === true, 'planșe: reconfirmarea: ' + JSON.stringify(rp.rows?.[0]?.x || rp.message))
+    ast(ab, (await upd(db, 'RESP', cp, `status = 'de_trimis'`)).ok, 'planșe: după reconfirmare „de trimis” e permis (A3)')
+    let exp = await exporta(db, 'RESP')
+    ast(ab, exp.ok && exp.rows[0].x.some(x => x.id === cp), 'planșe: exportul include ciorna aprobată')
+    await db.query(`UPDATE public.ofertare_cantitati SET cantitate = coalesce(cantitate, 0) + 1 WHERE licitatie_id = $1`, [LIC])
+    vp = await vedere(db, 'RESP', cp)
+    ast(ab, vp.stare === 'schimbata', 'planșe: cantitate schimbată ⇒ baza „schimbata” (A3)')
+    asteptMesaj(await upd(db, 'RESP', cp, `status = 'trimisa'`), /Clarificare blocată: baza s-a schimbat — de reverificat/, 'planșe: trimiterea pe baza schimbată e refuzată', ab)
+    asteptMesaj(await exporta(db, 'RESP'), /Export blocat: baza s-a schimbat — de reverificat/, 'planșe: export blocat', ab)
+    // A7: omul modifică cifra din text ⇒ aprobarea nu se transferă
+    vp = await vedere(db, 'RESP', cp)
+    await reconfirma(db, 'RESP', cp, vp.amprenta_curenta, 'revizuit', 'reverificat după schimbare')
+    ast(ab, (await upd(db, 'RESP', cp, `status = 'de_trimis'`)).ok, 'planșe: reaprobare')
+    const r3 = await upd(db, 'RESP', cp, `intrebare = intrebare || ' (123 m)'`)
+    ast(ab, r3.ok && (await q(db, `SELECT status FROM public.ofertare_clarificari WHERE id = $1`, [cp]))[0].status === 'propunere', 'planșe: textul editat se salvează și pierde aprobarea (A7)')
+    // E1: proveniența nu se poate reseta; excepția pe planșe merge pe calea veche (aici baza nu cere excepție)
+    asteptMesaj(await upd(db, 'RESP', cp, `cheie = NULL`), /imuabilă/, 'planșe: cheie = NULL refuzat', ab)
+    asteptMesaj(await upd(db, 'RESP', cp, `baza_generare = NULL`), /reconfirmare|doar serverul/, 'planșe: baza_generare = NULL refuzat', ab)
+    vp = await vedere(db, 'RESP', cp)
+    const exP = await scrieCa(db, 'RESP', `SELECT public.ofertare_clarificare_exceptie_identitate($1, $2, 'motiv suficient de lung') x`, [cp, vp.amprenta_curenta])
+    ast(ab, exP.ok && exP.rows[0].x.error === 'baza curentă nu cere excepție de identitate', 'planșe: excepția pe calea veche: ' + JSON.stringify(exP.rows?.[0]?.x))
+    // t4_fara_advisory: static, pe prosrc
+    const adv = (await q(db, `SELECT proname, prosrc ~* 'pg_advisory' AS adv, prosrc ~* 'ORDER BY id FOR UPDATE' AS oid FROM pg_proc WHERE proname IN ('fn_trg_ofertare_clarificari_baza', 'ofertare_clarificare_reconfirma', 'ofertare_clarificare_exceptie_identitate', 'ofertare_clarificari_export', 'ofertare_clarificari_notifica', 'ofertare_clarificare_baza_stare', 'ofertare_semnal_baza_stare', 'fn_ofertare_ciorna_auto_stare', 'fn_ofertare_semnal_raspuns_leaga', 'fn_ofertare_semnale_setari', 'fn_ofertare_semnale_lista') ORDER BY proname`))
+    ast(ab, adv.length === 11 && adv.every(x => !x.adv && !x.oid), 't4_fara_advisory: ' + JSON.stringify(adv.filter(x => x.adv || x.oid)))
+    const advRpc = (await q(db, `SELECT proname, prosrc ~ 'pg_advisory_xact_lock' AS adv FROM pg_proc WHERE proname IN ('fn_ofertare_masuratori_propune', 'fn_ofertare_semnale_publica')`))
+    ast(ab, advRpc.length === 2 && advRpc.every(x => x.adv), 'advisory-ul DOAR în propune / publica')
+    const ord = (await q(db, `SELECT prosrc ~ 'ORDER BY k.nr FOR UPDATE' AS pub, (SELECT prosrc ~ 'ORDER BY nr FOR UPDATE' FROM pg_proc WHERE proname = 'ofertare_clarificari_notifica') AS notif, (SELECT prosrc ~ 'ORDER BY nr FOR SHARE' FROM pg_proc WHERE proname = 'ofertare_clarificari_export') AS exp FROM pg_proc WHERE proname = 'fn_ofertare_semnale_publica'`))[0]
+    ast(ab, ord.pub && ord.notif && ord.exp, 'parcurgerile pe ciorne: ORDER BY nr peste tot: ' + JSON.stringify(ord))
+    // drepturile funcțiilor rescrise, păstrate (CREATE OR REPLACE): ACL identic cu scheletul
+    const acl = (await q(db, `SELECT proname, coalesce(proacl, acldefault('f', proowner))::text AS acl FROM pg_proc WHERE proname IN ('ofertare_clarificare_reconfirma', 'ofertare_clarificari_export', 'ofertare_clarificari_notifica', 'ofertare_clarificare_exceptie_identitate', 'fn_trg_ofertare_clarificari_baza') ORDER BY proname`))
+    const aclAstept = { fn_trg_ofertare_clarificari_baza: '{postgres=X/postgres}', ofertare_clarificare_exceptie_identitate: '{postgres=X/postgres,authenticated=X/postgres}', ofertare_clarificare_reconfirma: '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}',
+      ofertare_clarificari_export: '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}', ofertare_clarificari_notifica: '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}' }
+    ast(ab, acl.every(x => x.acl === aclAstept[x.proname]), 'ACL-urile funcțiilor rescrise neschimbate: ' + JSON.stringify(acl))
+    const vacl = (await q(db, `SELECT string_agg(pg_get_userbyid(e.grantee) || ':' || e.privilege_type, ', ' ORDER BY pg_get_userbyid(e.grantee) || ':' || e.privilege_type) AS acl FROM pg_class c, aclexplode(coalesce(c.relacl, acldefault('r', c.relowner))) e WHERE c.oid = 'public.v_ofertare_clarificari_baza'::regclass`))[0].acl
+    ast(ab, vacl === 'authenticated:SELECT, postgres:DELETE, postgres:INSERT, postgres:MAINTAIN, postgres:REFERENCES, postgres:SELECT, postgres:TRIGGER, postgres:TRUNCATE, postgres:UPDATE, service_role:DELETE, service_role:INSERT, service_role:MAINTAIN, service_role:REFERENCES, service_role:SELECT, service_role:TRIGGER, service_role:TRUNCATE, service_role:UPDATE',
+      'ACL-ul vederii re-acordat identic (ca mulțime rol:drept, cea a scheletului): ' + vacl)
+  })
+}
+
 console.log(esec ? `\nEȘEC: ${esec} verificări picate` : '\nTOATE VERIFICĂRILE AU TRECUT')
 process.exit(esec ? 1 : 0)
