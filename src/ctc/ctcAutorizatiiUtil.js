@@ -1,5 +1,7 @@
-// Autorizațiile sudorilor pentru cartea tehnică (TKT-2026-0389, 20261222b) — logica din client, testată în src/ctcAutorizatiiMigrare.test.js.
-// Datele vin DOAR din RPC-ul fn_ctc_autorizatii_sudori (dreptul CTC verificat în BD); scanul DOAR prin edge fn ctc-autorizatie-fisier.
+// Autorizațiile pentru cartea tehnică (TKT-2026-0389): sudorii (20261222b) și firmele de control nedistructiv (20270111a) — logica din client,
+// testată în src/ctcAutorizatiiMigrare.test.js și src/ctcAutorizatiiNdt.test.js.
+// Datele vin DOAR din RPC-urile fn_ctc_autorizatii_sudori / fn_ctc_autorizatii_ndt (dreptul CTC verificat în BD); scanul DOAR prin edge fn
+// ctc-autorizatie-fisier.
 import { paginareKeyset } from '../hrDeciziiUtil.js'
 
 export const STARI = {
@@ -65,10 +67,47 @@ export function incarcaAutorizatii(sb, pas = 1000) {
   }, pas)
 }
 
+// ── Firmele de control nedistructiv (20270111a): RPC fn_ctc_autorizatii_ndt, scanul prin aceeași funcție edge (ramura ndt_document_id) ──
+export const STARI_NDT = {
+  valabil:    { label: 'Valabilă',                 culoare: 'green' },
+  expirat:    { label: 'Expirată',                 culoare: 'red' },
+  necunoscut: { label: 'Valabilitate necunoscută', culoare: 'yellow' },
+}
+// butonul de scan doar când RPC-ul spune explicit are_fisier = true; altă valoare decât true / false = necunoscut (L18), fără buton
+export const stareScanNdt = (v) => (v === true ? { deschide: true, text: 'Deschide scanul' }
+  : v === false ? { deschide: false, text: 'fără scan' } : { deschide: false, text: 'starea scanului necunoscută' })
+
+export function filtreazaNdt(rows, { text = '', stare = 'toate' } = {}) {
+  const q = fara(text).trim()
+  return (rows || []).filter(r => {
+    if (stare !== 'toate' && r.stare !== stare) return false
+    if (!q) return true
+    return [r.firma, r.cui, r.numar_document, r.emitent, r.metoda].some(v => fara(v).includes(q))
+  })
+}
+// ordinea: firma, apoi cele valabile întâi, apoi valabilitatea cea mai lungă, apoi id
+export function ordoneazaNdt(rows) {
+  const rang = { valabil: 0, necunoscut: 1, expirat: 2 }
+  return [...(rows || [])].sort((a, b) =>
+    String(a.firma || '').localeCompare(String(b.firma || ''), 'ro')
+    || (rang[a.stare] ?? 3) - (rang[b.stare] ?? 3)
+    || String(b.data_valabilitate || '').localeCompare(String(a.data_valabilitate || ''))
+    || Number(a.id) - Number(b.id))
+}
+// TOATE documentele NDT (keyset pe id până la pagina goală, L23)
+export function incarcaNdt(sb, pas = 1000) {
+  return paginareKeyset((ultim, n) => {
+    const q = sb.rpc('fn_ctc_autorizatii_ndt').order('id', { ascending: true }).limit(n)
+    return ultim == null ? q : q.gt('id', ultim)
+  }, pas)
+}
+
 // scanul: edge fn (dreptul + tipul verificate în BD, semnare doar pe calea aprobată) → { url } sau { eroare }
 //   Funcția edge încă nepublicată: platforma răspunde 404 fără câmpul `error` al funcției noastre → „încă neactivă”, nu „nu există”.
-export async function cereScan(sb, id) {
-  const { data, error } = await sb.functions.invoke('ctc-autorizatie-fisier', { body: { autorizatie_id: Number(id) } })
+//   tip = 'sudor' (implicit, { autorizatie_id }) sau 'ndt' ({ ndt_document_id }, 20270111a) — exact o cheie în corp.
+export async function cereScan(sb, id, tip = 'sudor') {
+  const body = tip === 'ndt' ? { ndt_document_id: Number(id) } : { autorizatie_id: Number(id) }
+  const { data, error } = await sb.functions.invoke('ctc-autorizatie-fisier', { body })
   if (!error && data?.url) return { url: data.url }
   let mesaj = data?.error || error?.message || 'Scanul nu poate fi deschis.'
   let corp = null

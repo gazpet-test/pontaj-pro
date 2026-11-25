@@ -1,25 +1,60 @@
-// Logica pură a edge fn ctc-autorizatie-fisier (TKT-2026-0389, 20261222b) — testată în src/ctcAutorizatieFisier.test.js.
-// Cererea, calea primită din BD și maparea erorilor RPC pe coduri HTTP; nimic aici nu citește sau scrie.
+// Logica pură a edge fn ctc-autorizatie-fisier (TKT-2026-0389, 20261222b + 20270111a) — testată în src/ctcAutorizatiiMigrare.test.js și
+// src/ctcAutorizatiiNdt.test.js. Cererea, calea primită din BD, maparea erorilor RPC pe coduri HTTP și decizia completă (trateazaCerere, cu
+// RPC-ul și semnarea primite din index.ts); nimic aici nu citește sau scrie singur.
 
-export type Cerere = { ok: true; id: number } | { ok: false; error: string }
+// cele două forme de cerere și ce înseamnă fiecare: RPC-ul (chemat cu JWT-ul utilizatorului), argumentul lui și bucket-ul semnării
+export const RAMURI = {
+  sudor: { cheie: 'autorizatie_id', rpc: 'fn_ctc_autorizatie_fisier', arg: 'p_id', bucket: 'autorizatii' },
+  ndt: { cheie: 'ndt_document_id', rpc: 'fn_ctc_autorizatie_ndt_fisier', arg: 'p_document_id', bucket: 'ofertare' },
+} as const
+export const VALABIL_SEC = 60
 
-// corpul: { autorizatie_id: întreg pozitiv sigur } — nimic altceva acceptat (L13: validare strictă, fără conversii tăcute)
+export type Tip = keyof typeof RAMURI
+export type Cerere = { ok: true; tip: Tip; id: number } | { ok: false; error: string }
+
+// corpul: EXACT o cheie, `autorizatie_id` (sudori, neschimbat) SAU `ndt_document_id` (20270111a), cu un întreg pozitiv sigur; orice altă
+// formă (chei în plus, ambele chei, cheie necunoscută, alt tip de valoare) = 400, fără apel la BD (L13: validare strictă, fără conversii)
 export function valideazaCerere(corp: unknown): Cerere {
   if (!corp || typeof corp !== 'object' || Array.isArray(corp)) return { ok: false, error: 'Corp invalid' }
   const chei = Object.keys(corp as Record<string, unknown>)
-  if (chei.length !== 1 || chei[0] !== 'autorizatie_id') return { ok: false, error: 'Se așteaptă doar autorizatie_id' }
-  const id = (corp as Record<string, unknown>).autorizatie_id
-  if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0) return { ok: false, error: 'autorizatie_id invalid' }
-  return { ok: true, id }
+  const tip = (Object.keys(RAMURI) as Tip[]).find(t => RAMURI[t].cheie === chei[0])
+  if (chei.length !== 1 || !tip) return { ok: false, error: 'Se așteaptă exact una dintre cheile autorizatie_id / ndt_document_id' }
+  const id = (corp as Record<string, unknown>)[RAMURI[tip].cheie]
+  if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0) return { ok: false, error: `${RAMURI[tip].cheie} invalid` }
+  return { ok: true, tip, id }
 }
 
-// calea din BD (fn_ctc_autorizatie_fisier), înainte de semnare: relativă la bucket, segmente din [A-Za-z0-9._-], fără „.” / „..”,
-// fără „/” la capete, fără spații / caractere de control, cel mult 500 de caractere. Altfel null (422, nu se semnează nimic).
+// calea unei autorizații de SUDOR (hr_autorizatii, ramura autorizatie_id — neschimbată de 20270111a), înainte de semnare: relativă la
+// bucket, segmente din [A-Za-z0-9._-], fără „.” / „..”, fără „/” la capete, fără spații / caractere de control, cel mult 500 de caractere.
+// Altfel null (422, nu se semnează nimic). NU se folosește pentru documentele NDT (acolo regula e cea din BD, mai jos).
 const SEGMENT = /^[A-Za-z0-9._-]{1,200}$/
 export function caleSigura(cale: unknown): string | null {
   if (typeof cale !== 'string' || cale.length === 0 || cale.length > 500) return null
   const seg = cale.split('/')
   if (seg.some(s => !SEGMENT.test(s) || s === '.' || s === '..')) return null
+  return cale
+}
+
+// calea unui document NDT (20270111a), reverificată în edge cu EXACT regula din BD (garda fn_ofertare_doc_cale_garda pentru categoria
+// autorizatie_ndt și RPC-ul fn_ctc_autorizatie_ndt_fisier), fără firma rândului (pe care edge-ul n-o știe; o verifică RPC-ul):
+//   * forma ^parteneri/<id>/ndt/<nume>$, un singur segment după ndt/; <id> = textul unui bigint (partener_id::text din BD: 0 sau
+//     -?[1-9][0-9]*, fără zerouri în față);
+//   * fără backslash, fără „%”, fără caractere de control = U+0001–U+001F și U+007F–U+009F (aceeași listă explicită ca în BD; U+0000 nu
+//     poate exista într-un text Postgres, aici e refuzat și el);
+//   * numele nu e „.” / „..” (singurul segment care ar putea fi; punctele din nume sunt permise);
+//   * „cale goală” nu se poate întâmpla în această formă (începe cu „parteneri/”).
+// Spațiile, diacriticele, emoji și lungimea numelui sunt PERMISE, ca în BD (fără limita ASCII / 200 a sudorilor). Paritatea: tabelul comun
+// supabase/tests/20270111a_ctc_autorizatii_ndt_cazuri_cale.json (vitest) + căi aleatoare trecute prin trigger, RPC și această funcție (PGlite).
+const FORMA_NDT = new RegExp('^parteneri/(0|-?[1-9][0-9]*)/ndt/([^/]+)$')
+export const eControlBd = (c: number) => c <= 0x1f || (c >= 0x7f && c <= 0x9f)
+export function caleNdtSigura(cale: unknown): string | null {
+  if (typeof cale !== 'string') return null
+  const m = FORMA_NDT.exec(cale)
+  if (!m || m[2] === '.' || m[2] === '..') return null
+  for (let i = 0; i < cale.length; i++) {
+    const c = cale.charCodeAt(i)
+    if (c === 92 || c === 37 || eControlBd(c)) return null
+  }
   return cale
 }
 
@@ -31,4 +66,37 @@ export function statusDinEroareRpc(e: { code?: string } | null | undefined): { s
   if (cod === 'P0002') return { status: 404, error: 'Autorizație de sudor inexistentă sau fără scan' }
   if (cod === 'PGRST202' || cod === '42883') return { status: 503, error: 'Funcția nu e încă activă în baza de date' }
   return { status: 500, error: 'Eroare internă' }
+}
+
+export type Raspuns = { status: number; corp: Record<string, unknown> }
+export type Dependente = {
+  // RPC-ul, chemat CU JWT-UL UTILIZATORULUI (auth.uid() = utilizatorul), nu cu service_role
+  rpc: (nume: string, argumente: Record<string, unknown>) => Promise<{ data: unknown; error: { code?: string } | null }>
+  // semnarea cu service_role, DOAR pe calea aprobată de BD și reverificată aici
+  semneaza: (bucket: string, cale: string, secunde: number) => Promise<{ data: { signedUrl?: string } | null; error: unknown }>
+}
+
+// decizia completă pentru un corp deja citit ca JSON
+export async function trateazaCerere(corp: unknown, dep: Dependente): Promise<Raspuns> {
+  const cerere = valideazaCerere(corp)
+  if (!cerere.ok) return { status: 400, corp: { error: cerere.error } }
+  const r = RAMURI[cerere.tip]
+  let cale: string | null = null
+  try {
+    const { data, error } = await dep.rpc(r.rpc, { [r.arg]: cerere.id })
+    if (error) { const s = statusDinEroareRpc(error); return { status: s.status, corp: { error: s.error } } }
+    if (cerere.tip === 'ndt') {
+      // NULL = inexistent / nu e NDT / fără fișier / cale invalidă în BD — același răspuns (fără oracol)
+      if (data == null) return { status: 404, corp: { error: 'Autorizație NDT inexistentă sau fără scan' } }
+      cale = caleNdtSigura(data)
+    } else {
+      cale = caleSigura(data)
+    }
+  } catch (_) {
+    return { status: 500, corp: { error: 'Eroare internă' } }
+  }
+  if (!cale) return { status: 422, corp: { error: 'Calea scanului e invalidă' } }
+  const { data: semnat, error: eroareSemnare } = await dep.semneaza(r.bucket, cale, VALABIL_SEC)
+  if (eroareSemnare || !semnat?.signedUrl) return { status: 502, corp: { error: 'Scanul nu a putut fi semnat' } }
+  return { status: 200, corp: { url: semnat.signedUrl, expira_in_sec: VALABIL_SEC } }
 }

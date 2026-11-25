@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { valideazaCerere, caleSigura, statusDinEroareRpc } from '../supabase/functions/_shared/ctcAutorizatieFisier.ts'
+import { valideazaCerere, caleSigura, statusDinEroareRpc, RAMURI, VALABIL_SEC } from '../supabase/functions/_shared/ctcAutorizatieFisier.ts'
 import { filtreaza, ordoneaza, fmtZi, clasificaEroare, incarcaAutorizatii, cereScan, stareScan, generatii } from './ctc/ctcAutorizatiiUtil.js'
 
 const citeste = p => readFileSync(new URL('../' + p, import.meta.url), 'utf8').replace(/\r/g, '')
@@ -12,6 +12,7 @@ const SCRIPT = citeste('scripts/ctc_autorizatii_amprente.sql')
 const MIG = citeste('supabase/migrations/20261222b_ctc_autorizatii_citire.sql')
 const REV = citeste('supabase/revenire/20261222b_ctc_autorizatii_citire_ROLLBACK.sql')
 const EDGE = citeste('supabase/functions/ctc-autorizatie-fisier/index.ts')
+const EDGE_SH = citeste('supabase/functions/_shared/ctcAutorizatieFisier.ts')
 const UI = citeste('src/ctc/CtcAutorizatii.jsx')
 const X = '20261222b'
 const A = '-- >>> AMPRENTA_L15 v1', B = '-- <<< AMPRENTA_L15 v1'
@@ -85,9 +86,11 @@ describe('20261222b — L15 și livrarea', () => {
     const f = corp('fn_ctc_autorizatie_fisier')
     expect(f).toContain('  SELECT a.fisier_path INTO v_cale\n')
     expect(f).not.toMatch(/document_personal/)
-    // nicio semnare în alt bucket: funcția edge are UN singur bucket, fix
+    // nicio semnare în alt bucket: un singur apel de semnare, cu bucket-ul fix al ramurii (sudori = autorizatii; 20270111a: NDT = ofertare)
     expect(nr(EDGE, '.storage.from(')).toBe(1)
-    expect(EDGE).not.toMatch(/documente-personal|hr_documente_personale/)
+    expect(RAMURI.sudor.bucket).toBe('autorizatii')
+    expect(Object.values(RAMURI).map(r => r.bucket).sort()).toEqual(['autorizatii', 'ofertare'])
+    expect(EDGE + EDGE_SH).not.toMatch(/documente-personal|hr_documente_personale/)
   })
   it('revenirea (r2): DETALIUL COMPLET livrat al fiecărei funcții (12 câmpuri), comparat câmp cu câmp; drepturile = postcondiția migrării', () => {
     const CHEI = ['acl', 'config', 'corp_md5', 'definer', 'intoarce', 'leakproof', 'limbaj', 'proprietar', 'sqlbody_md5', 'strict', 'tip', 'volatil']
@@ -124,18 +127,19 @@ describe('20261222b — L15 și livrarea', () => {
 describe('edge fn ctc-autorizatie-fisier', () => {
   it('dreptul se verifică în BD CA UTILIZATORUL; service_role doar pentru semnarea căii aprobate, 60 s, bucket autorizatii', () => {
     expect(EDGE).toContain("createClient(url, anon, {\n    global: { headers: { Authorization: auth } },")
-    expect(EDGE).toContain("await caUtilizator.rpc('fn_ctc_autorizatie_fisier', { p_id: cerere.id })")
+    // 20270111a: decizia stă în _shared (trateazaCerere); ramura sudorilor = același RPC, același argument, același bucket, 60 s
+    expect(RAMURI.sudor).toEqual({ cheie: 'autorizatie_id', rpc: 'fn_ctc_autorizatie_fisier', arg: 'p_id', bucket: 'autorizatii' })
+    expect(EDGE).toContain('rpc: (nume, argumente) => caUtilizator.rpc(nume, argumente),')
     expect(nr(EDGE, '.rpc(')).toBe(1)
-    expect(EDGE).toContain('await sb.storage.from(BUCKET).createSignedUrl(cale, VALABIL_SEC)')
-    expect(EDGE).toContain("const BUCKET = 'autorizatii'")
-    expect(EDGE).toContain('const VALABIL_SEC = 60')
+    expect(EDGE).toContain('semneaza: (bucket, cale, secunde) => sb.storage.from(bucket).createSignedUrl(cale, secunde),')
+    expect(VALABIL_SEC).toBe(60)
     // calea semnată e DOAR cea întoarsă de RPC, după caleSigura; nicio cale din cerere
-    expect(EDGE).toContain('cale = caleSigura(data)')
-    expect(EDGE).not.toMatch(/corp\)?\.(path|cale|fisier)/)
+    expect(EDGE_SH).toContain('      cale = caleSigura(data)\n')
+    expect(EDGE + EDGE_SH).not.toMatch(/corp\)?\.(path|cale|fisier)/)
     expect(EDGE).toMatch(/FIȘA DE SECURITATE/)
   })
   it('cererea: doar autorizatie_id întreg pozitiv', () => {
-    expect(valideazaCerere({ autorizatie_id: 10 })).toEqual({ ok: true, id: 10 })
+    expect(valideazaCerere({ autorizatie_id: 10 })).toEqual({ ok: true, tip: 'sudor', id: 10 })
     for (const c of [null, [], {}, { autorizatie_id: '10' }, { autorizatie_id: 0 }, { autorizatie_id: -3 }, { autorizatie_id: 1.5 },
                      { autorizatie_id: 2 ** 60 }, { autorizatie_id: 10, cale: '1/a.pdf' }]) expect(valideazaCerere(c).ok).toBe(false)
   })
@@ -215,7 +219,8 @@ describe('ecranul CTC', () => {
     for (const v of [undefined, null, true, 'altceva']) expect(stareScan(v)).toEqual({ deschide: false, text: 'starea scanului necunoscută' })
     expect(UI).toContain('{sc.deschide ? (')
     expect(UI).not.toMatch(/are_scan/)
-    expect(UI).toContain('Autorizațiile firmelor de control nedistructiv nu sunt încă în platformă.')
+    // 20270111a: textul provizoriu despre firmele NDT a dispărut (secțiunea lor există; teste în src/ctcAutorizatiiNdt.test.js)
+    expect(UI).not.toContain('nu sunt încă în platformă')
   })
   it('L24: răspunsul întârziat după ieșirea din tab / o încărcare nouă nu se mai aplică', async () => {
     const g = generatii()

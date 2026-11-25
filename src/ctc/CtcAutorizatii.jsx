@@ -3,10 +3,12 @@
 // Lista: RPC fn_ctc_autorizatii_sudori (dreptul CTC verificat în BD). Scanul: edge fn ctc-autorizatie-fisier (link de 60 s, doar pentru
 // autorizații de sudor, cu fișierul pe autorizație). Dovada ținută doar în dosarul personal NU se deschide de aici: rândul spune să o
 // atașeze HR la autorizație (r2). L24: încărcarea și cererea de scan au tokenuri de generație, invalidate la ieșirea din tab.
+// 20270111a: a doua secțiune, „Firme de control nedistructiv” (SectiuneNdt, mai jos), în același stil.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase.js'
 import { G, inputSt, btnMic } from './ctcUi.jsx'
-import { STARI, stareScan, generatii, fmtZi, filtreaza, ordoneaza, clasificaEroare, incarcaAutorizatii, cereScan } from './ctcAutorizatiiUtil.js'
+import { STARI, stareScan, generatii, fmtZi, filtreaza, ordoneaza, clasificaEroare, incarcaAutorizatii, cereScan,
+  STARI_NDT, stareScanNdt, filtreazaNdt, ordoneazaNdt, incarcaNdt } from './ctcAutorizatiiUtil.js'
 
 const th = { textAlign: 'left', padding: '7px 8px', fontSize: 11, color: G.muted, fontWeight: 700, borderBottom: `1px solid ${G.border}`, whiteSpace: 'nowrap' }
 const td = { padding: '7px 8px', fontSize: 12, borderBottom: `1px solid ${G.border}`, verticalAlign: 'top' }
@@ -161,9 +163,139 @@ export default function CtcAutorizatii() {
         )}
       </section>
 
-      <div style={{ fontSize: 12, color: G.muted }}>
-        Autorizațiile firmelor de control nedistructiv nu sunt încă în platformă.
-      </div>
+      <SectiuneNdt />
     </div>
+  )
+}
+
+// ── Firmele de control nedistructiv (20270111a): documentele 'autorizatie_ndt' din Ofertare → Parteneri, doar citire, fără acces la Ofertare.
+//    Lista: RPC fn_ctc_autorizatii_ndt; scanul: aceeași funcție edge, ramura ndt_document_id (link de 60 s), butonul doar când are_fisier.
+//    L24: tokenuri proprii de generație (încărcare + scan), invalidate la demontare; `client` doar pentru teste (implicit supabase).
+export function SectiuneNdt({ client = supabase }) {
+  const [rows, setRows] = useState([])
+  const [stareInc, setStareInc] = useState('incarc')   // incarc | gata | fara_drept | neactivat | eroare
+  const [mesaj, setMesaj] = useState('')
+  const [text, setText] = useState('')
+  const [stare, setStare] = useState('toate')
+  const [busy, setBusy] = useState(null)
+  const [eroareScan, setEroareScan] = useState('')
+  const [reload, setReload] = useState(0)
+  const genIncarcare = useRef(null)
+  const genScan = useRef(null)
+  if (!genIncarcare.current) { genIncarcare.current = generatii(); genScan.current = generatii() }
+  const ferestre = useRef(new Set())
+
+  useEffect(() => {
+    const gi = genIncarcare.current, gs = genScan.current
+    const t = gi.nou()
+    setStareInc('incarc'); setMesaj(''); setBusy(null)
+    incarcaNdt(client)
+      .then(r => { if (!gi.eCurent(t)) return; setRows(r); setStareInc('gata') })
+      .catch(e => { if (!gi.eCurent(t)) return; const c = clasificaEroare(e); setRows([]); setStareInc(c.tip); setMesaj(c.mesaj) })
+    return () => {
+      gi.invalideaza(); gs.invalideaza()
+      for (const f of ferestre.current) f.close()
+      ferestre.current.clear()
+    }
+  }, [reload, client])
+
+  const vizibile = useMemo(() => ordoneazaNdt(filtreazaNdt(rows, { text, stare })), [rows, text, stare])
+  const nr = useMemo(() => ({
+    valabil: rows.filter(r => r.stare === 'valabil').length,
+    expirat: rows.filter(r => r.stare === 'expirat').length,
+    necunoscut: rows.filter(r => r.stare === 'necunoscut').length,
+  }), [rows])
+
+  const deschide = async (r) => {
+    const gs = genScan.current
+    const f = window.open('about:blank', '_blank')
+    if (!f) { setEroareScan('Permite deschiderea unei file noi pentru scan.'); return }
+    f.opener = null
+    ferestre.current.add(f)
+    const t = gs.nou()
+    setBusy(r.id); setEroareScan('')
+    try {
+      const rez = await cereScan(client, r.id, 'ndt')
+      if (!gs.eCurent(t) || f.closed) { f.close(); return }
+      if (rez.url) f.location.replace(rez.url)
+      else { f.close(); setEroareScan(rez.eroare) }
+    } catch (e) {
+      f.close()
+      if (gs.eCurent(t)) setEroareScan(e?.message || 'Scanul nu poate fi deschis.')
+    } finally {
+      ferestre.current.delete(f)
+      if (gs.eCurent(t)) setBusy(null)
+    }
+  }
+
+  return (
+    <section style={{ background: G.surface, border: `1px solid ${G.border}`, borderRadius: 12, padding: 16, marginBottom: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', marginBottom: 6 }}>
+        <h3 style={{ margin: 0, color: G.ctc }}>🔬 Firme de control nedistructiv</h3>
+        <span style={{ fontSize: 12, color: G.muted }}>doar citire · autorizațiile firmelor (RT, UT, PT, MT, VT)</span>
+      </div>
+      <div style={{ fontSize: 12, color: G.muted, marginBottom: 12, lineHeight: 1.5 }}>
+        Autorizațiile firmelor care fac controlul nedistructiv, încărcate la firmă în Ofertare → Parteneri. Scanul se deschide într-o filă nouă
+        (link valabil un minut) și se poate atașa la cartea tehnică a lucrării.
+      </div>
+
+      {stareInc === 'gata' && (
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
+          <input value={text} onChange={e => setText(e.target.value)} placeholder="Caută: firmă, CUI, nr., emitent, metodă…" style={{ ...inputSt, maxWidth: 320 }} />
+          <select value={stare} onChange={e => setStare(e.target.value)} style={{ ...inputSt, width: 'auto' }}>
+            <option value="toate">Toate ({rows.length})</option>
+            <option value="valabil">Valabile ({nr.valabil})</option>
+            <option value="expirat">Expirate ({nr.expirat})</option>
+            <option value="necunoscut">Valabilitate necunoscută ({nr.necunoscut})</option>
+          </select>
+        </div>
+      )}
+
+      {stareInc === 'incarc' && <div style={{ color: G.muted }}>Se încarcă autorizațiile firmelor…</div>}
+      {stareInc === 'fara_drept' && <div role="alert" style={{ color: G.red }}>{mesaj}</div>}
+      {stareInc === 'neactivat' && <div style={{ color: G.yellow }}>{mesaj}</div>}
+      {stareInc === 'eroare' && (
+        <div role="alert" style={{ color: G.red }}>{mesaj} <button onClick={() => setReload(x => x + 1)} style={btnMic(G.red)}>Reîncearcă</button></div>
+      )}
+      {eroareScan && <div role="alert" style={{ color: G.red, marginBottom: 8 }}>{eroareScan}</div>}
+      {stareInc === 'gata' && !rows.length && <div style={{ color: G.muted }}>Nicio autorizație de firmă NDT în evidență (se adaugă în Ofertare → Parteneri, la documentele firmei).</div>}
+      {stareInc === 'gata' && rows.length > 0 && !vizibile.length && <div style={{ color: G.muted }}>Nicio autorizație nu corespunde filtrelor.</div>}
+
+      {stareInc === 'gata' && vizibile.length > 0 && (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr>
+              {['Firmă', 'Nr. autorizație', 'Emitent', 'Metodă', 'Emisă', 'Valabilă până la', 'Stare', 'Scan'].map(h => <th key={h} style={th}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {vizibile.map(r => {
+                const st = STARI_NDT[r.stare] || { label: r.stare || '—', culoare: 'muted' }
+                const sc = stareScanNdt(r.are_fisier)
+                return (
+                  <tr key={r.id}>
+                    <td style={td}><b>{r.firma || '—'}</b>{r.cui ? <div style={{ fontSize: 11, color: G.muted }}>{r.cui}</div> : null}</td>
+                    <td style={td}>{r.numar_document || '—'}</td>
+                    <td style={td}>{r.emitent || '—'}</td>
+                    <td style={td}>{r.metoda || '—'}</td>
+                    <td style={td}>{fmtZi(r.data_emitere)}</td>
+                    <td style={td}>{r.fara_expirare ? 'fără expirare' : fmtZi(r.data_valabilitate)}</td>
+                    <td style={td}><span style={{ color: G[st.culoare] || G.muted, fontWeight: 700 }}>{st.label}</span></td>
+                    <td style={td}>
+                      {sc.deschide ? (
+                        <button disabled={busy !== null} onClick={() => deschide(r)} style={btnMic(G.blue)}>
+                          {busy === r.id ? 'Se deschide…' : sc.text}
+                        </button>
+                      ) : (
+                        <span style={{ fontSize: 11, color: G.muted }}>{sc.text}</span>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   )
 }
