@@ -25,6 +25,9 @@
 --      (ORDER BY nr FOR UPDATE — singura schimbare de ordine), v_ofertare_clarificari_baza (aceleași coloane). Corpurile = textul LIVE
 --      (ultima formă cunoscută: docs/R5_MIGRARE_3_review_copilot.sql, 20261121a) cu DOAR schimbările din inventarul planului; $pre$ refuză
 --      dacă amprenta LIVE a oricăruia diferă de cea din blocul AMPRENTE LIVE (valorile de confirmat de coordonator pe clonă).
+--   6. ABATERE declarată față de plan (inventar #7): fn_ofertare_surse_valideaza (20261026a) decidea „utilizator” doar după rolul din JWT, deci refuza
+--      scrierea baza_generare / sursa din RPC-urile DEFINER chemate de un om (reconfirmarea R9b de azi, legarea răspunsului de aici); textul LIVE
+--      cu o singură linie schimbată (secțiunea 9i). Triggerele a02_* rămân pe aceeași funcție.
 -- Ce NU face: nu schimbă cantitățile, nu trimite nimic, nu citește SEAP, nu atinge prețuri, nu dă acces la Ofertare, nu atinge date.
 -- Datele existente: zero dubluri (licitatie_id, nr) în ofertare_clarificari (preflight sub lock, CM_NR_DUBLU la refuz); nimic rescris.
 -- Lock-uri (L06): un singur tabel existent modificat (ofertare_clarificari: trigger rescris, UNIQUE nou) — ACCESS EXCLUSIVE NOWAIT, luat
@@ -218,6 +221,12 @@ BEGIN
     SELECT CASE e.grantee WHEN 0 THEN 'PUBLIC' ELSE pg_get_userbyid(e.grantee) END AS rol, e.privilege_type AS drept
       FROM pg_class c, aclexplode(coalesce(c.relacl, acldefault('r', c.relowner))) e WHERE c.oid = 'public.v_ofertare_clarificari_baza'::regclass;
   SELECT string_agg(rol || ':' || drept, ', ' ORDER BY rol || ':' || drept COLLATE "C") INTO v_acl FROM cm_view_acl;
+  -- drepturile functiilor rescrise (CREATE OR REPLACE le pastreaza; $post$ o verifica)
+  CREATE TEMP TABLE cm_fn_acl ON COMMIT DROP AS
+    SELECT f.fn, CASE e.grantee WHEN 0 THEN 'PUBLIC' ELSE pg_get_userbyid(e.grantee) END AS rol, e.privilege_type AS drept
+      FROM unnest(ARRAY['public.fn_trg_ofertare_clarificari_baza()', 'public.ofertare_clarificare_reconfirma(bigint,text,text,text)', 'public.ofertare_clarificare_exceptie_identitate(bigint,text,text)',
+                        'public.ofertare_clarificari_export(bigint)', 'public.ofertare_clarificari_notifica(bigint)', 'public.fn_ofertare_surse_valideaza()']) f(fn)
+      JOIN pg_proc p ON p.oid = to_regprocedure(f.fn), aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) e;
   IF EXISTS (SELECT 1 FROM cm_view_acl WHERE rol IN ('PUBLIC', 'anon')) OR EXISTS (SELECT 1 FROM cm_view_acl WHERE rol = 'authenticated' AND drept <> 'SELECT')
      OR NOT EXISTS (SELECT 1 FROM cm_view_acl WHERE rol = 'authenticated' AND drept = 'SELECT') OR NOT EXISTS (SELECT 1 FROM cm_view_acl WHERE rol = 'service_role' AND drept = 'SELECT') THEN
     RAISE EXCEPTION '20270112a: drepturile v_ofertare_clarificari_baza difera de forma asteptata (authenticated doar SELECT, anon nimic): %', v_acl;
@@ -249,7 +258,7 @@ CREATE TABLE public.ofertare_tipare_cantitate (
   tipar text NOT NULL CHECK (length(tipar) BETWEEN 1 AND 80),
   activ boolean NOT NULL DEFAULT true,
   UNIQUE (fel, tipar),
-  CHECK (fel <> 'cuvant_cheie' OR tipar !~ '\((?!\?)')
+  CHECK (fel <> 'cuvant_cheie' OR (tipar !~ '[(][^?]' AND tipar !~ '[(]$'))
 );
 -- antetele: forme normalizate (minuscule, fara diacritice; tokenii multi-cuvant se lipesc cu „_” inaintea impartirii); cuvintele-cheie: regex
 -- POSIX pe textul normalizat, DOAR cu grupuri necapturante (?:…) — grupurile capturante ar deplasa capturile verificarii —, cuvantul INAINTEA
@@ -260,7 +269,7 @@ INSERT INTO public.ofertare_tipare_cantitate (id, fel, tipar) VALUES
   (9, 'antet_cantitate', 'suprafata'),
   (11, 'antet_um', 'um'), (12, 'antet_um', 'u.m.'), (13, 'antet_um', 'u/m'), (14, 'antet_um', 'unitate'), (15, 'antet_um', 'unit.'),
   (21, 'cuvant_cheie', 'lungime(?: totala)?'), (22, 'cuvant_cheie', 'l'), (23, 'cuvant_cheie', 'in lungime(?: totala)? de'),
-  (24, 'cuvant_cheie', 'cantitate'), (25, 'cuvant_cheie', 'numar(?: de bucati)?|nr\.?(?: buc\.?)?');
+  (24, 'cuvant_cheie', 'cantitate'), (25, 'cuvant_cheie', 'numar(?: de bucati)?|nr[.]?(?: buc[.]?)?');
 ALTER TABLE public.ofertare_elemente_masura ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.ofertare_tipare_cantitate ENABLE ROW LEVEL SECURITY;
 CREATE POLICY ofertare_elemente_masura_select ON public.ofertare_elemente_masura FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL);
@@ -1536,14 +1545,301 @@ BEGIN
   END LOOP;
 END $acl$;
 COMMENT ON VIEW public.v_ofertare_clarificari_baza IS 'R9b + 20270112a: starea review-ului textului exact pe baza curentă (auto_planse_* = baza F3; auto_surse_* = evaluarea publicată a semnalului), cu diferențe și valori pentru panoul intern. Necesita_review și luat_act nu sunt aprobări de export. security_invoker.';
-
--- @@SECTIUNE_10@@
-
--- ─── 99. Postcondiții ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-DO $post$
-DECLARE r record; v_rau text; v_alt text;
+-- 9i. proveniența (20261026a) — ABATERE DECLARATĂ față de inventarul planului (#7 „neatins”), găsită de dry-run-ul cu JWT complet: fn_ofertare_surse_valideaza
+--     decide „utilizator” DOAR după rolul din request.jwt.claims; într-un RPC SECURITY DEFINER chemat de un om (ofertare_clarificare_reconfirma de azi,
+--     fn_ofertare_semnal_raspuns_leaga de aici) rolul JWT rămâne „authenticated”, deci scrierea baza_generare / sursa pe o ciornă automată era refuzată
+--     („Proveniența clarificării automate … o scrie doar serverul”). Textul LIVE EXACT, cu O schimbare: utilizator = rolul JWT ȘI current_user ∈ (authenticated, anon)
+--     (în DEFINER current_user = proprietarul funcției, postgres; scrierile directe prin PostgREST rămân cu current_user = authenticated → refuzate ca azi).
+--     Verificabil pe clonă cu JWT real pe o ciornă auto_planse_*: înainte de migrare reconfirmarea pică, după migrare trece. Revenirea readuce textul LIVE.
+CREATE OR REPLACE FUNCTION public.fn_ofertare_surse_valideaza()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path = public, pg_temp
+AS $fn$
+DECLARE
+  v_lipsa bigint;
+  v_rol text := coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role', '');
+  v_utilizator boolean;
+  -- 20261026a: pe ofertare_cerinte se validează surse_document_ids (blocul comun de la final), ca pe cantități.
+  -- sursele derivate de server (clarificarea automată): un ID DISPĂRUT (inexistent global) se păstrează — codul îl tratează ca
+  -- neverificabil = exclus; un ID existent în ALTĂ licitație se refuză ca la orice scriere (review Copilot r1 P1 #1)
+  v_derivat boolean := false;
+  v_max constant int := 20000;   -- fără trunchiere: baza F3 a clarificării automate poate avea sute de rânduri (Jakarinos r6 P2)
 BEGIN
-  -- @@POST@@
+  -- 20270112a: scrierile din RPC-urile SECURITY DEFINER (current_user = proprietarul) nu sunt scrieri de utilizator, oricare ar fi rolul din JWT
+  v_utilizator := v_rol IN ('authenticated', 'anon') AND current_user IN ('authenticated', 'anon');
+  IF v_utilizator THEN
+    IF TG_OP = 'INSERT' THEN
+      IF NEW.surse_document_ids IS NOT NULL THEN
+        RAISE EXCEPTION 'Sursele (surse_*) le scrie doar serverul' USING ERRCODE = '42501';
+      END IF;
+      IF TG_TABLE_NAME = 'ofertare_clarificari' THEN
+        -- originile rezervate serverului (automat, platforma) nu se inserează de utilizator (review Copilot r3 P1)
+        IF NEW.surse_cerinte_ids IS NOT NULL OR NEW.surse_cantitati_ids IS NOT NULL OR NEW.origine IN ('automat', 'platforma') THEN
+          RAISE EXCEPTION 'Sursele (surse_*) și clarificările generate (automat / platforma) le scrie doar serverul' USING ERRCODE = '42501';
+        END IF;
+      END IF;
+    ELSE
+      IF NEW.surse_document_ids IS DISTINCT FROM OLD.surse_document_ids THEN
+        RAISE EXCEPTION 'Sursele (surse_*) le scrie doar serverul' USING ERRCODE = '42501';
+      END IF;
+      IF TG_TABLE_NAME = 'ofertare_clarificari' THEN
+        IF NEW.surse_cerinte_ids IS DISTINCT FROM OLD.surse_cerinte_ids OR NEW.surse_cantitati_ids IS DISTINCT FROM OLD.surse_cantitati_ids THEN
+          RAISE EXCEPTION 'Sursele (surse_*) le scrie doar serverul' USING ERRCODE = '42501';
+        END IF;
+        -- originea e atribut de proveniență: imuabilă pentru utilizator după INSERT (fără spălare platforma -> manual, Copilot r3 P1)
+        IF NEW.origine IS DISTINCT FROM OLD.origine THEN
+          RAISE EXCEPTION 'Originea clarificării nu se schimbă după creare' USING ERRCODE = '42501';
+        END IF;
+        IF OLD.origine = 'automat' AND (NEW.sursa, NEW.baza_generare) IS DISTINCT FROM (OLD.sursa, OLD.baza_generare) THEN
+          RAISE EXCEPTION 'Proveniența clarificării automate (origine / sursa / baza_generare) o scrie doar serverul' USING ERRCODE = '42501';
+        END IF;
+      END IF;
+    END IF;
+  END IF;
+
+  IF TG_TABLE_NAME = 'ofertare_clarificari' THEN
+    -- Clarificarea AUTOMATĂ din planșe (ofertare_clarificare_planse_auto, scrisă doar de server): sursele se derivă din
+    -- ce a folosit funcția — planșele din `sursa` („planse_auto:475,474,…”), documentele și rândurile de cantități din
+    -- baza_generare. Fără să rescriem RPC-ul de 12k. La UPDATE sursele NU scad (reuniune cu cele vechi, Jakarinos r6 P1 #6):
+    -- o ciornă protejată își poate păstra textul despre o planșă scoasă din `sursa` — planșa rămâne în proveniență.
+    IF NEW.origine = 'automat' AND (TG_OP = 'INSERT' OR NEW.sursa IS DISTINCT FROM OLD.sursa
+                                    OR NEW.baza_generare IS DISTINCT FROM OLD.baza_generare OR NEW.origine IS DISTINCT FROM OLD.origine
+                                    OR NEW.surse_document_ids IS DISTINCT FROM OLD.surse_document_ids
+                                    OR NEW.surse_cantitati_ids IS DISTINCT FROM OLD.surse_cantitati_ids) THEN
+      NEW.surse_document_ids := (SELECT array_agg(DISTINCT x ORDER BY x) FROM (
+          SELECT t::bigint AS x FROM unnest(string_to_array(replace(coalesce(NEW.sursa, ''), 'planse_auto:', ''), ',')) t
+           WHERE coalesce(NEW.sursa, '') LIKE 'planse_auto:%' AND t ~ '^[0-9]{1,18}$'
+          UNION
+          SELECT (e->>'id')::bigint FROM jsonb_array_elements(CASE WHEN jsonb_typeof(NEW.baza_generare->'documente') = 'array'
+                                                                   THEN NEW.baza_generare->'documente' ELSE '[]'::jsonb END) e
+           WHERE e->>'id' ~ '^[0-9]{1,18}$'
+          UNION
+          SELECT y FROM unnest(CASE WHEN TG_OP = 'UPDATE' THEN OLD.surse_document_ids END) y WHERE y IS NOT NULL
+          UNION   -- 20261026a: sursele scrise EXPLICIT de server odată cu textul (ofertare_clarificare_planse_auto)
+          SELECT y FROM unnest(NEW.surse_document_ids) y WHERE y IS NOT NULL) s);
+      NEW.surse_cantitati_ids := (SELECT array_agg(DISTINCT x ORDER BY x) FROM (
+          SELECT (e->>'id')::bigint AS x
+            FROM jsonb_array_elements(CASE WHEN jsonb_typeof(NEW.baza_generare->'randuri') = 'array'
+                                           THEN NEW.baza_generare->'randuri' ELSE '[]'::jsonb END) e
+           WHERE e->>'id' ~ '^[0-9]{1,18}$'
+          UNION
+          SELECT y FROM unnest(CASE WHEN TG_OP = 'UPDATE' THEN OLD.surse_cantitati_ids END) y WHERE y IS NOT NULL
+          UNION   -- 20261026a: idem, cantitățile scrise explicit
+          SELECT y FROM unnest(NEW.surse_cantitati_ids) y WHERE y IS NOT NULL) s);
+      v_derivat := true;
+    END IF;
+    IF NEW.surse_cerinte_ids IS NOT NULL THEN
+      IF array_position(NEW.surse_cerinte_ids, NULL) IS NOT NULL OR cardinality(NEW.surse_cerinte_ids) > v_max THEN
+        RAISE EXCEPTION 'surse_cerinte_ids: fără NULL, maxim %', v_max USING ERRCODE = '22023';
+      END IF;
+      NEW.surse_cerinte_ids := (SELECT array_agg(DISTINCT x ORDER BY x) FROM unnest(NEW.surse_cerinte_ids) x);
+      SELECT x INTO v_lipsa FROM unnest(NEW.surse_cerinte_ids) x
+       WHERE NOT EXISTS (SELECT 1 FROM public.ofertare_cerinte c WHERE c.id = x AND c.licitatie_id = NEW.licitatie_id) LIMIT 1;
+      IF FOUND THEN RAISE EXCEPTION 'surse_cerinte_ids: cerința % nu există în licitația %', v_lipsa, NEW.licitatie_id USING ERRCODE = '23503'; END IF;
+    END IF;
+    IF NEW.surse_cantitati_ids IS NOT NULL THEN
+      IF array_position(NEW.surse_cantitati_ids, NULL) IS NOT NULL OR cardinality(NEW.surse_cantitati_ids) > v_max THEN
+        RAISE EXCEPTION 'surse_cantitati_ids: fără NULL, maxim %', v_max USING ERRCODE = '22023';
+      END IF;
+      NEW.surse_cantitati_ids := (SELECT array_agg(DISTINCT x ORDER BY x) FROM unnest(NEW.surse_cantitati_ids) x);
+      SELECT x INTO v_lipsa FROM unnest(NEW.surse_cantitati_ids) x
+       WHERE NOT EXISTS (SELECT 1 FROM public.ofertare_cantitati q WHERE q.id = x AND q.licitatie_id = NEW.licitatie_id)
+         AND (NOT v_derivat OR EXISTS (SELECT 1 FROM public.ofertare_cantitati q WHERE q.id = x)) LIMIT 1;
+      IF FOUND THEN RAISE EXCEPTION 'surse_cantitati_ids: cantitatea % nu există în licitația %', v_lipsa, NEW.licitatie_id USING ERRCODE = '23503'; END IF;
+    END IF;
+  END IF;
+  -- surse_document_ids: pe ambele tabele
+  IF NEW.surse_document_ids IS NOT NULL THEN
+    IF array_position(NEW.surse_document_ids, NULL) IS NOT NULL OR cardinality(NEW.surse_document_ids) > v_max THEN
+      RAISE EXCEPTION 'surse_document_ids: fără NULL, maxim %', v_max USING ERRCODE = '22023';
+    END IF;
+    NEW.surse_document_ids := (SELECT array_agg(DISTINCT x ORDER BY x) FROM unnest(NEW.surse_document_ids) x);
+    SELECT x INTO v_lipsa FROM unnest(NEW.surse_document_ids) x
+     WHERE NOT EXISTS (SELECT 1 FROM public.ofertare_documente_atribuire d WHERE d.id = x AND d.licitatie_id = NEW.licitatie_id)
+       AND (NOT v_derivat OR EXISTS (SELECT 1 FROM public.ofertare_documente_atribuire d WHERE d.id = x)) LIMIT 1;
+    IF FOUND THEN RAISE EXCEPTION 'surse_document_ids: documentul % nu există în licitația %', v_lipsa, NEW.licitatie_id USING ERRCODE = '23503'; END IF;
+  END IF;
+  RETURN NEW;
+END$fn$;
+
+-- ─── 10. Postcondiții (exacte): funcțiile noi (limbaj / definer / volatil / drepturi ca rol:drept), corpurile rescrise (amprentă + ACL păstrat),
+--     triggerele, tabelele (RLS, politici, drepturi), UNIQUE-ul, vederea (coloane, opțiune, drepturi), lanțul de apel al funcțiilor noi ──────
+DO $post$
+DECLARE r record; v_rau text; v_alt text; v_n integer;
+BEGIN
+  -- functiile noi: limbaj / definer / volatil / strict / leakproof / search_path / proprietar / drepturi EXACTE (forma amprentei, rol:drept)
+  FOR r IN SELECT * FROM (VALUES
+      ('public.fn_ofertare_masura_identitate(bigint,integer,text,text,text,text)', 'sql', false, 'i', 'postgres:EXECUTE'),
+      ('public.fn_trg_ofertare_masuratori_licitatie()', 'plpgsql', false, 'v', 'postgres:EXECUTE'),
+      ('public.fn_trg_ofertare_masuratori_imuabil()', 'plpgsql', false, 'v', 'postgres:EXECUTE'),
+      ('public.fn_ofertare_masura_norm(text)', 'sql', false, 'i', 'postgres:EXECUTE'),
+      ('public.fn_ofertare_numar_ro(text)', 'plpgsql', false, 'i', 'postgres:EXECUTE'),
+      ('public.fn_ofertare_um_canonica(text,text)', 'plpgsql', false, 's', 'postgres:EXECUTE'),
+      ('public.fn_ofertare_masura_dn(text)', 'sql', false, 'i', 'postgres:EXECUTE'),
+      ('public.fn_ofertare_masura_clasifica(text,text,text,numeric[],text,text,text)', 'plpgsql', false, 's', 'postgres:EXECUTE'),
+      ('public.fn_ofertare_masura_lot(text,integer[],text)', 'sql', false, 'i', 'postgres:EXECUTE'),
+      ('public.fn_ofertare_masura_pagini_permise(jsonb,integer)', 'sql', false, 'i', 'postgres:EXECUTE'),
+      ('public.fn_ofertare_masura_pagini(text)', 'sql', false, 'i', 'postgres:EXECUTE'),
+      ('public.fn_ofertare_masura_pagina(text,integer)', 'plpgsql', false, 'i', 'postgres:EXECUTE'),
+      ('public.fn_ofertare_masura_verifica(text,jsonb)', 'plpgsql', false, 's', 'postgres:EXECUTE'),
+      ('public.fn_ofertare_masura_felii_autoritative(bigint)', 'sql', false, 's', 'postgres:EXECUTE'),
+      ('public.fn_ofertare_masura_pagini_neacoperite(text,bigint)', 'sql', false, 's', 'postgres:EXECUTE'),
+      ('public.fn_ofertare_semnale_fotografie(bigint)', 'plpgsql', true, 's', 'postgres:EXECUTE, service_role:EXECUTE'),
+      ('public.fn_ofertare_semnale_context(bigint,text,bigint)', 'plpgsql', true, 's', 'postgres:EXECUTE, service_role:EXECUTE'),
+      ('public.fn_ofertare_semnale_felii(bigint,bigint[],bigint,integer,integer)', 'sql', true, 's', 'postgres:EXECUTE, service_role:EXECUTE'),
+      ('public.fn_ofertare_semnal_rezolvat(public.ofertare_cantitati_semnale)', 'sql', true, 's', 'postgres:EXECUTE'),
+      ('public.fn_ofertare_semnal_ciorna_libera(public.ofertare_clarificari)', 'sql', false, 'i', 'postgres:EXECUTE'),
+      ('public.fn_ofertare_semnal_upsert(bigint,bigint,integer,text,text,text,text)', 'plpgsql', false, 'v', 'postgres:EXECUTE'),
+      ('public.fn_ofertare_masura_numar_text(numeric)', 'sql', false, 'i', 'postgres:EXECUTE'),
+      ('public.fn_ofertare_semnal_text(bigint,bigint)', 'plpgsql', false, 's', 'postgres:EXECUTE'),
+      ('public.fn_ofertare_semnale_setari(bigint,numeric,integer)', 'plpgsql', true, 'v', 'authenticated:EXECUTE, postgres:EXECUTE'),
+      ('public.fn_ofertare_semnal_raspuns_leaga(bigint,bigint,numeric)', 'plpgsql', true, 'v', 'authenticated:EXECUTE, postgres:EXECUTE'),
+      ('public.fn_ofertare_semnale_lista(bigint)', 'plpgsql', true, 's', 'authenticated:EXECUTE, postgres:EXECUTE'),
+      ('public.fn_ofertare_masuratori_propune(bigint,uuid,jsonb,jsonb)', 'plpgsql', true, 'v', 'postgres:EXECUTE, service_role:EXECUTE'),
+      ('public.fn_ofertare_semnale_publica(bigint,bigint,uuid)', 'plpgsql', true, 'v', 'postgres:EXECUTE, service_role:EXECUTE'),
+      ('public.ofertare_semnal_baza_stare(public.ofertare_clarificari,text)', 'plpgsql', true, 's', 'authenticated:EXECUTE, postgres:EXECUTE, service_role:EXECUTE'),
+      ('public.fn_ofertare_ciorna_auto_stare(public.ofertare_clarificari,text)', 'plpgsql', true, 's', 'authenticated:EXECUTE, postgres:EXECUTE, service_role:EXECUTE')
+    ) v(fn, limbaj, definer, volatil, acl) LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
+                    WHERE p.oid = to_regprocedure(r.fn) AND l.lanname = r.limbaj AND p.prosecdef = r.definer AND p.provolatile = r.volatil
+                      AND p.prokind = 'f' AND NOT p.proisstrict AND NOT p.proleakproof
+                      AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp'] AND pg_get_userbyid(p.proowner) = 'postgres'
+                      AND NOT EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a WHERE a.grantee = 0)
+                      AND (SELECT string_agg(a.d, ', ' ORDER BY a.d COLLATE "C") FROM (
+                             SELECT CASE e.grantee WHEN 0 THEN 'PUBLIC' ELSE pg_get_userbyid(e.grantee) END || ':' || e.privilege_type
+                                    || CASE WHEN e.is_grantable THEN '*' ELSE '' END AS d
+                               FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) e) a) = r.acl) THEN
+      RAISE EXCEPTION '20270112a: postconditie: functia % (limbaj / definer / volatil / strict / leakproof / search_path / owner / drepturi exacte)', r.fn;
+    END IF;
+  END LOOP;
+  SELECT count(*) INTO v_n FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public'
+   AND (p.proname LIKE 'fn\_ofertare\_masura\_%' OR p.proname LIKE 'fn\_ofertare\_semnal%' OR p.proname LIKE 'fn\_ofertare\_masuratori\_%'
+        OR p.proname IN ('fn_ofertare_numar_ro', 'fn_ofertare_um_canonica', 'fn_ofertare_ciorna_auto_stare', 'ofertare_semnal_baza_stare', 'fn_trg_ofertare_masuratori_licitatie', 'fn_trg_ofertare_masuratori_imuabil'));
+  IF v_n <> 30 THEN RAISE EXCEPTION '20270112a: postconditie: % functii noi in loc de 30 (supraincarcari sau lipsuri)', v_n; END IF;
+  -- corpurile rescrise: amprenta noua EXACTA (valorile = md5 al textului din acest fisier, verificate de proba PGlite), proprietati si ACL pastrate
+  FOR r IN SELECT * FROM (VALUES
+      -- >>> AMPRENTE NOI
+      ('public.fn_trg_ofertare_clarificari_baza()', 'fde8334c4a8af8db114423e95220b74f', false, '{postgres=X/postgres}'),
+      ('public.ofertare_clarificare_reconfirma(bigint,text,text,text)', 'c01c40284cb4513abb79aa9eea69e86b', true, '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}'),
+      ('public.ofertare_clarificare_exceptie_identitate(bigint,text,text)', 'd35e5e1fb801d843a9d5192ce30df282', true, '{postgres=X/postgres,authenticated=X/postgres}'),
+      ('public.ofertare_clarificari_export(bigint)', '328b25f3431c5fc51a016d5ef359e453', false, '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}'),
+      ('public.ofertare_clarificari_notifica(bigint)', 'c18e8787e66b34f6b69b0d005f344896', true, '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}'),
+      ('public.fn_ofertare_surse_valideaza()', '739ba119df5d51bc4981091de810a25e', true, '{postgres=X/postgres}')
+      -- <<< AMPRENTE NOI
+    ) v(fn, corp_md5, definer, acl) LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.oid = to_regprocedure(r.fn)
+                     AND md5(replace(p.prosrc, chr(13), '')) = r.corp_md5 AND l.lanname = 'plpgsql' AND p.prosecdef = r.definer
+                     AND p.proconfig = ARRAY['search_path=public, pg_temp'] AND pg_get_userbyid(p.proowner) = 'postgres') THEN
+      RAISE EXCEPTION '20270112a: postconditie: % nu are corpul / proprietatile asteptate dupa rescriere', r.fn;
+    END IF;
+    -- ACL-ul: identic cu cel fotografiat in $stare$ (CREATE OR REPLACE il pastreaza); forma asteptata documentata in VALUES
+    IF (SELECT string_agg(rol || ':' || drept, ', ' ORDER BY rol || ':' || drept COLLATE "C") FROM cm_fn_acl WHERE fn = r.fn)
+       IS DISTINCT FROM (SELECT string_agg(a.d, ', ' ORDER BY a.d COLLATE "C") FROM (
+                           SELECT CASE e.grantee WHEN 0 THEN 'PUBLIC' ELSE pg_get_userbyid(e.grantee) END || ':' || e.privilege_type AS d
+                             FROM pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) e WHERE p.oid = to_regprocedure(r.fn)) a) THEN
+      RAISE EXCEPTION '20270112a: postconditie: drepturile functiei % s-au schimbat la rescriere', r.fn;
+    END IF;
+  END LOOP;
+  -- dependenta neatinsa (baza F3 a ciornelor de planse)
+  IF NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = to_regprocedure('public.ofertare_clarificare_baza_stare(bigint,text,text,jsonb)') AND md5(replace(p.prosrc, chr(13), '')) = '1eb3d1c9992ff06a6e76fb79692a9313') THEN
+    RAISE EXCEPTION '20270112a: postconditie: ofertare_clarificare_baza_stare schimbata';
+  END IF;
+  -- triggerul de provenienta ramane pe aceeasi functie, neschimbat ca definitie (doar corpul functiei e rescris)
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger tg WHERE tg.tgrelid = 'public.ofertare_clarificari'::regclass AND tg.tgname = 'a02_ofertare_clarificari_surse'
+                   AND tg.tgfoid = to_regprocedure('public.fn_ofertare_surse_valideaza()') AND tg.tgenabled = 'O' AND tg.tgtype = 23) THEN
+    RAISE EXCEPTION '20270112a: postconditie: triggerul a02_ofertare_clarificari_surse';
+  END IF;
+  -- triggerele: pe ofertare_clarificari lista neschimbata si trg_ofertare_clarificari_baza exact; pe tabelele noi, exact
+  IF (SELECT string_agg(tgname::text, ', ' ORDER BY tgname::text) FROM pg_trigger WHERE tgrelid = 'public.ofertare_clarificari'::regclass AND NOT tgisinternal)
+       IS DISTINCT FROM 'a02_ofertare_clarificari_surse, trg_ofertare_cb_clarificari_jurnal, trg_ofertare_clarificari_baza'
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger tg WHERE tg.tgrelid = 'public.ofertare_clarificari'::regclass AND tg.tgname = 'trg_ofertare_clarificari_baza'
+                      AND tg.tgfoid = to_regprocedure('public.fn_trg_ofertare_clarificari_baza()') AND tg.tgtype = 31 AND tg.tgenabled = 'O' AND tg.tgqual IS NULL AND tg.tgnargs = 0) THEN
+    RAISE EXCEPTION '20270112a: postconditie: triggerele ofertare_clarificari';
+  END IF;
+  FOR r IN SELECT * FROM (VALUES
+      ('public.ofertare_cantitati_masuratori', 'trg_ofertare_masuratori_licitatie', 'public.fn_trg_ofertare_masuratori_licitatie()', 23),
+      ('public.ofertare_cantitati_masuratori', 'trg_ofertare_masuratori_imuabil', 'public.fn_trg_ofertare_masuratori_imuabil()', 27),
+      ('public.ofertare_cantitati_evaluari', 'trg_ofertare_evaluari_imuabil', 'public.fn_trg_ofertare_masuratori_imuabil()', 27)) v(t, tg, fn, tip) LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger tg WHERE tg.tgrelid = r.t::regclass AND tg.tgname = r.tg AND NOT tg.tgisinternal AND tg.tgfoid = to_regprocedure(r.fn)
+                     AND tg.tgtype = r.tip AND tg.tgenabled = 'O' AND tg.tgqual IS NULL AND tg.tgnargs = 0 AND tg.tgattr = ''::int2vector) THEN
+      RAISE EXCEPTION '20270112a: postconditie: triggerul % pe %', r.tg, r.t;
+    END IF;
+  END LOOP;
+  IF (SELECT string_agg(tgname::text, ', ' ORDER BY tgname::text) FROM pg_trigger WHERE tgrelid = 'public.ofertare_cantitati_masuratori'::regclass AND NOT tgisinternal)
+       IS DISTINCT FROM 'trg_ofertare_masuratori_imuabil, trg_ofertare_masuratori_licitatie'
+     OR (SELECT string_agg(tgname::text, ', ' ORDER BY tgname::text) FROM pg_trigger WHERE tgrelid = 'public.ofertare_cantitati_evaluari'::regclass AND NOT tgisinternal)
+       IS DISTINCT FROM 'trg_ofertare_evaluari_imuabil' THEN
+    RAISE EXCEPTION '20270112a: postconditie: lista triggerelor pe masuratori / evaluari';
+  END IF;
+  -- tabelele noi: RLS activ, o singura politica (SELECT, authenticated), drepturi EXACTE (authenticated / service_role: SELECT; anon / PUBLIC: nimic)
+  FOR r IN SELECT * FROM (VALUES
+      ('public.ofertare_elemente_masura', 'ofertare_elemente_masura_select', '(auth.uid() IS NOT NULL)'),
+      ('public.ofertare_tipare_cantitate', 'ofertare_tipare_cantitate_select', '(auth.uid() IS NOT NULL)'),
+      ('public.ofertare_cantitati_setari', 'ofertare_cantitati_setari_select', '((auth.uid() IS NOT NULL) AND fn_are_acces_ofertare())'),
+      ('public.ofertare_cantitati_evaluari', 'ofertare_cantitati_evaluari_select', '((auth.uid() IS NOT NULL) AND fn_are_acces_ofertare())'),
+      ('public.ofertare_cantitati_semnale', 'ofertare_cantitati_semnale_select', '((auth.uid() IS NOT NULL) AND fn_are_acces_ofertare())'),
+      ('public.ofertare_cantitati_masuratori', 'ofertare_cantitati_masuratori_select', '((auth.uid() IS NOT NULL) AND fn_are_acces_ofertare())')) v(t, pol, qual) LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = r.t::regclass AND c.relrowsecurity AND NOT c.relforcerowsecurity)
+       OR (SELECT count(*) FROM pg_policy p WHERE p.polrelid = r.t::regclass) <> 1
+       OR NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = r.t::regclass AND p.polname = r.pol AND p.polcmd = 'r' AND p.polpermissive
+                        AND p.polroles = ARRAY['authenticated'::regrole]::oid[] AND pg_get_expr(p.polqual, p.polrelid) = r.qual AND p.polwithcheck IS NULL)
+       OR (SELECT string_agg(a.d, ', ' ORDER BY a.d COLLATE "C") FROM (
+             SELECT CASE e.grantee WHEN 0 THEN 'PUBLIC' ELSE pg_get_userbyid(e.grantee) END || ':' || e.privilege_type AS d
+               FROM pg_class c, aclexplode(coalesce(c.relacl, acldefault('r', c.relowner))) e WHERE c.oid = r.t::regclass AND pg_get_userbyid(e.grantee) <> 'postgres') a)
+          IS DISTINCT FROM 'authenticated:SELECT, service_role:SELECT' THEN
+      RAISE EXCEPTION '20270112a: postconditie: RLS / politica / drepturile tabelului %', r.t;
+    END IF;
+  END LOOP;
+  IF (SELECT count(*) FROM public.ofertare_elemente_masura) <> 139 OR (SELECT count(*) FROM public.ofertare_tipare_cantitate) <> 19 THEN
+    RAISE EXCEPTION '20270112a: postconditie: listele inchise (139 elemente, 19 tipare)';
+  END IF;
+  -- UNIQUE (licitatie_id, nr), validat
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid = 'public.ofertare_clarificari'::regclass AND c.conname = 'ofertare_clarificari_licitatie_nr_uq' AND c.contype = 'u'
+                   AND c.convalidated AND pg_get_constraintdef(c.oid) = 'UNIQUE (licitatie_id, nr)') THEN
+    RAISE EXCEPTION '20270112a: postconditie: UNIQUE (licitatie_id, nr) pe ofertare_clarificari';
+  END IF;
+  -- vederea: aceleasi coloane (ordinea si numele), security_invoker, dispecerul in definitie, drepturile identice cu cele fotografiate
+  IF (SELECT string_agg(a.attname::text, ',' ORDER BY a.attnum) FROM pg_attribute a WHERE a.attrelid = 'public.v_ofertare_clarificari_baza'::regclass AND a.attnum > 0 AND NOT a.attisdropped)
+       IS DISTINCT FROM 'id,licitatie_id,nr,status,stare,mod_ciorna,mod_curent,amprenta_curenta,marcaj_planse,text,detalii'
+     OR NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = 'public.v_ofertare_clarificari_baza'::regclass AND c.relkind = 'v' AND 'security_invoker=on' = ANY (c.reloptions))
+     OR pg_get_viewdef('public.v_ofertare_clarificari_baza'::regclass) NOT LIKE '%fn_ofertare_ciorna_auto_stare(c.*, ''afisare''::text)%'
+     OR pg_get_viewdef('public.v_ofertare_clarificari_baza'::regclass) NOT LIKE '%~ ''^auto_(planse|surse)_''%'
+     OR (SELECT string_agg(rol || ':' || drept, ', ' ORDER BY rol || ':' || drept COLLATE "C") FROM cm_view_acl)
+        IS DISTINCT FROM (SELECT string_agg(a.d, ', ' ORDER BY a.d COLLATE "C") FROM (
+                            SELECT CASE e.grantee WHEN 0 THEN 'PUBLIC' ELSE pg_get_userbyid(e.grantee) END || ':' || e.privilege_type AS d
+                              FROM pg_class c, aclexplode(coalesce(c.relacl, acldefault('r', c.relowner))) e WHERE c.oid = 'public.v_ofertare_clarificari_baza'::regclass) a) THEN
+    RAISE EXCEPTION '20270112a: postconditie: vederea v_ofertare_clarificari_baza (coloane / security_invoker / dispecer / drepturi)';
+  END IF;
+  -- protocolul lock-urilor: niciuna dintre functiile circuitului nu ia advisory si nu parcurge ciornele ORDER BY id FOR UPDATE; advisory DOAR in propune / publica
+  IF EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid IN (to_regprocedure('public.fn_trg_ofertare_clarificari_baza()'), to_regprocedure('public.ofertare_clarificare_reconfirma(bigint,text,text,text)'),
+               to_regprocedure('public.ofertare_clarificare_exceptie_identitate(bigint,text,text)'), to_regprocedure('public.ofertare_clarificari_export(bigint)'),
+               to_regprocedure('public.ofertare_clarificari_notifica(bigint)'), to_regprocedure('public.ofertare_semnal_baza_stare(public.ofertare_clarificari,text)'),
+               to_regprocedure('public.fn_ofertare_ciorna_auto_stare(public.ofertare_clarificari,text)'), to_regprocedure('public.fn_ofertare_semnal_raspuns_leaga(bigint,bigint,numeric)'))
+               AND (p.prosrc ~* 'pg_advisory' OR p.prosrc ~* 'ORDER BY id FOR UPDATE'))
+     OR (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.prosrc ~ 'pg_advisory_xact_lock\(hashtextextended\(''ofertare_cantitati_semnale:') <> 2 THEN
+    RAISE EXCEPTION '20270112a: postconditie: protocolul lock-urilor (advisory / ORDER BY id FOR UPDATE)';
+  END IF;
+  -- functiile noi cheama (in afara pg_catalog) DOAR: una pe alta, auth.uid, fn_are_acces_ofertare, fn_ofertare_source_pack_poate_decide, ofertare_clarificare_baza_stare; nimic dinamic
+  SELECT string_agg(DISTINCT p2.oid::regprocedure::text, ', ') INTO v_alt
+    FROM pg_proc p CROSS JOIN LATERAL regexp_matches(p.prosrc, '([[:alpha:]_][[:alnum:]_$]*)"?[[:space:]]*[(]', 'g') w
+    JOIN pg_proc p2 ON lower(p2.proname) = lower(w[1]) AND p2.oid <> p.oid
+   WHERE p.pronamespace = 'public'::regnamespace
+     AND (p.proname LIKE 'fn\_ofertare\_masura\_%' OR p.proname LIKE 'fn\_ofertare\_semnal%' OR p.proname LIKE 'fn\_ofertare\_masuratori\_%'
+          OR p.proname IN ('fn_ofertare_numar_ro', 'fn_ofertare_um_canonica', 'fn_ofertare_ciorna_auto_stare', 'ofertare_semnal_baza_stare', 'fn_trg_ofertare_masuratori_licitatie', 'fn_trg_ofertare_masuratori_imuabil'))
+     AND p2.pronamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
+     AND NOT (p2.pronamespace = 'public'::regnamespace AND (p2.proname LIKE 'fn\_ofertare\_masura\_%' OR p2.proname LIKE 'fn\_ofertare\_semnal%' OR p2.proname LIKE 'fn\_ofertare\_masuratori\_%'
+          OR p2.proname IN ('fn_ofertare_numar_ro', 'fn_ofertare_um_canonica', 'fn_ofertare_ciorna_auto_stare', 'ofertare_semnal_baza_stare')))
+     AND p2.oid NOT IN (to_regprocedure('auth.uid()'), to_regprocedure('public.fn_are_acces_ofertare()'), to_regprocedure('public.fn_ofertare_source_pack_poate_decide(bigint)'),
+                        to_regprocedure('public.ofertare_clarificare_baza_stare(bigint,text,text,jsonb)'));
+  IF v_alt IS NOT NULL
+     OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
+                  AND (p.proname LIKE 'fn\_ofertare\_masura\_%' OR p.proname LIKE 'fn\_ofertare\_semnal%' OR p.proname LIKE 'fn\_ofertare\_masuratori\_%'
+                       OR p.proname IN ('fn_ofertare_numar_ro', 'fn_ofertare_um_canonica', 'fn_ofertare_ciorna_auto_stare', 'ofertare_semnal_baza_stare', 'fn_trg_ofertare_masuratori_licitatie', 'fn_trg_ofertare_masuratori_imuabil'))
+                  AND regexp_replace(p.prosrc, '''execute''', '', 'gi') ~* '[[:<:]]execute[[:>:]]') THEN
+    RAISE EXCEPTION '20270112a: postconditie: functiile noi cheama in afara lantului declarat: %', coalesce(v_alt, 'cod dinamic');
+  END IF;
   IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20270112a_ofertare_cantitati_masuratori:' || txid_current() THEN
     RAISE EXCEPTION '20270112a: garda final invalida';
   END IF;

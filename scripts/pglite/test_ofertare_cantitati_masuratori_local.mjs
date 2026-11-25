@@ -103,9 +103,9 @@ async function livreaza(db, text, { nume = NUME, plafon = PLAFON_LIVRARE, marcaj
   } finally { await db.exec('RESET transaction_timeout') }
 }
 const revino = (db, text = REV, o = {}) => livreaza(db, text, { nume: NUME_REV, plafon: PLAFON_REVENIRE, ag: false, ...o })
-async function bazaAplicata() {
+async function bazaAplicata(text = MIG) {
   const db = await bazaNoua()
-  const a = await livreaza(db, MIG)
+  const a = await livreaza(db, text)
   if (!a.ok) throw new Error('aplicarea migrarii a picat: ' + a.eroare)
   return db
 }
@@ -117,23 +117,26 @@ const stare = async db => (await db.query(`SELECT
     (SELECT string_agg(tgname::text, ',' ORDER BY tgname::text) FROM pg_trigger WHERE tgrelid = 'public.ofertare_clarificari'::regclass AND NOT tgisinternal) AS triggere,
     (SELECT count(*)::int FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND (proname LIKE 'fn\\_ofertare\\_masura%' OR proname LIKE 'fn\\_ofertare\\_semnal%' OR proname IN ('fn_ofertare_numar_ro', 'fn_ofertare_um_canonica', 'fn_ofertare_ciorna_auto_stare', 'ofertare_semnal_baza_stare'))) AS functii_noi,
     EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ofertare_clarificari_licitatie_nr_uq') AS uq_nr,
-    (SELECT string_agg(md5(replace(prosrc, chr(13), '')), ',' ORDER BY proname) FROM pg_proc WHERE proname IN ('fn_trg_ofertare_clarificari_baza', 'ofertare_clarificare_reconfirma', 'ofertare_clarificare_exceptie_identitate', 'ofertare_clarificari_export', 'ofertare_clarificari_notifica')) AS corpuri_r9b,
+    (SELECT string_agg(md5(replace(prosrc, chr(13), '')), ',' ORDER BY proname) FROM pg_proc WHERE proname IN ('fn_trg_ofertare_clarificari_baza', 'ofertare_clarificare_reconfirma', 'ofertare_clarificare_exceptie_identitate', 'ofertare_clarificari_export', 'ofertare_clarificari_notifica', 'fn_ofertare_surse_valideaza')) AS corpuri_r9b,
     md5(pg_get_viewdef('public.v_ofertare_clarificari_baza'::regclass)) AS view_md5,
     (SELECT count(*)::int FROM public.ofertare_clarificari) AS clarificari`)).rows[0]
 let STARE_VECHE = null
 const eVeche = s => s.tabele === null && s.triggere === STARE_VECHE.triggere && s.functii_noi === 0 && s.uq_nr === false && s.corpuri_r9b === STARE_VECHE.corpuri_r9b && s.view_md5 === STARE_VECHE.view_md5
 
 // ── rularea ca un cont (ROLLBACK la final) / într-o tranzacție ──
+// JWT-ul ca PostgREST: AMBELE surse (request.jwt.claim.sub și request.jwt.claims cu rolul) — triggerul de proveniență citește rolul din claims
+const jwt = (uid, rol) => uid ? `SELECT set_config('request.jwt.claim.sub', '${uid}', true); SELECT set_config('request.jwt.claims', '{"sub": "${uid}", "role": "${rol}"}', true);`
+  : `SELECT set_config('request.jwt.claims', '{"role": "${rol}"}', true);`
 async function ca(db, cont, sql, params = [], { rol = 'authenticated' } = {}) {
   const uid = cont ? U[cont] : null
-  await db.exec(`BEGIN; SET LOCAL ROLE ${rol}; ${uid ? `SELECT set_config('request.jwt.claim.sub', '${uid}', true);` : ''}`)
+  await db.exec(`BEGIN; SET LOCAL ROLE ${rol}; ${jwt(uid, rol)}`)
   try { const r = await db.query(sql, params); await db.exec('ROLLBACK'); return { rows: r.rows, fields: r.fields.map(f => f.name) } }
   catch (e) { await db.exec('ROLLBACK'); return { code: e.code, message: e.message } }
 }
 // scriere COMISĂ ca un cont (sau ca service_role / postgres cu cont = null, rol dat)
 async function scrieCa(db, cont, sql, params = [], { rol = 'authenticated' } = {}) {
   const uid = cont ? U[cont] : null
-  await db.exec(`BEGIN; ${rol ? `SET LOCAL ROLE ${rol};` : ''} ${uid ? `SELECT set_config('request.jwt.claim.sub', '${uid}', true);` : ''}`)
+  await db.exec(`BEGIN; ${rol ? `SET LOCAL ROLE ${rol}; ${jwt(uid, rol)}` : ''}`)
   try { const r = await db.query(sql, params); await db.exec('COMMIT'); return { ok: true, rows: r.rows } }
   catch (e) { await db.exec('ROLLBACK'); return { ok: false, code: e.code, message: e.message } }
 }
@@ -311,13 +314,14 @@ if (vrea('t1') && MIG) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-if (vrea('t2') && MIG) {
-  console.log('t2. regula numerică, clasificarea, lotul, paginile permise, verificarea dovezilor (tabel / text)')
-  const db = await bazaAplicata()
+const TN = JSON.parse(citeste('supabase/tests/20270112a_cazuri_numar.json'))
+const TP = JSON.parse(citeste('supabase/tests/20270112a_cazuri_plafon.json'))
+let T2_REZUMAT = ''
+// verificările t2 pe o bază cu migrarea aplicată (refolosite de mutanți): întoarce abaterile
+async function verificaT2(db) {
   const ab = []
   const J = async (sql, params = []) => (await q(db, sql, params))[0].x
   // t2_numar_ro — tabelul comun de cazuri
-  const TN = JSON.parse(citeste('supabase/tests/20270112a_cazuri_numar.json'))
   const decod = s => Object.entries(TN._marcaje).reduce((t, [k, [cod, ori]]) => t.split(k).join(String.fromCharCode(cod).repeat(ori)), s)
   for (const c of TN.cazuri) {
     const r = await J(`SELECT public.fn_ofertare_numar_ro($1) x`, [decod(c.text)])
@@ -361,7 +365,6 @@ if (vrea('t2') && MIG) {
     if (!bun) ab.push(`t2_um ${JSON.stringify(arg)}: ${JSON.stringify(r)}`)
   }
   // t2_pagini_permise — tabelul comun
-  const TP = JSON.parse(citeste('supabase/tests/20270112a_cazuri_plafon.json'))
   for (const c of TP.cazuri) {
     const r = await J(`SELECT public.fn_ofertare_masura_pagini_permise($1::jsonb, $2) x`, [JSON.stringify(c.documente), c.plafon])
     if (JSON.stringify(r.limita) !== JSON.stringify(c.limita) || r.plafon_atins !== c.plafon_atins) ab.push(`t2_pagini_permise ${c.nume}: ${JSON.stringify(r)}`)
@@ -400,7 +403,7 @@ if (vrea('t2') && MIG) {
   }
   const ATR = PAG(1, 'AVIZ TEHNIC DE RACORDARE', 'Se va executa o conductă DN 160, lungime 250 m, din PE100.', 'Rețeaua este în lungime totală de 3.995 m.', 'L = 1.200 m pe strada A.',
     'număr de bucăți 12 buc robineți.', 'Tub DN160 montat.', 'Tubul are lungime 160 mm grosime.', 'lungime DN160 m', 'lungime Dn 160 m', 'conductă Dn 160, lungime 250 m',
-    'aproximativ 250 de metri', '250 m de conductă', 'lungime 3.995,50 m', 'lungime 1.23 m', 'lungime 250 t', 'lungime 6' + String.fromCharCode(160) + '400 m', 'lungime 2 km')
+    'aproximativ 250 de metri', '250 m de conductă', 'lungime 3.995,50 m', 'lungime 1.23 m', 'lungime 250 t', 'lungime 6' + String.fromCharCode(160) + '400 m', 'lungime 2 km', 'cablul 250 m')
     + PAG(3, 'fragment prezent pe pagina 3')
   const X = (fragment, pagina = 1, element = 'teava_pe_dn160') => ({ pagina, fel_dovada: 'text', fragment, element })
   const cazX = [
@@ -417,6 +420,7 @@ if (vrea('t2') && MIG) {
     ['t2_text_diametru conductă Dn 160, lungime 250 m', X('conductă Dn 160, lungime 250 m'), { verificare: 'ok', valoare: 250 }],
     ['t2_text_nelegat aproximativ', X('aproximativ 250 de metri'), { verificare: 'tipar_necunoscut' }],
     ['t2_text_nelegat fără cuvânt-cheie înainte', X('250 m de conductă'), { verificare: 'tipar_necunoscut' }],
+    ['t2_text_nelegat cuvântul-cheie „l” în interiorul unui cuvânt (cablul)', X('cablul 250 m'), { verificare: 'tipar_necunoscut' }],
     ['t2_text_nelegat neîntreg', X('lungime 3.995,50 m'), { verificare: 'numar_neintreg' }],
     ['t2_text_nelegat ambiguu', X('lungime 1.23 m'), { verificare: 'numar_ambiguu' }],
     ['t2_text_nelegat unitate_incompatibila', X('lungime 250 t'), { verificare: 'unitate_incompatibila' }],
@@ -436,8 +440,15 @@ if (vrea('t2') && MIG) {
   for (const fn of [`fn_ofertare_numar_ro('6')`, `fn_ofertare_masura_clasifica('x', 'm', 'alt', '{}', NULL, 'alt', 'f3')`, `fn_ofertare_masura_verifica('x', '{}')`, `fn_ofertare_masura_pagini_permise('[]', 1)`]) {
     for (const rol of ['authenticated', 'service_role']) asteptCod(await ca(db, 'OF', `SELECT public.${fn}`, [], { rol }), '42501', `t2 EXECUTE ${rol} pe ${fn.split('(')[0]}`, ab)
   }
+  T2_REZUMAT = `${TN.cazuri.length} cazuri numerice, ${CL.length} clasificări, ${TP.cazuri.length} cazuri de plafon, ${cazT.length} dovezi tabel, ${cazX.length} dovezi text`
+  return ab
+}
+if (vrea('t2') && MIG) {
+  console.log('t2. regula numerică, clasificarea, lotul, paginile permise, verificarea dovezilor (tabel / text)')
+  const db = await bazaAplicata()
+  const ab = await verificaT2(db)
   ab.forEach(x => console.log('     ' + x))
-  ok(ab.length === 0, `t2: ${TN.cazuri.length} cazuri numerice, ${CL.length} clasificări, ${TP.cazuri.length} cazuri de plafon, ${cazT.length} dovezi tabel, ${cazX.length} dovezi text (${ab.length} abateri)`)
+  ok(ab.length === 0, `t2: ${T2_REZUMAT} (${ab.length} abateri)`)
   await db.close()
 }
 
@@ -482,9 +493,9 @@ const stareBaza = async (db, clarId, mod = 'afisare') => {
   if (!exista) return null
   return (await q(db, `SELECT public.ofertare_semnal_baza_stare(c, $2) x FROM public.ofertare_clarificari c WHERE c.id = $1`, [clarId, mod]))[0]?.x
 }
-const abateriT3 = []
-async function scenariu(nume, fn) {
-  const db = await bazaAplicata()
+const S3 = {}, S4 = {}
+async function scenariu(nume, fn, text = MIG) {
+  const db = await bazaAplicata(text)
   const ab = []
   try { await fn(db, ab) } catch (e) { ab.push('excepție: ' + (e.message || e).toString().slice(0, 300)) } finally { await db.close() }
   ab.forEach(x => console.log('     ' + x))
@@ -492,9 +503,9 @@ async function scenariu(nume, fn) {
 }
 const ast = (ab, cond, msg) => { if (!cond) ab.push(msg) }
 
-if (vrea('t3') && MIG) {
-  console.log('t3. fotografia, propunerea, publicarea, ciorna auto_surse_*, răspunsul, lista, drepturile')
-  await scenariu('t3_cazul_tichetului', async (db, ab) => {
+{ // t3: scenariile (definite mereu; rulate doar cu --sectiune t3)
+  S3._titlu = 't3. fotografia, propunerea, publicarea, ciorna auto_surse_*, răspunsul, lista, drepturile'
+  S3['t3_cazul_tichetului'] = async (db, ab) => {
     const f = await fixturaTichet(db)
     const r = await evalueaza(db)
     ast(ab, !r.propune.refuz, 'propune refuzat: ' + JSON.stringify(r.propune))
@@ -519,8 +530,8 @@ if (vrea('t3') && MIG) {
     ast(ab, r2.semnale.length === 1 && r2.semnale[0].clarificare === 'neatinsa' && (await ciorne(db)).length === 1, 'reevaluare fără schimbări: ' + JSON.stringify(r2.semnale))
     const s2 = (await semnalCunoscut(db))[0]
     ast(ab, s2.evaluare_amprenta === s.evaluare_amprenta, 'amprenta evaluării stabilă')
-  })
-  await scenariu('t3_natura', async (db, ab) => {
+  }
+  S3['t3_natura'] = async (db, ab) => {
     await fixturaTichet(db, { cantitati: [{ denumire: 'Furnizare teava PE100 DN160', um: 'M', cantitate: 6400, cod: 'SA11G1' }, { denumire: 'Montaj teava PE100 DN160', um: 'M', cantitate: 6400, cod: 'SA11G1' }] })
     const r = await evalueaza(db)
     const ss = await semnale(db)
@@ -528,8 +539,8 @@ if (vrea('t3') && MIG) {
     ast(ab, fiz && fiz.verdict === 'diferenta' && Number(fiz.valoare_a) === 6400, 'fizica: ' + JSON.stringify(fiz?.verdict))
     ast(ab, mon && mon.verdict === 'de_verificat' && mon.motiv === 'o singură sursă', 'montaj = altă măsură, fără semnal de diferență: ' + JSON.stringify([mon?.verdict, mon?.motiv]))
     ast(ab, (await ciorne(db)).length === 1, 'o singură ciornă (pe fizica)')
-  })
-  await scenariu('t3_total_vs_tronson', async (db, ab) => {
+  }
+  S3['t3_total_vs_tronson'] = async (db, ab) => {
     const f = await fixturaTichet(db, { f3Text: PAG(1, 'Formularul F3', 'Nr. Cod Denumire UM Cantitate', '003 SA11G1 TEAVA PE100 DN160 M 4.000', '004 SA11G2 TEAVA PE100 DN160 M 2.400'),
       obsF3: [], cantitati: [{ denumire: 'Furnizare teava PE100 DN160', um: 'M', cantitate: 4000, cod: 'SA11G1', obiect: 'X' }, { denumire: 'Furnizare teava PE100 DN160', um: 'M', cantitate: 2400, cod: 'SA11G2', obiect: 'Y' }] })
     const r = await evalueaza(db)
@@ -551,8 +562,8 @@ if (vrea('t3') && MIG) {
     ast(ab, star2 && star2.verdict === 'de_verificat' && star2.motiv === 'o singură sursă' && star2.valoare_b === null, '* nu primește valoarea obiectului X: ' + JSON.stringify([star2?.verdict, star2?.motiv]))
     const c = await ciorne(db)
     ast(ab, c.length === 1 && c[0].status === 'retrasa' && c[0].baza_generare.retrasa_de === 'sistem', 'ciorna * retrasă de sistem: ' + JSON.stringify(c.map(x => [x.status, x.baza_generare?.retrasa_de])))
-  })
-  await scenariu('t3_total_componente', async (db, ab) => {
+  }
+  S3['t3_total_componente'] = async (db, ab) => {
     const txt = PAG(1, 'AVIZ TEHNIC DE RACORDARE', 'Tronson 1: în lungime totală de 2.000 m.', 'Tronson 2: în lungime totală de 1.995 m.', 'Total rețea: în lungime totală de 3.995 m.')
     const f = await fixturaTichet(db, { atrText: txt, obsAtr: [OBS_ATR(2000, { citat: 'în lungime totală de 2.000 m' }), OBS_ATR(1995, { citat: 'în lungime totală de 1.995 m' }), OBS_ATR(3995, { citat: 'în lungime totală de 3.995 m', e_total: true })] })
     await evalueaza(db)
@@ -570,8 +581,8 @@ if (vrea('t3') && MIG) {
     await evalueaza(db)
     s = (await semnalCunoscut(db))[0]
     ast(ab, s.verdict === 'diferenta' && Number(s.valoare_b) === 3995, 'doar total → 3995: ' + JSON.stringify([s.verdict, s.valoare_b]))
-  })
-  await scenariu('t3_doua_documente_b', async (db, ab) => {
+  }
+  S3['t3_doua_documente_b'] = async (db, ab) => {
     const f = await fixturaTichet(db)
     const d2 = await document(db, { tip: 'alta', nume: 'DOC_ATR_T2', text: ATR_TEXT })
     await extragere(db, d2, { obs: [OBS_ATR(3995)] })
@@ -583,8 +594,8 @@ if (vrea('t3') && MIG) {
     await evalueaza(db)
     s = (await semnalCunoscut(db))[0]
     ast(ab, s.verdict === 'de_verificat' && s.motiv === 'documentele diferă între ele', 'DOC_ATR_T2 = 6400: ' + JSON.stringify([s.verdict, s.motiv]))
-  })
-  await scenariu('t3_extrageri_duble + t3_identitate_pozitiei', async (db, ab) => {
+  }
+  S3['t3_extrageri_duble + t3_identitate_pozitiei'] = async (db, ab) => {
     const f = await fixturaTichet(db)
     const exB = await extragere(db, f.dAtr, { extractor: 'extr-B', obs: [OBS_ATR(3995)] })
     const r = await evalueaza(db)
@@ -607,8 +618,19 @@ if (vrea('t3') && MIG) {
     await evalueaza(db)
     const s3 = (await semnalCunoscut(db))[0]
     ast(ab, Number(s3.valoare_a) === 12800 && (await masuratori(db, s3.id, s3.evaluare_id)).filter(x => x.parte === 'a').length === 2, 'două poziții F3 → A = 12800: ' + JSON.stringify([s3.valoare_a]))
-  })
-  await scenariu('t3_loturi', async (db, ab) => {
+  }
+  S3['t3_identitate_pozitiei_dublura'] = async (db, ab) => {
+    // aceeași poziție scrisă de două ori ca măsurătoare `a` (între propune și publică, ca postgres) → numărată O dată
+    await fixturaTichet(db)
+    const p = await propune(db)
+    const m = (await q(db, `SELECT * FROM public.ofertare_cantitati_masuratori WHERE evaluare_id = $1 AND parte = 'a' LIMIT 1`, [p.evaluare_id]))[0]
+    await db.query(`INSERT INTO public.ofertare_cantitati_masuratori (licitatie_id, evaluare_id, semnal_id, parte, cantitate_id, document_id, revizie, doc_sha256, pagina, fel_dovada, rand, celula, valoare_text, um_text, valoare, um_canonica, natura, verificare)
+      SELECT licitatie_id, evaluare_id, semnal_id, parte, cantitate_id, document_id, revizie, doc_sha256, pagina, fel_dovada, rand, celula, valoare_text, um_text, valoare, um_canonica, natura, verificare FROM public.ofertare_cantitati_masuratori WHERE id = $1`, [m.id])
+    await publica(db, LIC, p.evaluare_id, p.token)
+    const s = (await semnalCunoscut(db))[0]
+    ast(ab, Number(s.valoare_a) === 6400 && s.inventar.a.componente === 1, 'cantitate_id dublat → A = 6400, o componentă: ' + JSON.stringify([s.valoare_a, s.inventar.a]))
+  }
+  S3['t3_loturi'] = async (db, ab) => {
     // licitație cu loturi: F3 lot 1 vs observație lista {2} → măsuri diferite, fără semnal
     const f = await fixturaTichet(db, { lic: LIC_LOT, obsAtr: [OBS_ATR(3995, { lot_domeniu: 'lista', lot_nr: [2] })], cantitati: [{ denumire: 'Furnizare teava PE100 DN160', um: 'M', cantitate: 6400, cod: 'SA11G1', lot_domeniu: 'lista', lot_nr: [1] }] })
     await evalueaza(db, LIC_LOT)
@@ -636,8 +658,8 @@ if (vrea('t3') && MIG) {
     const sh0 = (await foto(db)).sha
     await db.query(`UPDATE public.ofertare_licitatii SET stare_loturi = 'are_loturi' WHERE id = $1`, [LIC])
     ast(ab, (await foto(db)).sha !== sh0, 'stare_loturi schimbată → fotografie nouă')
-  })
-  await scenariu('t3_neclasificat', async (db, ab) => {
+  }
+  S3['t3_neclasificat'] = async (db, ab) => {
     const f = await fixturaTichet(db, { atrText: PAG(1, 'AVIZ', 'Rețeaua este în lungime totală de 3.995 m.', 'teava DN160 si DN110 în lungime totală de 100 m'),
       obsAtr: [OBS_ATR(3995), OBS_ATR(100, { denumire: 'teava DN160 si DN110', dn: [160, 110], citat: 'în lungime totală de 100 m' })] })
     await evalueaza(db)
@@ -657,8 +679,8 @@ if (vrea('t3') && MIG) {
     ss = await semnale(db)
     const cun3 = ss.find(x => x.element === 'teava_pe_dn160')
     ast(ab, cun3.verdict === 'diferenta', 'poziție neclasificată cu UM ore nu blochează: ' + JSON.stringify([cun3.verdict, cun3.motiv]))
-  })
-  await scenariu('t3_incomplet', async (db, ab) => {
+  }
+  S3['t3_incomplet'] = async (db, ab) => {
     // poziție F3 fără surse → fara_sursa
     const f = await fixturaTichet(db, { cantitati: [{ denumire: 'Furnizare teava PE100 DN160', um: 'M', cantitate: 6400, cod: 'SA11G1', surse: null }] })
     await evalueaza(db)
@@ -682,10 +704,11 @@ if (vrea('t3') && MIG) {
     let r = await evalueaza(db, LIC, { pagini: { ...PAGINI_GOL, pagini_necitite: [{ document_id: f.dAtr, pagini: [1] }] } })
     s = (await semnalCunoscut(db))[0]
     ast(ab, s.verdict === 'neverificat' && /agregare incompletă \(DOC_ATR_T: pagini 1\)/.test(s.motiv), 'pagini_necitite ale rulării: ' + s.motiv)
-    // felii_incomplete pe F3 (de la edge) → idem
-    r = await evalueaza(db, LIC, { pagini: { ...PAGINI_GOL, felii_incomplete: [{ extragere_id: f.exF3.id, felie_nr: 0, motiv: 'deficit' }] } })
+    // felii_incomplete pe F3 (de la edge) → idem; inventarul intră în amprentă: aceleași măsurători / verdict / valori, alt inventar → altă amprentă
+    const ampr0 = s.evaluare_amprenta
+    r = await evalueaza(db, LIC, { pagini: { ...PAGINI_GOL, pagini_necitite: [{ document_id: f.dAtr, pagini: [1] }], felii_incomplete: [{ extragere_id: f.exF3.id, felie_nr: 0, motiv: 'deficit' }] } })
     s = (await semnalCunoscut(db))[0]
-    ast(ab, s.verdict === 'neverificat' && /DOC_F3_T: felii 0 deficit/.test(s.motiv), 'felii_incomplete pe F3: ' + s.motiv)
+    ast(ab, s.verdict === 'neverificat' && /DOC_F3_T: felii 0 deficit/.test(s.motiv) && s.evaluare_amprenta !== ampr0, 'felii_incomplete pe F3 + inventar diferit → altă amprentă: ' + s.motiv)
     // o pagină a ATR-ului fără felie gata → idem (pagina 2 adăugată în text, extragere nouă cu felia doar pe pagina 1)
     const txt2 = ATR_TEXT + PAG(2, 'pagina a doua')
     await db.query(`UPDATE public.ofertare_documente_atribuire SET text_extras = $2 WHERE id = $1`, [f.dAtr, txt2])
@@ -705,8 +728,8 @@ if (vrea('t3') && MIG) {
     await evalueaza(db)
     s = (await semnalCunoscut(db))[0]
     ast(ab, s.verdict === 'neverificat' && /DOC_ATR_T: pagini 1/.test(s.motiv), 'pagini_necitite ale documentului: ' + s.motiv)
-  })
-  await scenariu('t3_document_necitit + t3_incomplet_f3', async (db, ab) => {
+  }
+  S3['t3_document_necitit + t3_incomplet_f3'] = async (db, ab) => {
     const f = await fixturaTichet(db)
     const d2 = await document(db, { tip: 'alta', nume: 'DOC_ATR_T2', text: ATR_TEXT })
     await evalueaza(db, LIC, { pagini: { ...PAGINI_GOL, documente_necitite: [d2] } })
@@ -728,8 +751,8 @@ if (vrea('t3') && MIG) {
     await evalueaza(db, LIC, { pagini: { ...PAGINI_GOL, documente_necitite: [d2], felii_incomplete: [{ extragere_id: f.exF3.id, felie_nr: 0, motiv: 'incerte' }] } })
     s = (await semnalCunoscut(db))[0]
     ast(ab, /^document necitit/.test(s.motiv), 'ordinea regulilor: (1) înaintea (4)')
-  })
-  await scenariu('t3_ordinea_regulilor + t3_formula', async (db, ab) => {
+  }
+  S3['t3_ordinea_regulilor + t3_formula'] = async (db, ab) => {
     // nedovedit + total ≠ componente → neverificat (4 înaintea 6)
     const txt = PAG(1, 'AVIZ', 'Tronson 1: în lungime totală de 2.000 m.', 'Total rețea: în lungime totală de 4.500 m.')
     const f = await fixturaTichet(db, { atrText: txt, obsAtr: [OBS_ATR(2000, { citat: 'în lungime totală de 2.000 m' }), OBS_ATR(1995, { citat: 'în lungime totală de 1.995 m', dovedita: false }), OBS_ATR(4500, { citat: 'în lungime totală de 4.500 m', e_total: true })] })
@@ -776,8 +799,8 @@ if (vrea('t3') && MIG) {
     await evalueaza(db)
     s = (await semnalCunoscut(db))[0]
     ast(ab, s.verdict === 'diferenta', '3 vs 4 (33 %, |Δ| = 1 ≥ 1 unitate) → diferenta: ' + JSON.stringify([s.verdict, s.motiv]))
-  })
-  await scenariu('t3_depasita + t3_izolare + t3_extragere_noua_intre_rpc + t3_plafon_vechi', async (db, ab) => {
+  }
+  S3['t3_depasita + t3_izolare + t3_extragere_noua_intre_rpc + t3_plafon_vechi'] = async (db, ab) => {
     const f = await fixturaTichet(db)
     // fotografie veche la propune
     const fv = await foto(db)
@@ -828,8 +851,15 @@ if (vrea('t3') && MIG) {
     await evalueaza(db)
     s2 = (await semnalCunoscut(db))[0]; m2 = await masuratori(db, s2.id, s2.evaluare_id)
     ast(ab, s2.verdict === 'in_regula' && m2.filter(x => x.parte === 'b').every(x => x.verificare === 'ok') && s2.valori_b.length === 2, 'plafon 300 → incluse ca ok → in_regula: ' + JSON.stringify([s2.verdict, s2.motiv]))
-  })
-  await scenariu('t3_tranzitii + t3_document_sters + t3_identitate_disparuta', async (db, ab) => {
+    // felie reluată (încercarea 2, fără observații noi) între propune și publică: aceeași extragere, aceleași observații → doar felii_sha se schimbă → depasita
+    const pE = await propune(db)
+    const exA = (await q(db, `SELECT max(id) AS id FROM public.ofertare_cant_extrageri WHERE document_id = $1 AND stare = 'gata'`, [f.dAtr]))[0].id
+    await db.query(`INSERT INTO public.ofertare_cant_felii (munca_id, incercare, extragere_id, felie_nr, de_la, pana_la, sha_felie, stare, motiv_reluare, inchisa_la)
+      SELECT munca_id, 2, extragere_id, felie_nr, de_la, pana_la, sha_felie, 'gata', 'reluata in proba', now() FROM public.ofertare_cant_felii WHERE extragere_id = $1 AND incercare = 1`, [exA])
+    const pubE = await publica(db, LIC, pE.evaluare_id, pE.token)
+    ast(ab, pubE.refuz === 'evaluare_depasita', 'felie reluată între RPC-uri (doar felii_sha schimbat) → evaluare_depasita: ' + JSON.stringify(pubE.refuz))
+  }
+  S3['t3_tranzitii + t3_document_sters + t3_identitate_disparuta'] = async (db, ab) => {
     const f = await fixturaTichet(db)
     await evalueaza(db)
     let c = (await ciorne(db))[0], s = (await semnalCunoscut(db))[0]
@@ -887,8 +917,8 @@ if (vrea('t3') && MIG) {
     ast(ab, vechi && vechi.verdict === 'de_verificat' && vechi.motiv === 'sursă dispărută' && nou && nou.verdict === 'diferenta', 'identitate dispărută / nouă: ' + JSON.stringify(ss2.map(x => [x.element, x.verdict, x.motiv])))
     ast(ab, cc2.length === 2 && cc2.find(x => x.cheie === 'auto_surse_' + vechi.identitate).status === 'propunere' && cc2.find(x => x.cheie === 'auto_surse_' + nou.identitate).status === 'propunere', 'ciorna veche EDITATĂ rămâne (neatinsă), ciornă nouă pe identitatea nouă: ' + JSON.stringify(cc2.map(x => [x.cheie.slice(0, 16), x.status])))
     ast(ab, cc2.map(x => x.nr).join(',') === '1,2', 'nr-urile alocate în ordine: ' + cc2.map(x => x.nr).join(','))
-  })
-  await scenariu('t3_document_sters', async (db, ab) => {
+  }
+  S3['t3_document_sters'] = async (db, ab) => {
     // documentul B fără extragere nu are observații → B din observații cere extragere → ștergerea documentului e refuzată de FK-urile extragerii (comportament existent).
     // Dovada deciziei 9 pe calea posibilă: documentul-sursă al pozițiilor A, fără extragere → măsurătorile a dispar în cascadă, fotografia se schimbă imediat, reevaluarea dă fara_sursa.
     const f = await fixturaTichet(db)
@@ -907,8 +937,8 @@ if (vrea('t3') && MIG) {
     s = (await semnalCunoscut(db))[0]
     const m = await masuratori(db, s.id, s.evaluare_id)
     ast(ab, m.some(x => x.parte === 'a' && x.verificare === 'fara_sursa') && s.verdict === 'neverificat', 'reevaluare: fara_sursa: ' + JSON.stringify(m.map(x => [x.parte, x.verificare])))
-  })
-  await scenariu('t3_raspuns', async (db, ab) => {
+  }
+  S3['t3_raspuns'] = async (db, ab) => {
     const f = await fixturaTichet(db)
     await evalueaza(db)
     let s = (await semnalCunoscut(db))[0]
@@ -945,8 +975,8 @@ if (vrea('t3') && MIG) {
     const s2 = (await semnalCunoscut(db, LIC2))[0]
     const okL2 = await scrieCa(db, 'OWNER', `SELECT public.fn_ofertare_semnal_raspuns_leaga($1, $2, $3) x`, [s2.id, dR2, 6400])
     ast(ab, okL2.ok && okL2.rows[0].x.clarificare === 'neatinsa' && (await ciorne(db, LIC2))[0].status === 'propunere' && (await semnale(db, LIC2))[0].rezolvat === true, 'ciornă editată → neatinsă; revizie NULL → „-”: ' + JSON.stringify(okL2))
-  })
-  await scenariu('t3_drept + t3_lista_actual + t3_felii + t3_context', async (db, ab) => {
+  }
+  S3['t3_drept + t3_lista_actual + t3_felii + t3_context'] = async (db, ab) => {
     const f = await fixturaTichet(db)
     const r = await evalueaza(db)
     for (const [fn, args] of [['fn_ofertare_semnale_fotografie', [LIC]], ['fn_ofertare_masuratori_propune', [LIC, '00000000-0000-4000-8000-000000000001', '{}', '{}']], ['fn_ofertare_semnale_publica', [LIC, 1, '00000000-0000-4000-8000-000000000001']],
@@ -1054,8 +1084,9 @@ if (vrea('t3') && MIG) {
     await db.query(`INSERT INTO public.ofertare_cant_doc_decizii (licitatie_id, document_id, doc_sha256, decizie, revoca_id, motiv, decis_de) VALUES ($1, $2, $3, 'revocare', $4, 'proba', $5)`, [LIC, f.dF3, sha256(F3_TEXT), dz, U.RESP])
     const fo3 = await foto(db)
     ast(ab, fo3.documente.find(x => Number(x.id) === f.dF3).decizii_sha === sha256(''), 'revocarea scoate decizia din decizii_sha')
-  })
+  }
 }
+if (vrea('t3') && MIG) { console.log(S3._titlu); for (const nume of Object.keys(S3).filter(k => k !== '_titlu')) await scenariu(nume, S3[nume]) }
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 // t4: circuitul auto_planse_* extins la auto_surse_* (inventarul #2–#6, #9), ca authenticated cu / fără drept de decizie
@@ -1070,9 +1101,9 @@ async function aproba(db, ab, clarId, cont = 'RESP') {
   ast(ab, r.ok && r.rows[0].x.ok === true, 'reconfirmarea: ' + JSON.stringify(r.rows?.[0]?.x || r.message))
   return v
 }
-if (vrea('t4') && MIG) {
-  console.log('t4. circuitul ciornelor automate pe auto_surse_*: trigger, reconfirmare, excepție, view, export, notificare, stări, lanțul authenticated')
-  await scenariu('t4_trigger_surse + t4_reconfirmare_surse + t4_view_surse + t4_export_surse', async (db, ab) => {
+{ // t4: scenariile (definite mereu; rulate doar cu --sectiune t4)
+  S4._titlu = 't4. circuitul ciornelor automate pe auto_surse_*: trigger, reconfirmare, excepție, view, export, notificare, stări, lanțul authenticated'
+  S4['t4_trigger_surse + t4_reconfirmare_surse + t4_view_surse + t4_export_surse'] = async (db, ab) => {
     const f = await fixturaTichet(db)
     await evalueaza(db)
     let c = (await ciorne(db))[0], s = (await semnalCunoscut(db))[0]
@@ -1103,6 +1134,15 @@ if (vrea('t4') && MIG) {
     ast(ab, st.stare === 'ok' && c.baza_generare.reconfirmare.token === st.token_aprobare && c.baza_generare.reconfirmare.token_curent === st.amprenta_curenta && c.baza_generare.reconfirmare.evaluare_amprenta === s.evaluare_amprenta && c.baza_generare.reconfirmare.surse_sha === s.surse_sha,
       'reconfirmarea scrie token_aprobare / token_curent / evaluare_amprenta / surse_sha: ' + JSON.stringify([st.stare, Object.keys(c.baza_generare.reconfirmare)]))
     ast(ab, (await vedere(db, 'OF', c.id)).stare === 'ok', 'view după reconfirmare: ok')
+    // ciorna aprobată, încă propunere (reconfirmare în bază): sursa se schimbă → alt text propus → sistemul NU o rescrie (nu e „liberă”), doar neatinsa
+    await db.query(`UPDATE public.ofertare_cantitati SET cantitate = 6500 WHERE licitatie_id = $1`, [LIC])
+    const evAp = await evalueaza(db)
+    const cAp = (await ciorne(db))[0]
+    ast(ab, cAp.intrebare === c.intrebare && cAp.status === 'propunere' && cAp.baza_generare.reconfirmare && evAp.semnale[0]?.clarificare === 'neatinsa',
+      'propunere aprobată, sursă schimbată → textul aprobat NU e rescris (neatinsa): ' + JSON.stringify([cAp.intrebare === c.intrebare, cAp.status, evAp.semnale[0]?.clarificare]))
+    await db.query(`UPDATE public.ofertare_cantitati SET cantitate = 6400 WHERE licitatie_id = $1`, [LIC])
+    await evalueaza(db)
+    ast(ab, (await vedere(db, 'OF', c.id)).stare === 'ok', 'sursa revenită, reevaluată: aceeași amprentă → ok')
     // de_trimis ok; export ok
     const dt = await upd(db, 'RESP', c.id, `status = 'de_trimis'`)
     ast(ab, dt.ok, 'de_trimis după reconfirmare: ' + (dt.message || 'ok'))
@@ -1167,8 +1207,8 @@ if (vrea('t4') && MIG) {
     vv = await vedere(db, 'RESP', c.id)
     ast(ab, vv.stare === 'rezolvata_de_raspuns' && /semnal rezolvat prin răspunsul Autorității/.test(vv.text) && (await ciorne(db))[0].status === 'de_trimis', 'răspuns confirmat → rezolvata_de_raspuns, ciorna aprobată neatinsă: ' + JSON.stringify([vv.stare, vv.text]))
     asteptMesaj(await exporta(db, 'RESP'), /Export blocat: semnal rezolvat prin răspunsul Autorității/, 'rezolvata_de_raspuns: export blocat', ab)
-  })
-  await scenariu('t4_trigger_new_nu_old + t4_stari + t4_notifica_surse + t4_exceptie_surse_refuz', async (db, ab) => {
+  }
+  S4['t4_trigger_new_nu_old + t4_stari + t4_notifica_surse + t4_exceptie_surse_refuz'] = async (db, ab) => {
     const f = await fixturaTichet(db)
     await evalueaza(db)
     let c = (await ciorne(db))[0]
@@ -1237,8 +1277,8 @@ if (vrea('t4') && MIG) {
     const vo = await vedere(db, 'RESP', orf)
     ast(ab, vo.stare === 'indisponibila' && /necesită review/.test(vo.text), 'ciornă fără semnal → indisponibila: ' + JSON.stringify([vo.stare, vo.text]))
     asteptMesaj(await upd(db, 'RESP', orf, `status = 'de_trimis'`), /Clarificare blocată/, 'orfana nu trece la de_trimis', ab)
-  })
-  await scenariu('t4_lant_authenticated + t4_planse_neschimbat + t4_fara_advisory + t4_drepturi', async (db, ab) => {
+  }
+  S4['t4_lant_authenticated + t4_planse_neschimbat + t4_fara_advisory + t4_drepturi'] = async (db, ab) => {
     const f = await fixturaTichet(db)
     await evalueaza(db)
     const c = (await ciorne(db))[0]
@@ -1296,7 +1336,331 @@ if (vrea('t4') && MIG) {
     const vacl = (await q(db, `SELECT string_agg(pg_get_userbyid(e.grantee) || ':' || e.privilege_type, ', ' ORDER BY pg_get_userbyid(e.grantee) || ':' || e.privilege_type) AS acl FROM pg_class c, aclexplode(coalesce(c.relacl, acldefault('r', c.relowner))) e WHERE c.oid = 'public.v_ofertare_clarificari_baza'::regclass`))[0].acl
     ast(ab, vacl === 'authenticated:SELECT, postgres:DELETE, postgres:INSERT, postgres:MAINTAIN, postgres:REFERENCES, postgres:SELECT, postgres:TRIGGER, postgres:TRUNCATE, postgres:UPDATE, service_role:DELETE, service_role:INSERT, service_role:MAINTAIN, service_role:REFERENCES, service_role:SELECT, service_role:TRIGGER, service_role:TRUNCATE, service_role:UPDATE',
       'ACL-ul vederii re-acordat identic (ca mulțime rol:drept, cea a scheletului): ' + vacl)
-  })
+  }
+}
+if (vrea('t4') && MIG) { console.log(S4._titlu); for (const nume of Object.keys(S4).filter(k => k !== '_titlu')) await scenariu(nume, S4[nume]) }
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// t5: livrarea L15 v2 (validator, amprente, manifest, refuzuri, revenire, dry-run) și mutanții
+const listaObiecte = text => text.split('\n').filter(l => l && !l.startsWith('#')).map(l => l.split('\t').slice(0, 3).join('\t')).sort()
+const FARA_POST = t => { const a = t.indexOf('DO $post$'), b = t.indexOf('END $post$;') + 'END $post$;'.length; return t.slice(0, a) + "DO $post$ BEGIN RAISE NOTICE 'postconditii scoase (mutant)'; END $post$;" + t.slice(b) }
+const randuriBloc = (text, et) => text.slice(text.indexOf(`-- >>> ${et}`), text.indexOf(`-- <<< ${et}`)).split('\n').map(l => l.trim().replace(/,$/, '')).filter(l => l.startsWith("('"))
+  .map(l => { const m = /^\('([^']+)', '([0-9a-f]{32})'/.exec(l); return m ? [m[1], m[2]] : null }).filter(Boolean)
+if (vrea('t5') && MIG) {
+  console.log('t5.0 validatorul runnerului')
+  {
+    const vm = validator(join(ROOT, F_MIG), '--plafon-tranzactie-ms', String(PLAFON_LIVRARE))
+    ok(PLAFON_LIVRARE === 5000 && vm.ok && /^OK \d+ /.test(vm.out), `migrarea trece validatorul cu ${PLAFON_LIVRARE}: ${vm.out}`)
+    const vm2 = validator(join(ROOT, F_MIG), '--plafon-tranzactie-ms', '2000')
+    ok(!vm2.ok && /PLAFON_DIFERIT/.test(vm2.out), 'migrarea cu runnerul la 2000 = refuz: ' + vm2.out.split('\n')[0].slice(0, 120))
+    const vmf = validator(join(ROOT, F_MIG), '--fara-plafon')
+    ok(!vmf.ok && /PLAFON_LIPSA/.test(vmf.out), 'migrarea fără plafon = refuz local: ' + vmf.out.split('\n')[0].slice(0, 120))
+    if (REV) {
+      const vr = validator(join(ROOT, F_REV), '--plafon-tranzactie-ms', String(PLAFON_REVENIRE))
+      ok(vr.ok && /^OK \d+ /.test(vr.out), 'revenirea trece validatorul cu 2000: ' + vr.out)
+      const vr2 = validator(join(ROOT, F_REV), '--plafon-tranzactie-ms', String(PLAFON_LIVRARE))
+      ok(!vr2.ok && /PLAFON_DIFERIT/.test(vr2.out), 'revenirea cu runnerul la 5000 = refuz: ' + vr2.out.split('\n')[0].slice(0, 120))
+    } else ok(false, 'revenirea lipsește: ' + F_REV)
+    ok(!/^﻿/.test(readFileSync(join(ROOT, F_MIG), 'utf8')) && !/\r/.test(readFileSync(join(ROOT, F_MIG), 'utf8')) && (!REV || !/\r/.test(readFileSync(join(ROOT, F_REV), 'utf8'))), 'fișierele SQL: fără BOM, LF')
+  }
+  console.log('t5.1 amprentele scrise în migrare / revenire = calculate (LIVE pe schelet; NOI pe textul migrării și pe bază)')
+  {
+    const db = await bazaNoua()
+    STARE_VECHE = STARE_VECHE || await stare(db)
+    const live = randuriBloc(MIG, 'AMPRENTE LIVE')
+    const dbLive = Object.fromEntries((await q(db, `SELECT p.oid::regprocedure::text AS fn, md5(replace(p.prosrc, chr(13), '')) AS m FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace`)).map(r => [r.fn.replace(/^public\./, '').replace(/, /g, ','), r.m]))
+    const difLive = live.filter(([fn, m]) => dbLive[fn.replace(/^public\./, '').replace(/, /g, ',')] !== m)
+    ok(live.length === 7 && difLive.length === 0, `AMPRENTE LIVE (7) din $pre$ = corpurile scheletului (R5_MIGRARE_3 / 20261121a / 20261026a)${difLive.length ? ': ' + JSON.stringify(difLive) : ''}`)
+    // corpurile scheletului = textul exact din fișierele-sursă (generatorul nu le-a modificat)
+    for (const [fn, fis] of [['fn_trg_ofertare_clarificari_baza', 'docs/R5_MIGRARE_3_review_copilot.sql'], ['ofertare_clarificare_reconfirma', 'docs/R5_MIGRARE_3_review_copilot.sql'],
+      ['ofertare_clarificari_export', 'docs/R5_MIGRARE_3_review_copilot.sql'], ['ofertare_clarificare_exceptie_identitate', 'docs/R5_MIGRARE_3_review_copilot.sql'],
+      ['ofertare_clarificare_baza_stare', 'docs/R5_MIGRARE_3_review_copilot.sql'], ['ofertare_clarificari_notifica', 'supabase/migrations/20261121a_ofertare_responsabil2.sql'],
+      ['fn_ofertare_surse_valideaza', 'supabase/migrations/20261026a_ofertare_rigoare_provenienta.sql']]) {
+      const m = md5(corp(citeste(fis), fn))
+      ok(live.some(([f, h]) => f.includes(fn) && h === m), `${fn}: amprenta din migrare = textul din ${fis} (${m})`)
+    }
+    const a = await livreaza(db, MIG)
+    ok(a.ok, 'aplicarea (pentru amprentele de după)' + (a.ok ? '' : ': ' + a.eroare))
+    const norm = s => s.replace(/public\./g, '').replace(/ /g, '')
+    const noi = randuriBloc(MIG, 'AMPRENTE NOI')
+    const dbNoi = Object.fromEntries((await q(db, `SELECT p.oid::regprocedure::text AS fn, md5(replace(p.prosrc, chr(13), '')) AS m FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace`)).map(r => [norm(r.fn), r.m]))
+    const difNoi = noi.filter(([fn, m]) => dbNoi[norm(fn)] !== m || md5(corp(MIG, fn.replace(/^public\./, '').split('(')[0])) !== m)
+    ok(noi.length === 6 && difNoi.length === 0, `AMPRENTE NOI (6) din $post$ = textul migrării = baza după aplicare${difNoi.length ? ': ' + JSON.stringify(difNoi) : ''}`)
+    if (REV) {
+      ok(JSON.stringify(randuriBloc(REV, 'AMPRENTE NOI')) === JSON.stringify(noi) && JSON.stringify(randuriBloc(REV, 'AMPRENTE LIVE')) === JSON.stringify(live), 'revenirea: blocurile AMPRENTE NOI / LIVE = cele din migrare')
+      const fnNoi = randuriBloc(REV, 'AMPRENTE FUNCTII NOI')
+      const difFn = fnNoi.filter(([fn, m]) => dbNoi[norm(fn)] !== m)
+      ok(fnNoi.length === 30 && difFn.length === 0, `revenirea: AMPRENTE FUNCTII NOI (30) = baza după aplicare${difFn.length ? ': ' + JSON.stringify(difFn.slice(0, 3)) : ''}`)
+      for (const fn of ['fn_trg_ofertare_clarificari_baza', 'ofertare_clarificare_reconfirma', 'ofertare_clarificari_export', 'ofertare_clarificare_exceptie_identitate', 'ofertare_clarificari_notifica', 'fn_ofertare_surse_valideaza']) {
+        ok(live.some(([f, h]) => f.includes(fn) && h === md5(corp(REV, fn))), `revenirea readuce ${fn} la corpul LIVE (textul din revenire = amprenta LIVE)`)
+      }
+    }
+    const L = 'LOCK TABLE public.ofertare_clarificari IN ACCESS EXCLUSIVE MODE NOWAIT;'
+    ok(MIG.split(L).length === 2 && MIG.indexOf('DO $lock$') > MIG.indexOf('END $pre$;') && MIG.indexOf('END $lock$;') < MIG.indexOf('DO $stare$')
+      && MIG.indexOf('DO $stare$') < MIG.indexOf('CREATE TABLE public.ofertare_elemente_masura') && (!REV || REV.indexOf('IN ACCESS EXCLUSIVE MODE NOWAIT;') < REV.indexOf('DO $stare$')),
+    'lock-ul (NOWAIT, buget) vine ÎNAINTEA verificărilor de stare, în migrare și în revenire (L14)')
+    await db.close()
+  }
+  console.log('t5.2 livrarea L15 v2 completă: manifestul (ROLLBACK) = lista revizuită; livrarea aprobată + garda finală; refuzurile runnerului; dry-run')
+  {
+    const b = await bazaNoua()
+    const s0 = await stare(b)
+    const g = await livreaza(b, MIG, { manifest: '-', final: 'ROLLBACK' })
+    const G = (g.note.map(m => m.match(/^AMPRENTA_GLOBALA_CITITA inainte: ([0-9a-f]{32})/)).find(Boolean) || [])[1]
+    const manifest = g.note.filter(m => m.startsWith('L15_DIF ')).map(m => m.slice('L15_DIF '.length)).join('\n') + '\n'
+    const total = Number((g.note.map(m => m.match(/^L15_DIF_TOTAL (\d+) /)).find(Boolean) || [])[1])
+    const fara18 = listaObiecte(manifest).filter(x => !/_not_null\t/.test(x))
+    ok(g.ok && G && total === listaObiecte(manifest).length && JSON.stringify(await stare(b)) === JSON.stringify(s0),
+      `generatorul de manifest: GLOBAL ${G}, ${total} diferențe anunțate = rândurile tipărite; ROLLBACK, starea neschimbată` + (g.ok ? '' : ': ' + g.eroare))
+    if (process.argv.includes('--scrie-obiecte')) writeFileSync(join(ROOT, F_OBIECTE),
+      `# 20270112a: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase)\n` + fara18.join('\n') + '\n')
+    const revizuit = existsSync(join(ROOT, F_OBIECTE)) ? listaObiecte(citeste(F_OBIECTE)) : []
+    const lipsa = revizuit.filter(x => !fara18.includes(x)), plus = fara18.filter(x => !revizuit.includes(x))
+    ok(!lipsa.length && !plus.length, `manifestul generat (${fara18.length} obiecte) = lista revizuită ${F_OBIECTE}; lipsă [${lipsa.slice(0, 3).join(' | ')}] în plus [${plus.slice(0, 3).join(' | ')}]`)
+    // L25: ce trebuie să conțină lista, independent de generator: 6 tabele create, 5 funcții schimbate, 30 create, vederea schimbată, UNIQUE-ul creat, 3 triggere create
+    const fam = Object.fromEntries(['functie', 'relatie', 'trigger', 'constrangere', 'politica'].map(f => [f, revizuit.filter(x => x.startsWith(f + '\t'))]))
+    ok(fam.functie.filter(x => x.endsWith('\tschimbat')).length === 6 && fam.functie.filter(x => x.endsWith('\tcreat')).length === 30
+      && revizuit.filter(x => /^relatie\trelatie public\.ofertare_(elemente_masura|tipare_cantitate|cantitati_setari|cantitati_evaluari|cantitati_semnale|cantitati_masuratori)\tcreat$/.test(x)).length === 6
+      && revizuit.some(x => /v_ofertare_clarificari_baza\tschimbat$/.test(x)) && revizuit.some(x => /ofertare_clarificari_licitatie_nr_uq\tcreat$/.test(x))
+      && fam.trigger.filter(x => /trg_ofertare_(masuratori_licitatie|masuratori_imuabil|evaluari_imuabil)\tcreat$/.test(x)).length === 3
+      && !revizuit.some(x => x.endsWith('\tsters')), `lista revizuită: 6 funcții schimbate, 30 create, 6 tabele, vederea schimbată, UNIQUE-ul, 3 triggere, nimic șters (${revizuit.length} rânduri)`)
+    const fManifest = join(TMP, `${NUME}.l15.tsv`)
+    writeFileSync(fManifest, manifest)
+    const gr = await livreaza(b, MIG, { aprobat: 'f'.repeat(32), manifest: fManifest, final: garda(NUME, PLAFON_LIVRARE, 'COMMIT') })
+    ok(!gr.ok && /AMPRENTA_GLOBALA_INAINTE/.test(gr.eroare) && JSON.stringify(await stare(b)) === JSON.stringify(s0), 'GLOBAL aprobat greșit = refuz AMPRENTA_GLOBALA_INAINTE, nimic schimbat')
+    const fIncomplet = join(TMP, 'incomplet', `${NUME}.l15.tsv`)
+    mkdirSync(dirname(fIncomplet), { recursive: true })
+    writeFileSync(fIncomplet, manifest.split('\n').filter(l => !l.includes('ofertare_clarificari_licitatie_nr_uq')).join('\n'))
+    const gi = await livreaza(b, MIG, { aprobat: G, manifest: fIncomplet, final: garda(NUME, PLAFON_LIVRARE, 'COMMIT') })
+    ok(!gi.ok && /AMPRENTA_GLOBALA_DUPA/.test(gi.eroare) && /NEDECLARAT/.test(gi.eroare + gi.note.join('\n')) && JSON.stringify(await stare(b)) === JSON.stringify(s0),
+      'manifest fără rândul UNIQUE-ului = refuz AMPRENTA_GLOBALA_DUPA (NEDECLARAT), nimic schimbat')
+    const j = await livreaza(b, MIG, { aprobat: G, manifest: fManifest, final: garda(NUME, PLAFON_LIVRARE, 'COMMIT') })
+    ok(j.ok && j.note.some(m => /^AMPRENTA_GLOBALA dupa: \d+ diferente = manifestul/.test(m))
+      && j.note.some(m => new RegExp(`^PLAFON_TIMP ${NUME}: garda trecuta la \\d+ ms de la BEGIN \\(plafon 5000 ms\\)`).test(m))
+      && j.note.some(m => new RegExp(`^LOCK_TINUT ${NUME}: `).test(m) && !/nedeclarat/.test(m)),
+    'livrarea aprobată: diferența = manifestul; PLAFON_TIMP (5000); LOCK_TINUT declarat' + (j.ok ? '' : ': ' + j.eroare))
+    // dry-run-ul de pe clonă, aici (după aplicare): toate blocurile OK, nimic rămas
+    if (DRY) {
+      const nr0 = (await b.query(`SELECT (SELECT count(*) FROM public.ofertare_licitatii)::int AS l, (SELECT count(*) FROM public.profiles)::int AS u, (SELECT count(*) FROM public.ofertare_documente_atribuire)::int AS d,
+          (SELECT count(*) FROM public.ofertare_clarificari)::int AS c, (SELECT count(*) FROM public.ofertare_cantitati_semnale)::int AS s`)).rows[0]
+      const note = []; let eroareDry = null
+      try { await b.exec(DRY, { onNotice: n => note.push(n.message) }) } catch (e) { eroareDry = e.message; try { await b.exec('ROLLBACK') } catch { /* închisă */ } }
+      const asteptate = ['t_liste OK', 't_cazul_tichetului OK', 't_dovezi OK', 't_invalidare OK', 't_circuit OK', 't_acces OK', 'TOTUL OK']
+      ok(!eroareDry && asteptate.every(t => note.some(n => n.startsWith('DRY 20270112a ' + t))), `dry-run: ${asteptate.length} blocuri OK` + (eroareDry ? ': ' + eroareDry.slice(0, 200) : ''))
+      const nr1 = (await b.query(`SELECT (SELECT count(*) FROM public.ofertare_licitatii)::int AS l, (SELECT count(*) FROM public.profiles)::int AS u, (SELECT count(*) FROM public.ofertare_documente_atribuire)::int AS d,
+          (SELECT count(*) FROM public.ofertare_clarificari)::int AS c, (SELECT count(*) FROM public.ofertare_cantitati_semnale)::int AS s`)).rows[0]
+      ok(JSON.stringify(nr1) === JSON.stringify(nr0), 'dry-run: ROLLBACK, nimic rămas (licitații, conturi, documente, clarificări, semnale)')
+      const fara = await bazaNoua()
+      let ef = null
+      try { await fara.exec(DRY) } catch (e) { ef = e.message; try { await fara.exec('ROLLBACK') } catch { /* închisă */ } }
+      ok(/t_liste FAIL/.test(ef || ''), 'dry-run pe baza fără 20270112a = eșec (t_liste): ' + (ef || 'TRECE').slice(0, 90))
+      await fara.close()
+    } else ok(false, 'dry-run-ul lipsește: ' + F_DRY)
+    await b.close()
+  }
+  console.log('t5.3 refuzurile migrării (pe bază nouă, nimic schimbat)')
+  for (const [eticheta, opt, motiv, pregatire] of [
+    ['fără marcajul runnerului', { marcaj: false }, /garda start invalida/],
+    ['fără plafonul tranzacției', { plafon: null, marcajPlafon: null }, /PLAFON_TRANZACTIE lipsa/],
+    ['cu plafonul 2000', { plafon: 2000, marcajPlafon: 2000 }, /PLAFON_TRANZACTIE lipsa/],
+    ['plafon fără marcajul prologului', { marcajPlafon: null }, /PLAFON_TRANZACTIE lipsa/],
+    ['fără pasul „înainte” L15 v2', { ag: false }, /AMPRENTA_GLOBALA_LIPSA/],
+    ['alt trigger pe ofertare_clarificari', {}, /triggerele ofertare_clarificari difera/, `CREATE TRIGGER trg_zz BEFORE INSERT ON public.ofertare_clarificari FOR EACH ROW EXECUTE FUNCTION public.fn_ofertare_cb_imuabil()`],
+    ['CHECK-ul de status schimbat', {}, /CHECK-ul de status/, `ALTER TABLE public.ofertare_clarificari DROP CONSTRAINT ofertare_clarificari_status_check, ADD CONSTRAINT ofertare_clarificari_status_check CHECK (status <> '')`],
+    ['UNIQUE (licitatie_id, nr) preexistent', {}, /exista deja o unicitate/, `CREATE UNIQUE INDEX zz_nr ON public.ofertare_clarificari (licitatie_id, nr)`],
+    ['corp LIVE schimbat (exportul)', {}, /ofertare_clarificari_export\(bigint\) nu e corpul LIVE/, `CREATE OR REPLACE FUNCTION public.ofertare_clarificari_export(p_licitatie_id bigint) RETURNS jsonb LANGUAGE plpgsql SET search_path TO 'public','pg_temp' AS $function$ BEGIN RETURN '[]'::jsonb; END $function$`],
+    ['corp LIVE cu alt definer (notificarea INVOKER)', {}, /ofertare_clarificari_notifica\(bigint\) nu e corpul LIVE/, `ALTER FUNCTION public.ofertare_clarificari_notifica(bigint) SECURITY INVOKER`],
+    ['coloană lipsă (ofertare_cantitati.specificatii)', {}, /coloana ofertare_cantitati\.specificatii lipseste/, `ALTER TABLE public.ofertare_cantitati DROP COLUMN specificatii`],
+    ['coloană cu alt tip (lot_nr scalar)', {}, /coloana ofertare_cantitati\.lot_nr lipseste sau are alt tip/, `ALTER TABLE public.ofertare_cantitati DROP CONSTRAINT ofertare_cantitati_lot_nr_coerent, ALTER COLUMN lot_nr TYPE integer USING lot_nr[1]`],
+    ['vederea cu drept pentru anon', {}, /drepturile v_ofertare_clarificari_baza difera/, `GRANT SELECT ON public.v_ofertare_clarificari_baza TO anon`],
+    ['dependență fără cale sigură (fn_are_acces_ofertare)', {}, /dependenta public\.fn_are_acces_ofertare\(\)/, `ALTER FUNCTION public.fn_are_acces_ofertare() RESET search_path`],
+  ]) {
+    const b = await bazaNoua()
+    if (pregatire) await b.exec(pregatire)
+    const inainte = await stare(b)
+    const r = await livreaza(b, MIG, opt)
+    ok(!r.ok && motiv.test(r.eroare) && JSON.stringify(inainte) === JSON.stringify(await stare(b)), `${eticheta}: refuz, nimic schimbat (${(r.eroare || 'APLICAT').slice(0, 120)})`)
+    await b.close()
+  }
+  console.log('t5.4 revenirea: apply → revenire → re-apply; refuzurile revenirii pe derivă și pe date')
+  if (REV) {
+    const db = await bazaNoua()
+    const sVechi = await stare(db)
+    const a = await livreaza(db, MIG)
+    ok(a.ok, 'aplicare pentru revenire')
+    const s1 = await stare(db)
+    ok(!(await revino(db, REV, { plafon: 5000 })).ok && JSON.stringify(await stare(db)) === JSON.stringify(s1), 'revenirea cu plafonul 5000 = refuz (cere 2000)')
+    ok(!(await revino(db, REV, { nume: NUME })).ok, 'revenirea cu marcajul migrării = refuz')
+    ok(!(await revino(db, REV, { marcaj: false })).ok, 'revenirea fără marcaj = refuz')
+    const v = await revino(db)
+    const s2 = await stare(db)
+    ok(v.ok && JSON.stringify(s2) === JSON.stringify(sVechi), 'revenirea: starea EXACT cea de dinainte (tabele, triggere, funcții, UNIQUE, corpuri R9b, vederea)' + (v.ok ? '' : ': ' + v.eroare))
+    // după revenire: circuitul auto_planse_* merge ca înainte (view-ul vechi, reconfirmarea pe baza F3)
+    const baza = (await q(db, `SELECT public.ofertare_f3_baza($1) x`, [LIC]))[0].x
+    const textP = 'Solicitare de clarificare (art. 160–161 din Legea nr. 98/2016) — date cantitative din planșe\n\ntext'
+    await db.query(`INSERT INTO public.ofertare_clarificari (licitatie_id, nr, intrebare, sursa, status, origine, cheie, baza_generare) VALUES ($1, 1, $2, $3, 'propunere', 'automat', 'auto_planse_1', $4::jsonb)`,
+      [LIC, textP, `planse_auto:1,gen_${md5(textP).slice(0, 12)},ev_${md5('x').slice(0, 12)}`, JSON.stringify({ ...baza, la: new Date().toISOString(), sursa_generare: 'v6-r9b', text_hash: md5(textP) })])
+    const cp = (await q(db, `SELECT id FROM public.ofertare_clarificari WHERE cheie = 'auto_planse_1'`))[0].id
+    const vp = await vedere(db, 'RESP', cp)
+    // reconfirmarea ca utilizator (JWT authenticated) sub fn_ofertare_surse_valideaza READUSĂ (20261026a): refuzată de triggerul de proveniență —
+    // comportamentul de dinainte de migrare (ABATEREA din antet, secțiunea 9i); cu identitatea contului dar fără rolul API în JWT, reconfirmarea pe baza F3 merge
+    const rpU = await reconfirma(db, 'RESP', cp, vp.amprenta_curenta)
+    const rp = await scrieCa(db, 'RESP', `SELECT public.ofertare_clarificare_reconfirma($1, $2, 'revizuit', 'verificat') x`, [cp, vp.amprenta_curenta], { rol: 'postgres' })
+    ok(vp.stare === 'necesita_review' && rpU.code === '42501' && /o scrie doar serverul/.test(rpU.message) && rp.ok && rp.rows[0].x.ok === true && (await upd(db, 'RESP', cp, `status = 'de_trimis'`)).ok,
+      'după revenire: ciorna auto_planse_* trece prin circuitul vechi (view, reconfirmare pe baza F3, de_trimis); reconfirmarea ca utilizator = refuzul de dinainte (42501)' + (rpU.code === '42501' ? '' : ': ' + JSON.stringify(rpU)))
+    const dub = await incearca(db, `INSERT INTO public.ofertare_clarificari (licitatie_id, nr, intrebare, status) VALUES ($1, 1, 'dublu', 'propunere')`, [LIC])
+    ok(dub.ok, 'după revenire: nr dublu e din nou permis (UNIQUE-ul scos)')
+    await db.query(`DELETE FROM public.ofertare_clarificari WHERE licitatie_id = $1`, [LIC]).catch(() => null)
+    const v2 = await revino(db)
+    ok(!v2.ok && /starea nu e cea din 20270112a/.test(v2.eroare), 'revenirea pe starea veche = refuz: ' + (v2.eroare || '').slice(0, 100))
+    // re-aplicarea cere zero dubluri de nr (am lăsat una): refuz; apoi curățăm și re-aplicăm
+    const ra0 = await livreaza(db, MIG)
+    ok(!ra0.ok && /CM_NR_DUBLU/.test(ra0.eroare), 're-aplicarea cu dublura rămasă = CM_NR_DUBLU')
+    await db.exec(`SET session_replication_role = replica; DELETE FROM public.ofertare_clarificari; SET session_replication_role = origin;`)
+    const a2 = await livreaza(db, MIG)
+    ok(a2.ok, 're-aplicarea după revenire' + (a2.ok ? '' : ': ' + a2.eroare))
+    const ab = []; await S3['t3_cazul_tichetului'](db, ab)
+    ok(ab.length === 0, `re-aplicarea după revenire + cazul tichetului (${ab.length} abateri${ab.length ? ': ' + ab[0] : ''})`)
+    await db.close()
+    // deriva / datele după livrare: revenirea refuză cu câmpul numit, nimic șters
+    for (const [nume, pregatire, re] of [
+      ['evaluări / semnale existente', async d => { await fixturaTichet(d); await evalueaza(d) }, /exista date \(\d+ evaluari, \d+ semnale, \d+ masuratori, 0 setari, 1 ciorne auto_surse_\*\)/],
+      ['setări existente', async d => { await d.exec(`INSERT INTO public.ofertare_cantitati_setari (licitatie_id) VALUES (${LIC})`) }, /exista date \(0 evaluari, 0 semnale, 0 masuratori, 1 setari, 0 ciorne/],
+      ['funcție nouă schimbată', async d => { await d.exec(`CREATE OR REPLACE FUNCTION public.fn_ofertare_numar_ro(p_text text) RETURNS jsonb LANGUAGE plpgsql IMMUTABLE SET search_path = public, pg_temp AS $f$ BEGIN RETURN '{}'::jsonb; END $f$`) }, /functia public\.fn_ofertare_numar_ro\(text\): corp/],
+      ['corp rescris schimbat', async d => { await d.exec(`CREATE OR REPLACE FUNCTION public.ofertare_clarificari_export(p_licitatie_id bigint) RETURNS jsonb LANGUAGE plpgsql SET search_path TO 'public','pg_temp' AS $function$ BEGIN RETURN '[]'::jsonb; END $function$`) }, /ofertare_clarificari_export\(bigint\): corp_md5/],
+      ['GRANT în plus pe o funcție nouă', async d => { await d.exec(`GRANT EXECUTE ON FUNCTION public.fn_ofertare_semnale_fotografie(bigint) TO authenticated`) }, /functia public\.fn_ofertare_semnale_fotografie\(bigint\): corp \/ proprietati \/ drepturi/],
+      ['alt obiect depinde de o funcție nouă', async d => { await d.exec(`CREATE FUNCTION public.zz_foloseste() RETURNS jsonb LANGUAGE sql STABLE AS $f$ SELECT public.fn_ofertare_numar_ro('1') $f$`) }, /alte obiecte depind de functiile noi/],
+      ['trigger dezactivat', async d => { await d.exec(`ALTER TABLE public.ofertare_cantitati_masuratori DISABLE TRIGGER trg_ofertare_masuratori_imuabil`) }, /triggerele migrarii nu sunt toate active/],
+    ]) {
+      const d = await bazaAplicata()
+      await pregatire(d)
+      const s = await stare(d)
+      const vr = await revino(d)
+      ok(!vr.ok && re.test(vr.eroare) && JSON.stringify(await stare(d)) === JSON.stringify(s), `revenirea refuză (${nume}), nimic șters: ${(vr.eroare || 'APLICAT').slice(0, 140)}`)
+      await d.close()
+    }
+  }
+  console.log('t5.5 mutanți comportamentali (postcondițiile scoase: doar probele îi pot prinde)')
+  const comport = async (text, scen) => {
+    const db = await bazaNoua()
+    try {
+      const a = await livreaza(db, text)
+      if (!a.ok) return ['aplicare: ' + a.eroare.slice(0, 120)]
+      if (scen === 't2') return await verificaT2(db)
+      const ab = []; await (S3[scen] || S4[scen])(db, ab); return ab
+    } catch (e) { return ['excepție: ' + String(e.message).slice(0, 160)] } finally { await db.close() }
+  }
+  {
+    const ab = await comport(FARA_POST(MIG), 't3_cazul_tichetului')
+    ok(ab.length === 0, `martor: originalul fără postcondiții trece cazul tichetului (${ab.length} abateri${ab.length ? ': ' + ab[0] : ''})`)
+  }
+  const MUTANTI = [
+    ['M01 dovada text acceptă diametrul (3c scos: „lungime DN160 m” → 160)', [["  IF m[1] IS NOT NULL OR m[3] = 'mm' THEN RETURN jsonb_build_object('verificare', 'diametru_nu_cantitate'", "  IF false THEN RETURN jsonb_build_object('verificare', 'diametru_nu_cantitate'"]], ['t2']],
+    ['M01b dovada text fără ancora de cuvânt (\\m): fragment ca subșir', [["  m := regexp_match(public.fn_ofertare_masura_norm(v_frag),\n         '\\m(?:' || v_kw || ')", "  m := regexp_match(public.fn_ofertare_masura_norm(v_frag),\n         '(?:' || v_kw || ')"]], ['t2']],
+    ['M02 coloana acceptată la indexul vecin (±1)', [["    IF cardinality(toks) - v_pos < 1 OR toks[cardinality(toks) - v_pos] IS DISTINCT FROM v_cel THEN RETURN jsonb_build_object('verificare', 'coloana_necunoscuta'); END IF;",
+      "    IF cardinality(toks) - v_pos < 1 OR NOT (v_cel IN (toks[cardinality(toks) - v_pos], toks[cardinality(toks) - v_pos - 1], toks[cardinality(toks) - v_pos + 1])) THEN RETURN jsonb_build_object('verificare', 'coloana_necunoscuta'); END IF;"]], ['t2']],
+    ['M03 numar_ro acceptă grup de 2 cifre după punct', [["  IF s ~ '^[0-9]{1,3}([.][0-9]{3})*(,[0-9]+)?$' OR s ~ '^[0-9]+(,[0-9]+)?$' THEN", "  IF s ~ '^[0-9]{1,3}([.][0-9]{2,3})*(,[0-9]+)?$' OR s ~ '^[0-9]+(,[0-9]+)?$' THEN"]], ['t2']],
+    ['M04 baza_stare fără comparația surse_sha', [["    v_st := CASE WHEN (v_foto ->> 'sha') IS DISTINCT FROM s.surse_sha THEN 'schimbata'", "    v_st := CASE WHEN false THEN 'schimbata'"]], ['t4_trigger_surse + t4_reconfirmare_surse + t4_view_surse + t4_export_surse']],
+    ['M05 modul tranzitie citește c.status (candidatul „trimisa” trece)', [["  IF v_mod = 'afisare' AND c.status IN ('trimisa', 'raspunsa') THEN", "  IF c.status IN ('trimisa', 'raspunsa') THEN"]], ['t4_trigger_new_nu_old + t4_stari + t4_notifica_surse + t4_exceptie_surse_refuz']],
+    ['M06 modul afisare compară cu semnal.surse_sha în loc de baza la aprobare', [["    ELSIF (v_foto ->> 'sha') IS DISTINCT FROM (v_rc ->> 'surse_sha') OR s.evaluare_amprenta IS DISTINCT FROM (v_rc ->> 'evaluare_amprenta') THEN", "    ELSIF (v_foto ->> 'sha') IS DISTINCT FROM s.surse_sha THEN"]], ['t4_trigger_new_nu_old + t4_stari + t4_notifica_surse + t4_exceptie_surse_refuz']],
+    ['M07 fotografia fără stare_loturi', [["'cantitati_sha', v_cant, 'prag', v_prag, 'plafon', v_plafon, 'v', 'surse_v1');", "'cantitati_sha', v_cant, 'prag', v_prag, 'plafon', v_plafon, 'v', 'surse_v1') - 'stare_loturi';"]], ['t3_loturi', 't4_trigger_surse + t4_reconfirmare_surse + t4_view_surse + t4_export_surse']],
+    // obs_sha singur e redundant cu felii_sha (observațiile se scriu doar pe felii în zbor → orice observație nouă schimbă și încercările): mutantul pe felii_sha
+    ['M08 fotografia fără felii_sha (feliile reluate nu schimbă fotografia)', [["'extragere_id', e.id, 'extractor_id', e.extractor_id, 'felii_distincte', coalesce(fa.n, 0), 'felii_sha', fa.sha, 'obs_sha', oa.sha, 'decizii_sha', da.sha)", "'extragere_id', e.id, 'extractor_id', e.extractor_id, 'felii_distincte', coalesce(fa.n, 0), 'felii_sha', 'x', 'obs_sha', oa.sha, 'decizii_sha', da.sha)"]], ['t3_drept + t3_lista_actual + t3_felii + t3_context']],
+    ['M09 propune citește observațiile tuturor extragerilor gata pe sha (nu extragere_id din fotografie)', [["             JOIN public.ofertare_cant_obs ob ON ob.extragere_id = (x ->> 'extragere_id')::bigint", "             JOIN public.ofertare_cant_obs ob ON ob.document_id = (x ->> 'id')::bigint AND ob.doc_sha256 = x ->> 'sha'"]], ['t3_extrageri_duble + t3_identitate_pozitiei']],
+    ['M10 observațiile de pe paginile peste plafon tratate ca ok', [["    ELSIF o.pagina IS NOT NULL AND o.pagina > o.lim THEN v_ver := 'pagina_nepermisa';", "    ELSIF false THEN v_ver := 'pagina_nepermisa';"]], ['t3_depasita + t3_izolare + t3_extragere_noua_intre_rpc + t3_plafon_vechi']],
+    ['M11 observațiile de pe paginile peste plafon OMISE (asocierea dispare)', [["    ELSIF o.pagina IS NOT NULL AND o.pagina > o.lim THEN v_ver := 'pagina_nepermisa';", "    ELSIF o.pagina IS NOT NULL AND o.pagina > o.lim THEN CONTINUE;"]], ['t3_depasita + t3_izolare + t3_extragere_noua_intre_rpc + t3_plafon_vechi']],
+    ['M12 pagini_permise permite tot documentul când plafonul cade în el', [["greatest(0, least(pagini, coalesce(p_plafon, 0) - (cumul - pagini)))", "CASE WHEN cumul - pagini < coalesce(p_plafon, 0) THEN pagini ELSE 0 END"]], ['t2']],
+    ['M13 fn_ofertare_semnale_felii fără filtrul p_extrageri', [["        WHERE e.licitatie_id = p_licitatie_id AND e.id = ANY (coalesce(p_extrageri, '{}'))", "        WHERE e.licitatie_id = p_licitatie_id"]], ['t3_drept + t3_lista_actual + t3_felii + t3_context']],
+    ['M14 fn_ofertare_semnale_felii servește obs la neatribuibile', [["              CASE WHEN f.obs_atribuibile THEN coalesce((SELECT jsonb_agg(", "              CASE WHEN true THEN coalesce((SELECT jsonb_agg("]], ['t3_drept + t3_lista_actual + t3_felii + t3_context']],
+    ['M15 felii_autoritative fără DISTINCT ON (încercarea esuat reapare)', [["AS $f$ WITH f AS (SELECT DISTINCT ON (x.felie_nr) x.id, x.felie_nr, x.incercare, x.de_la, x.pana_la, x.stare", "AS $f$ WITH f AS (SELECT x.id, x.felie_nr, x.incercare, x.de_la, x.pana_la, x.stare"]], ['t3_drept + t3_lista_actual + t3_felii + t3_context']],
+    ['M16 obs_atribuibile mereu true', [["coalesce(o.obs_numar, 0), NOT (n.incercari > 1 AND coalesce(o.obs_numar, 0) > 0)", "coalesce(o.obs_numar, 0), true"]], ['t3_drept + t3_lista_actual + t3_felii + t3_context']],
+    ['M17 propune tratează observațiile neatribuibile ca ok', [["    IF o.obs_atribuibile IS FALSE THEN v_ver := 'neatribuibil';", "    IF false THEN v_ver := 'neatribuibil';"]], ['t3_drept + t3_lista_actual + t3_felii + t3_context']],
+    ['M18 propune OMITE observațiile neatribuibile (asocierea dispare)', [["    IF o.obs_atribuibile IS FALSE THEN v_ver := 'neatribuibil';", "    IF o.obs_atribuibile IS FALSE THEN CONTINUE;"]], ['t3_drept + t3_lista_actual + t3_felii + t3_context']],
+    ['M19 publica nu adaugă feliile obs_atribuibile = false în felii_incomplete (se bazează pe edge)', [["              UNION ALL\n              SELECT jsonb_build_object('extragere_id', (x ->> 'extragere_id')::bigint, 'felie_nr', fa.felie_nr, 'motiv', 'observatii_neatribuibile')\n                FROM public.fn_ofertare_masura_felii_autoritative((x ->> 'extragere_id')::bigint) fa WHERE NOT fa.obs_atribuibile) w)", "              ) w)"]], ['t3_drept + t3_lista_actual + t3_felii + t3_context']],
+    ['M20 publica: un document contribuie doar prin componente ok', [["      FROM public.ofertare_cantitati_masuratori m WHERE m.semnal_id = s.id AND m.evaluare_id = v_ev.id AND m.document_id IS NOT NULL;\n    IF v_a.n = 0", "      FROM public.ofertare_cantitati_masuratori m WHERE m.semnal_id = s.id AND m.evaluare_id = v_ev.id AND m.document_id IS NOT NULL AND m.verificare = 'ok';\n    IF v_a.n = 0"]], ['t3_drept + t3_lista_actual + t3_felii + t3_context']],
+    ['M21 fn_ofertare_semnale_context fără refuzul fotografie_schimbata', [["  IF v_foto ->> 'sha' IS DISTINCT FROM p_fotografie_sha THEN RETURN jsonb_build_object('refuz', 'fotografie_schimbata'); END IF;\n  SELECT x.id, x.text_extras", "  SELECT x.id, x.text_extras"]], ['t3_drept + t3_lista_actual + t3_felii + t3_context']],
+    ['M22 fotografia fără decizii_sha', [["'felii_sha', fa.sha, 'obs_sha', oa.sha, 'decizii_sha', da.sha) ORDER BY d.id)", "'felii_sha', fa.sha, 'obs_sha', oa.sha, 'decizii_sha', NULL) ORDER BY d.id)"]], ['t3_drept + t3_lista_actual + t3_felii + t3_context']],
+    ['M23 publica ignoră inventarul documentelor F3 (doar B contribuie)', [["      FROM public.ofertare_cantitati_masuratori m WHERE m.semnal_id = s.id AND m.evaluare_id = v_ev.id AND m.document_id IS NOT NULL;\n    IF v_a.n = 0", "      FROM public.ofertare_cantitati_masuratori m WHERE m.semnal_id = s.id AND m.evaluare_id = v_ev.id AND m.document_id IS NOT NULL AND m.parte = 'b';\n    IF v_a.n = 0"]], ['t3_document_necitit + t3_incomplet_f3']],
+    ['M24 poziția F3 neclasificată nu blochează măsurile cunoscute', [["    v_neclas := s.element <> 'necunoscut' AND EXISTS (", "    v_neclas := false AND EXISTS ("]], ['t3_neclasificat']],
+    ['M25 evaluare_amprenta fără inventar', [["             || '|' || v_inv::text || '|' || v_verdict || '|' || coalesce(v_va::text, '') || '|' || coalesce(v_vb::text, ''), 'UTF8')), 'hex')", "             || '|' || v_verdict || '|' || coalesce(v_va::text, '') || '|' || coalesce(v_vb::text, ''), 'UTF8')), 'hex')"]], ['t3_incomplet']],
+    ['M26 publica fără verificarea token / in_curs', [["  IF NOT FOUND OR v_ev.licitatie_id <> p_licitatie_id OR v_ev.stare <> 'in_curs' OR v_ev.token IS DISTINCT FROM p_token THEN RETURN jsonb_build_object('refuz', 'evaluare_necunoscuta'); END IF;", "  IF NOT FOUND OR v_ev.licitatie_id <> p_licitatie_id THEN RETURN jsonb_build_object('refuz', 'evaluare_necunoscuta'); END IF;"]], ['t3_depasita + t3_izolare + t3_extragere_noua_intre_rpc + t3_plafon_vechi']],
+    ['M27 propune nu marchează semnalele vechi (identitatea dispărută rămâne cu verdictul vechi)', [["  UPDATE public.ofertare_cantitati_semnale s SET evaluare_in_curs_id = v_ev WHERE s.licitatie_id = p_licitatie_id AND s.evaluare_in_curs_id IS NULL;\n  v_lim :=", "  v_lim :="]], ['t3_tranzitii + t3_document_sters + t3_identitate_disparuta']],
+    ['M28 publica fără dedup pe cantitate_id', [["      FROM (SELECT DISTINCT ON (m.cantitate_id) m.* FROM public.ofertare_cantitati_masuratori m WHERE m.semnal_id = s.id AND m.evaluare_id = v_ev.id AND m.parte = 'a'\n             ORDER BY m.cantitate_id, (m.verificare = 'ok') DESC, m.id) t;", "      FROM (SELECT m.* FROM public.ofertare_cantitati_masuratori m WHERE m.semnal_id = s.id AND m.evaluare_id = v_ev.id AND m.parte = 'a') t;"]], ['t3_identitate_pozitiei_dublura']],
+    ['M29 observațiile F3 intră în partea B', [["            WHERE x ->> 'extragere_id' IS NOT NULL AND ob.rol_sursa IN ('atr', 'cs', 'memoriu', 'plansa', 'raspuns')", "            WHERE x ->> 'extragere_id' IS NOT NULL AND ob.rol_sursa IN ('atr', 'cs', 'memoriu', 'plansa', 'raspuns', 'f3', 'c6', 'lista_alt')"]], ['t3_cazul_tichetului']],
+    ['M30 totalul adunat peste componente', [["                                                 'valoare', CASE WHEN b.n_comp_ok > 0 THEN b.suma_comp WHEN b.n_total_ok > 0 THEN b.suma_tot END,", "                                                 'valoare', b.suma_comp + b.suma_tot,"]], ['t3_total_componente']],
+    ['M31 extragerea autoritativă = cea mai veche (nu id maxim)', [["WHERE e.document_id = d.id AND e.doc_sha256 = s.sha AND e.stare = 'gata' ORDER BY e.id DESC LIMIT 1) e ON true", "WHERE e.document_id = d.id AND e.doc_sha256 = s.sha AND e.stare = 'gata' ORDER BY e.id ASC LIMIT 1) e ON true"]], ['t3_extrageri_duble + t3_identitate_pozitiei']],
+    ['M32 B însumat peste documente', [["    SELECT (b ->> 'document_id')::bigint, (b ->> 'valoare')::numeric INTO v_doc_b_id, v_vb FROM jsonb_array_elements(v_docs_b) b ORDER BY (b ->> 'n_ok')::int DESC, (b ->> 'document_id')::bigint LIMIT 1;", "    SELECT max((b ->> 'document_id')::bigint), sum((b ->> 'valoare')::numeric) INTO v_doc_b_id, v_vb FROM jsonb_array_elements(v_docs_b) b;"]], ['t3_doua_documente_b']],
+    ['M33 verdict cu inventar incomplet (regula 4 scoasă)', [["    ELSIF v_fara_ok > 0 OR v_probleme IS NOT NULL THEN v_verdict := 'neverificat'; v_motiv := 'agregare incompletă' || coalesce(' (' || v_probleme || ')', '');", "    ELSIF false THEN v_verdict := 'neverificat'; v_motiv := 'agregare incompletă' || coalesce(' (' || v_probleme || ')', '');"]], ['t3_incomplet']],
+    ['M34 documente_necitite ignorat', [["    IF jsonb_array_length(v_necitite) > 0 THEN v_verdict := 'neverificat'; v_motiv := 'document necitit (' || v_necitite_txt || ')';", "    IF false THEN v_verdict := 'neverificat'; v_motiv := 'document necitit (' || v_necitite_txt || ')';"]], ['t3_document_necitit + t3_incomplet_f3']],
+    ['M35 reactivarea ciornei retrase de om', [["      ELSIF c.status = 'retrasa' AND c.baza_generare ->> 'retrasa_de' = 'sistem' THEN", "      ELSIF c.status = 'retrasa' THEN"]], ['t3_tranzitii + t3_document_sters + t3_identitate_disparuta']],
+    ['M36 triggerul fără marcajul retrasa_de = om', [["  IF TG_OP='UPDATE' AND NEW.status='retrasa' AND OLD.status IS DISTINCT FROM 'retrasa' AND current_user IN ('authenticated','anon') THEN\n    NEW.baza_generare := coalesce(NEW.baza_generare,'{}'::jsonb) || jsonb_build_object('retrasa_de','om','retrasa_de_uid',auth.uid(),'retrasa_la',now());\n  END IF;\n", ""]], ['t4_trigger_new_nu_old + t4_stari + t4_notifica_surse + t4_exceptie_surse_refuz']],
+    ['M37 triggerul cu starea pe rândul recitit (nu NEW)', [["    v_st := public.fn_ofertare_ciorna_auto_stare(NEW,'tranzitie');", "    SELECT public.fn_ofertare_ciorna_auto_stare(k,'tranzitie') INTO v_st FROM public.ofertare_clarificari k WHERE k.id = NEW.id;"]], ['t4_trigger_new_nu_old + t4_stari + t4_notifica_surse + t4_exceptie_surse_refuz']],
+    ['M38 triggerul cu v_auto doar pe auto_planse_', [["  v_auto := coalesce(NEW.cheie,'') ~ '^auto_(planse|surse)_' OR (TG_OP='UPDATE' AND coalesce(OLD.cheie,'') ~ '^auto_(planse|surse)_');", "  v_auto := coalesce(NEW.cheie,'') LIKE 'auto_planse_%' OR (TG_OP='UPDATE' AND coalesce(OLD.cheie,'') LIKE 'auto_planse_%');"]], ['t4_trigger_surse + t4_reconfirmare_surse + t4_view_surse + t4_export_surse']],
+    ['M39 exportul fără dispecer pe surse', [["    IF coalesce(c.cheie,'') ~ '^auto_(planse|surse)_' THEN\n      v_st := public.fn_ofertare_ciorna_auto_stare(c,'tranzitie');", "    IF coalesce(c.cheie,'') LIKE 'auto_planse_%' THEN\n      v_st := public.fn_ofertare_ciorna_auto_stare(c,'tranzitie');"]], ['t4_trigger_surse + t4_reconfirmare_surse + t4_view_surse + t4_export_surse']],
+    ['M40 notificarea cu ORDER BY id', [["AND cheie ~ '^auto_(planse|surse)_' AND status <> 'retrasa' ORDER BY nr FOR UPDATE LOOP", "AND cheie ~ '^auto_(planse|surse)_' AND status <> 'retrasa' ORDER BY id FOR UPDATE LOOP"]], ['t4_lant_authenticated + t4_planse_neschimbat + t4_fara_advisory + t4_drepturi']],
+    ['M41 vederea fără prefixul nou', [[" WHERE coalesce(c.cheie, '') ~ '^auto_(planse|surse)_' AND c.status <> 'retrasa';", " WHERE coalesce(c.cheie, '') LIKE 'auto_planse_%' AND c.status <> 'retrasa';"]], ['t4_trigger_surse + t4_reconfirmare_surse + t4_view_surse + t4_export_surse']],
+    ['M42 publicarea alocă nr fără lock pe ciornele auto_surse (ordinea protocolului)', [["  PERFORM 1 FROM (SELECT k.id FROM public.ofertare_clarificari k WHERE k.licitatie_id = p_licitatie_id AND k.cheie LIKE 'auto_surse_%' ORDER BY k.nr FOR UPDATE) x;\n", ""]], ['t4_lant_authenticated + t4_planse_neschimbat + t4_fara_advisory + t4_drepturi']],
+    ['M43 lotul: toate → NULL și pe licitațiile cu loturi', [["                   WHEN coalesce(p_lot_domeniu, 'toate') = 'toate' AND p_stare_loturi = 'fara_loturi' THEN jsonb_build_object('lot', NULL, 'cunoscut', true)", "                   WHEN coalesce(p_lot_domeniu, 'toate') = 'toate' THEN jsonb_build_object('lot', NULL, 'cunoscut', true)"]], ['t2', 't3_loturi']],
+    ['M44 element necunoscut acceptat (lista închisă ignorată)', [["  IF el IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.ofertare_elemente_masura x WHERE x.cod = el AND x.activ AND x.familie <> 'necunoscut') THEN el := NULL; END IF;\n", ""]], ['t2']],
+    ['M45 numărul neîntreg acceptat în text liber', [["  IF NOT (v_num ->> 'intreg')::boolean THEN RETURN jsonb_build_object('verificare', 'numar_neintreg', 'valoare_text', m[2], 'um_text', m[3]); END IF;\n", ""]], ['t2']],
+    ['M46 răspunsul legat fără verificarea tipului documentului', [["  IF d.id IS NULL OR d.licitatie_id <> s.licitatie_id OR d.tip IS DISTINCT FROM 'raspuns_clarificare' THEN", "  IF d.id IS NULL OR d.licitatie_id <> s.licitatie_id THEN"]], ['t3_raspuns']],
+    ['M47 rezolvat ignoră revizia', [["                        AND coalesce(d.revizie, '-') = s.rezolvare ->> 'revizie') $f$;", ") $f$;"]], ['t3_raspuns']],
+    // (M48 „ciorna liberă fără text_editat_de” e un mutant ECHIVALENT: gen_<md5 text> din sursa nu mai coincide după editare — apărare dublă, nu lipsă de probă)
+    ['M48 ciorna liberă fără condiția de aprobare (reconfirmare)', [["AS $f$ SELECT c.status = 'propunere' AND NOT coalesce(c.baza_generare, '{}'::jsonb) ? 'text_editat_de' AND NOT coalesce(c.baza_generare, '{}'::jsonb) ? 'reconfirmare'", "AS $f$ SELECT c.status = 'propunere' AND NOT coalesce(c.baza_generare, '{}'::jsonb) ? 'text_editat_de'"]], ['t4_trigger_surse + t4_reconfirmare_surse + t4_view_surse + t4_export_surse']],
+    ['M49 setările fără dreptul de decizie', [["  IF NOT coalesce(public.fn_ofertare_source_pack_poate_decide(p_licitatie_id), false) THEN RAISE EXCEPTION 'CM_FARA_DREPT: setarile cer drept de decizie pe licitatie' USING ERRCODE = '42501'; END IF;\n", ""]], ['t3_drept + t3_lista_actual + t3_felii + t3_context']],
+    ['M50 lista fără verificarea accesului (fail-open)', [["  IF auth.uid() IS NULL OR NOT coalesce(public.fn_are_acces_ofertare(), false) THEN RAISE EXCEPTION 'CM_FARA_DREPT: fara acces la Ofertare' USING ERRCODE = '42501'; END IF;\n  v_sha :=", "  v_sha :="]], ['t3_drept + t3_lista_actual + t3_felii + t3_context']],
+    ['M51 propune fără refuzul fotografiei vechi', [["  IF p_fotografie ->> 'sha' IS DISTINCT FROM v_foto ->> 'sha' THEN RETURN jsonb_build_object('refuz', 'evaluare_depasita', 'sha_acum', v_foto ->> 'sha'); END IF;\n", ""]], ['t3_depasita + t3_izolare + t3_extragere_noua_intre_rpc + t3_plafon_vechi']],
+    ['M52 publica fără refuzul fotografiei schimbate', [["  IF v_foto ->> 'sha' IS DISTINCT FROM v_ev.surse_sha THEN\n    PERFORM set_config('ofertare.masuratori_rpc', '1', true);", "  IF false THEN\n    PERFORM set_config('ofertare.masuratori_rpc', '1', true);"]], ['t3_depasita + t3_izolare + t3_extragere_noua_intre_rpc + t3_plafon_vechi']],
+  ]
+  for (const [nume, inl, scenarii] of MUTANTI) {
+    let text
+    try { text = FARA_POST(aplica(MIG, inl)) } catch (e) { ok(false, `${nume}: ${e.message}`); continue }
+    const rez = []
+    for (const scen of scenarii) rez.push(await comport(text, scen))
+    const prins = rez.some(ab => ab.length > 0)
+    ok(prins, `${nume} pică comportamental (${rez.map(ab => ab.length).join('/')} abateri: ${rez.flat()[0] || 'NU a picat'})`)
+  }
+  console.log('t5.6 mutanți structurali (cu postcondiții: aplicarea e refuzată, nimic schimbat) și pe gărzile de stare / revenire')
+  for (const [nume, inl, re] of [
+    ['S1 un RPC edge cu EXECUTE pentru authenticated', [['GRANT EXECUTE ON FUNCTION public.fn_ofertare_semnale_fotografie(bigint) TO service_role;', 'GRANT EXECUTE ON FUNCTION public.fn_ofertare_semnale_fotografie(bigint) TO service_role, authenticated;']], /postconditie: functia public\.fn_ofertare_semnale_fotografie\(bigint\)/],
+    ['S2 vederea fără security_invoker', [['CREATE VIEW public.v_ofertare_clarificari_baza WITH (security_invoker = on) AS\nSELECT c.id, c.licitatie_id, c.nr, c.status, s.x ->> \'stare\' AS stare, s.x ->> \'mod_ciorna\' AS mod_ciorna, s.x -> \'curent\' ->> \'mod\' AS mod_curent,\n       s.x ->> \'amprenta_curenta\' AS amprenta_curenta, coalesce((s.x ->> \'marcaj_planse\')::boolean, false) AS marcaj_planse, s.x ->> \'text\' AS text, s.x AS detalii\n  FROM public.ofertare_clarificari c\n CROSS JOIN LATERAL (SELECT public.fn_ofertare_ciorna_auto_stare(c, \'afisare\') AS x) s', 'CREATE VIEW public.v_ofertare_clarificari_baza AS\nSELECT c.id, c.licitatie_id, c.nr, c.status, s.x ->> \'stare\' AS stare, s.x ->> \'mod_ciorna\' AS mod_ciorna, s.x -> \'curent\' ->> \'mod\' AS mod_curent,\n       s.x ->> \'amprenta_curenta\' AS amprenta_curenta, coalesce((s.x ->> \'marcaj_planse\')::boolean, false) AS marcaj_planse, s.x ->> \'text\' AS text, s.x AS detalii\n  FROM public.ofertare_clarificari c\n CROSS JOIN LATERAL (SELECT public.fn_ofertare_ciorna_auto_stare(c, \'afisare\') AS x) s']], /postconditie: vederea/],
+    ['S3 o funcție nouă cheamă altceva (fn_ofertare_cb_poate)', [["  IF auth.uid() IS NULL OR NOT coalesce(public.fn_are_acces_ofertare(), false) THEN RAISE EXCEPTION 'CM_FARA_DREPT: fara acces la Ofertare' USING ERRCODE = '42501'; END IF;\n  v_sha :=", "  IF auth.uid() IS NULL OR NOT coalesce(public.fn_ofertare_cb_poate(p_licitatie_id), false) THEN RAISE EXCEPTION 'CM_FARA_DREPT: fara acces la Ofertare' USING ERRCODE = '42501'; END IF;\n  v_sha :="]], /cheama in afara lantului declarat: (public\.)?fn_ofertare_cb_poate\(bigint\)/],
+    ['S4 fără triggerul de imuabilitate pe măsurători', [['CREATE TRIGGER trg_ofertare_masuratori_imuabil BEFORE UPDATE OR DELETE ON public.ofertare_cantitati_masuratori\n  FOR EACH ROW EXECUTE FUNCTION public.fn_trg_ofertare_masuratori_imuabil();\n', '']], /postconditie: triggerul trg_ofertare_masuratori_imuabil/],
+    ['S5 fără UNIQUE (licitatie_id, nr)', [['ALTER TABLE public.ofertare_clarificari ADD CONSTRAINT ofertare_clarificari_licitatie_nr_uq UNIQUE (licitatie_id, nr);\n', '']], /postconditie: UNIQUE \(licitatie_id, nr\)/],
+    ['S6 RLS lipsă pe semnale', [['ALTER TABLE public.ofertare_cantitati_semnale ENABLE ROW LEVEL SECURITY;\n', '']], /postconditie: RLS \/ politica \/ drepturile tabelului public\.ofertare_cantitati_semnale/],
+    ['S7 un RPC UI SECURITY INVOKER', [["CREATE FUNCTION public.fn_ofertare_semnale_lista(p_licitatie_id bigint) RETURNS TABLE (semnal jsonb, rezolvat boolean, actual boolean, in_curs boolean, masuratori jsonb)\nLANGUAGE plpgsql STABLE SECURITY DEFINER", "CREATE FUNCTION public.fn_ofertare_semnale_lista(p_licitatie_id bigint) RETURNS TABLE (semnal jsonb, rezolvat boolean, actual boolean, in_curs boolean, masuratori jsonb)\nLANGUAGE plpgsql STABLE SECURITY INVOKER"]], /postconditie: functia public\.fn_ofertare_semnale_lista\(bigint\)/],
+    ['S8 corp rescris cu alt text decât cel declarat (export)', [["    IF coalesce(c.sursa,'') ~ '(^|,)revizie_' THEN RAISE EXCEPTION 'Clarificarea #% necesită revizie',c.nr; END IF;\n    IF coalesce(c.cheie,'') ~ '^auto_(planse|surse)_' THEN", "    IF coalesce(c.cheie,'') ~ '^auto_(planse|surse)_' THEN"]], /postconditie: public\.ofertare_clarificari_export\(bigint\) nu are corpul/],
+    ['S9 advisory în notificare (protocolul lock-urilor)', [["DECLARE c public.ofertare_clarificari; v_st jsonb; v_resp uuid[]; v_n int := 0;\nBEGIN\n  IF auth.uid() IS NULL OR NOT coalesce(public.fn_are_acces_ofertare(),false) THEN RETURN jsonb_build_object('error','fără acces'); END IF;\n  -- 20261121a", "DECLARE c public.ofertare_clarificari; v_st jsonb; v_resp uuid[]; v_n int := 0;\nBEGIN\n  PERFORM pg_advisory_xact_lock(hashtextextended('ofertare_cantitati_semnale:' || p_licitatie_id, 0));\n  IF auth.uid() IS NULL OR NOT coalesce(public.fn_are_acces_ofertare(),false) THEN RETURN jsonb_build_object('error','fără acces'); END IF;\n  -- 20261121a"]], /postconditie: (protocolul lock-urilor|public\.ofertare_clarificari_notifica\(bigint\) nu are corpul)/],
+  ]) {
+    const db = await bazaNoua()
+    const s = await stare(db)
+    let r
+    try { r = await livreaza(db, aplica(MIG, inl)) } catch (e) { r = { ok: false, eroare: 'mutant inaplicabil: ' + e.message } }
+    ok(!r.ok && re.test(r.eroare) && JSON.stringify(await stare(db)) === JSON.stringify(s), `${nume}: refuzat de postcondiții (${(r.eroare || 'APLICAT').slice(0, 120)})`)
+    await db.close()
+  }
+  const rezultat = async (scenariuFn, text) => {
+    const db = await bazaNoua()
+    try { const r = await scenariuFn(db, text); return `${r.ok ? 'APLICAT' : 'REFUZ ' + r.eroare} | ${JSON.stringify(await stare(db))}` } finally { await db.close() }
+  }
+  const SCEN = {
+    dubluNr: async (db, t) => { await db.exec(`INSERT INTO public.ofertare_clarificari (licitatie_id, nr, intrebare, status) VALUES (${LIC}, 3, 'a', 'propunere'), (${LIC}, 3, 'b', 'propunere')`); return livreaza(db, t) },
+    corpLive: async (db, t) => { await db.exec(`ALTER FUNCTION public.ofertare_clarificari_notifica(bigint) SECURITY INVOKER`); return livreaza(db, t) },
+    revDate: async (db, t) => { await livreaza(db, MIG); await fixturaTichet(db); await evalueaza(db); return revino(db, t) },
+    revCorp: async (db, t) => { await livreaza(db, MIG); await db.exec(`CREATE OR REPLACE FUNCTION public.fn_ofertare_numar_ro(p_text text) RETURNS jsonb LANGUAGE plpgsql IMMUTABLE SET search_path = public, pg_temp AS $f$ BEGIN RETURN '{}'::jsonb; END $f$`); return revino(db, t) },
+  }
+  for (const [nume, fisier, inl, scenariu_] of [
+    ['P1 migrare: fără preflight-ul dublurilor de nr', 'mig', [["  IF v_dublu > 0 THEN\n    RAISE EXCEPTION '20270112a: CM_NR_DUBLU", "  IF false THEN\n    RAISE EXCEPTION '20270112a: CM_NR_DUBLU"]], 'dubluNr'],
+    ['P2 migrare: fără verificarea corpurilor LIVE', 'mig', [["      RAISE EXCEPTION '20270112a: % nu e corpul LIVE asteptat (corp md5 %, definer %, cale sau proprietar); coordonatorul da textul exact (pg_get_functiondef)', r.fn, r.corp_md5, r.definer;\n", "      NULL;\n"]], 'corpLive'],
+    ['R1 revenire: fără refuzul pe date', 'rev', [["  IF v_ev + v_sem + v_mas + v_set + v_ciorne > 0 THEN", "  IF false THEN"]], 'revDate'],
+    ['R2 revenire: fără amprentele funcțiilor noi', 'rev', [["                     AND md5(replace(p.prosrc, chr(13), '')) = r.corp_md5 AND l.lanname = r.limbaj AND p.prosecdef = r.definer AND p.provolatile = r.volatil", "                     AND l.lanname = r.limbaj AND p.prosecdef = r.definer AND p.provolatile = r.volatil"]], 'revCorp'],
+  ]) {
+    if (fisier === 'rev' && !REV) { ok(false, nume + ': revenirea lipsește'); continue }
+    const orig = fisier === 'mig' ? MIG : REV
+    let ro, rm
+    try { ro = await rezultat(SCEN[scenariu_], orig); rm = await rezultat(SCEN[scenariu_], aplica(orig, inl)) } catch (e) { ro = 'x'; rm = 'x'; console.log('     ' + e.message) }
+    ok(ro !== rm && /^REFUZ/.test(ro), `${nume} prins: original «${ro.slice(0, 80)}» ≠ mutant «${rm.slice(0, 80)}»`)
+  }
 }
 
 console.log(esec ? `\nEȘEC: ${esec} verificări picate` : '\nTOATE VERIFICĂRILE AU TRECUT')
