@@ -26,8 +26,11 @@
 --      (ultima formă cunoscută: docs/R5_MIGRARE_3_review_copilot.sql, 20261121a) cu DOAR schimbările din inventarul planului; $pre$ refuză
 --      dacă amprenta LIVE a oricăruia diferă de cea din blocul AMPRENTE LIVE (valorile de confirmat de coordonator pe clonă).
 --   6. ABATERE declarată față de plan (inventar #7): fn_ofertare_surse_valideaza (20261026a) decidea „utilizator” doar după rolul din JWT, deci refuza
---      scrierea baza_generare / sursa din RPC-urile DEFINER chemate de un om (reconfirmarea R9b de azi, legarea răspunsului de aici); textul LIVE
---      cu o singură linie schimbată (secțiunea 9i). Triggerele a02_* rămân pe aceeași funcție.
+--      scrierea baza_generare / sursa din RPC-urile DEFINER chemate de un om (reconfirmarea R9b de azi, legarea răspunsului de aici); devine
+--      SECURITY INVOKER (ca fn_trg_ofertare_clarificari_baza) și decide după current_user: scrierea directă a clientului = utilizator (refuzată ca
+--      azi), scrierea din RPC-urile DEFINER ale lui postgres = server (secțiunea 9i). Triggerele a02_* rămân pe aceeași funcție.
+--   7. ABATERE declarată față de plan (Task 1, lista `verificare`): valoarea nouă fragment_ambiguu — un fragment de text liber cu DOUĂ cantități cu
+--      cuvânt-cheie nu dovedește niciuna (L11), nu se ia prima potrivire.
 -- Ce NU face: nu schimbă cantitățile, nu trimite nimic, nu citește SEAP, nu atinge prețuri, nu dă acces la Ofertare, nu atinge date.
 -- Datele existente: zero dubluri (licitatie_id, nr) în ofertare_clarificari (preflight sub lock, CM_NR_DUBLU la refuz); nimic rescris.
 -- Lock-uri (L06): un singur tabel existent modificat (ofertare_clarificari: trigger rescris, UNIQUE nou) — ACCESS EXCLUSIVE NOWAIT, luat
@@ -361,7 +364,7 @@ CREATE TABLE public.ofertare_cantitati_masuratori (
   e_total        boolean NOT NULL DEFAULT false,
   e_subtotal     boolean NOT NULL DEFAULT false,
   verificare     text NOT NULL CHECK (verificare IN ('ok', 'nedovedit', 'fara_sursa', 'neclasificat', 'lot_necunoscut', 'neatribuibil', 'pagina_nepermisa',
-                                                     'fragment_lipsa', 'rand_lipsa', 'rand_ambiguu', 'antet_lipsa', 'coloana_necunoscuta', 'um_lipsa',
+                                                     'fragment_lipsa', 'fragment_ambiguu', 'rand_lipsa', 'rand_ambiguu', 'antet_lipsa', 'coloana_necunoscuta', 'um_lipsa',
                                                      'tipar_necunoscut', 'numar_ambiguu', 'numar_neintreg', 'diametru_nu_cantitate', 'unitate_incompatibila')),
   creat_la       timestamptz NOT NULL DEFAULT now(),
   CHECK ((parte = 'a') = (cantitate_id IS NOT NULL)),
@@ -570,14 +573,14 @@ BEGIN
 END $f$;
 REVOKE ALL ON FUNCTION public.fn_ofertare_masura_pagina(text, integer) FROM PUBLIC, anon, authenticated, service_role;
 -- verificarea deterministă a dovezii (spec §3.2, L11): tabel = rândul literal o singură dată pe pagină, antetul de cantitate deasupra, coloana la
--- același index DE LA DREAPTA, UM din coloana / antetul UM; text = fragmentul literal pe pagină, apoi treptele 3b (tipar) → 3c (diametru) →
--- 3d (UM) → 3e (număr întreg). Primul eșec oprește.
+-- același index DE LA DREAPTA, UM din coloana / antetul UM; text = fragmentul literal pe pagină, cu EXACT o cantitate cu cuvânt-cheie (două =
+-- fragment_ambiguu), apoi treptele 3b (tipar) → 3c (diametru) → 3d (UM) → 3e (număr întreg). Primul eșec oprește.
 CREATE FUNCTION public.fn_ofertare_masura_verifica(p_text_extras text, p_dovada jsonb) RETURNS jsonb
 LANGUAGE plpgsql STABLE SET search_path = public, pg_temp
 AS $f$
 DECLARE v_pag int := (p_dovada ->> 'pagina')::int; v_fel text := p_dovada ->> 'fel_dovada'; v_el text := p_dovada ->> 'element'; v_text text;
         v_rand text; v_cel text; v_frag text; lines text[]; i int; j int; k int; v_nn int; toks text[]; htoks text[]; hgasit boolean := false;
-        v_pos int; v_posum int; v_um text; v_ant text; v_antum text; v_num jsonb; v_umj jsonb; v_kw text; m text[]; v_goale int; r record; s text;
+        v_pos int; v_posum int; v_um text; v_ant text; v_antum text; v_num jsonb; v_umj jsonb; v_kw text; v_re text; m text[]; v_goale int; r record; s text;
         c_nbsp constant text := chr(160) || chr(8239) || chr(8201);
 BEGIN
   v_text := public.fn_ofertare_masura_pagina(p_text_extras, v_pag);
@@ -641,9 +644,13 @@ BEGIN
   v_frag := p_dovada ->> 'fragment';
   IF coalesce(v_frag, '') = '' OR strpos(v_text, v_frag) = 0 THEN RETURN jsonb_build_object('verificare', 'fragment_lipsa'); END IF;
   SELECT string_agg('(?:' || tipar || ')', '|' ORDER BY length(tipar) DESC, tipar) INTO v_kw FROM public.ofertare_tipare_cantitate WHERE fel = 'cuvant_cheie' AND activ;
-  m := regexp_match(public.fn_ofertare_masura_norm(v_frag),
-         '\m(?:' || v_kw || ')[ ]?[:=]?[ ]?(?:(dn|' || chr(248) || '|pn|sdr|de)[ ]?)?([0-9][0-9.,' || c_nbsp || ']*)[ ' || c_nbsp || ']?([a-z.]+)\M');
-  IF m IS NULL THEN RETURN jsonb_build_object('verificare', 'tipar_necunoscut'); END IF;
+  v_re := '\m(?:' || v_kw || ')[ ]?[:=]?[ ]?(?:(dn|' || chr(248) || '|pn|sdr|de)[ ]?)?([0-9][0-9.,' || c_nbsp || ']*)[ ' || c_nbsp || ']?([a-z.]+)\M';
+  -- L11 (r1 P1): fragmentul trebuie să conțină EXACT o cantitate cu cuvânt-cheie; două („… lungime 100 m; … lungime 250 m”) = fragment_ambiguu,
+  -- nu prima potrivire (ar da altei măsuri cantitatea vecinei)
+  v_nn := (SELECT count(*) FROM regexp_matches(public.fn_ofertare_masura_norm(v_frag), v_re, 'g'));
+  IF v_nn = 0 THEN RETURN jsonb_build_object('verificare', 'tipar_necunoscut'); END IF;
+  IF v_nn > 1 THEN RETURN jsonb_build_object('verificare', 'fragment_ambiguu'); END IF;
+  m := regexp_match(public.fn_ofertare_masura_norm(v_frag), v_re);
   m[2] := rtrim(m[2], '., ' || c_nbsp);
   IF m[1] IS NOT NULL OR m[3] = 'mm' THEN RETURN jsonb_build_object('verificare', 'diametru_nu_cantitate', 'valoare_text', m[2], 'um_text', m[3]); END IF;
   v_umj := public.fn_ofertare_um_canonica(m[3], v_el);
@@ -895,7 +902,7 @@ LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
 AS $f$
 DECLARE v_lic record; v_foto jsonb; v_ev bigint; v_vechi bigint[]; v_lim jsonb; r record; o record; v_cl jsonb; v_lot jsonb; v_um text; v_ob text; v_sem bigint;
         v_ver text; v_dov jsonb; v_tip text; v_dn numeric[]; v_masura text; v_ignorate jsonb; v_semnale jsonb; v_obiecte text[]; v_o text;
-        v_el text; v_cls text; v_nat text; v_cunoscut boolean; v_doc_id bigint; v_doc_rev text; v_doc_text text; v_doc_sha text; v_g_pag integer; v_g_linie text; v_g_tok text;
+        v_el text; v_cls text; v_nat text; v_cunoscut boolean; v_doc_id bigint; v_doc_rev text; v_doc_text text; v_doc_sha text; v_g_pag integer; v_g_nr integer; v_g_linie text; v_g_tok text; v_ok_n integer;
 BEGIN
   IF p_licitatie_id IS NULL OR p_token IS NULL OR jsonb_typeof(p_fotografie) IS DISTINCT FROM 'object' OR jsonb_typeof(p_pagini) IS DISTINCT FROM 'object' THEN
     RAISE EXCEPTION 'CM_PARAMETRI: licitatie, token, fotografie (obiect) si pagini (obiect) sunt obligatorii' USING ERRCODE = '22023';
@@ -944,28 +951,36 @@ BEGIN
     v_lot := public.fn_ofertare_masura_lot(r.lot_domeniu, r.lot_nr, v_lic.stare_loturi);
     v_ob := nullif(public.fn_ofertare_masura_norm(r.obiect), '');
     v_cunoscut := (v_cl ->> 'cunoscut')::boolean AND (v_lot ->> 'cunoscut')::boolean;
-    -- dovada A: randul din text_extras al primei surse care contine codul articolului (sau denumirea) si un token egal cu cantitatea
-    v_doc_id := NULL; v_doc_rev := NULL; v_doc_text := NULL; v_doc_sha := NULL; v_dov := NULL; v_ver := 'fara_sursa'; v_g_pag := NULL; v_g_linie := NULL; v_g_tok := NULL;
+    -- dovada A: randul din text_extras al primei surse care contine codul articolului (sau denumirea) CA TOKEN INTREG si un token egal cu cantitatea
+    v_doc_id := NULL; v_doc_rev := NULL; v_doc_text := NULL; v_doc_sha := NULL; v_dov := NULL; v_ver := 'fara_sursa'; v_g_pag := NULL; v_g_nr := NULL; v_g_linie := NULL; v_g_tok := NULL; v_ok_n := 0;
     IF r.surse_document_ids IS NOT NULL AND cardinality(r.surse_document_ids) > 0 THEN
       SELECT d.id, coalesce(d.revizie, '-'), d.text_extras, encode(sha256(convert_to(coalesce(d.text_extras, ''), 'UTF8')), 'hex')
         INTO v_doc_id, v_doc_rev, v_doc_text, v_doc_sha FROM public.ofertare_documente_atribuire d WHERE d.id = r.surse_document_ids[1] AND d.licitatie_id = p_licitatie_id;
       IF v_doc_id IS NOT NULL THEN
         v_ver := 'nedovedit';
-        -- candidatii: randurile cu ancora si un token egal cu cantitatea (de la dreapta spre stanga: coloana cantitatii e la dreapta, „003” s-ar citi ca 3);
-        -- primul care trece verificarea deterministă decide; altfel ramane prima verificare picată (vizibila cu motivul ei)
-        FOR o IN SELECT l.pagina, l.linie, t.tok
+        -- candidatii: randurile cu ancora CA TOKEN INTREG (codul articolului intre spatii — „SA11G1” NU e dovedit de „SA11G10”, r1 P1; fara cod:
+        -- denumirea normalizata intre spatii) si un token egal cu cantitatea (de la dreapta spre stanga: coloana cantitatii e la dreapta, „003” s-ar citi
+        -- ca 3). Se verifica TOATE: exact o linie care trece = dovada; linii DISTINCTE care trec = rand_ambiguu (asocierea pozitie → rand nu e neambigua,
+        -- L11 / L12, la om); niciuna = prima verificare picata (vizibila cu motivul ei)
+        FOR o IN SELECT l.pagina, l.nr, l.linie, t.tok
                    FROM cm_linii l
                    CROSS JOIN LATERAL unnest(regexp_split_to_array(btrim(regexp_replace(l.linie, '[ ' || chr(9) || ']+', ' ', 'g')), ' ')) WITH ORDINALITY t(tok, poz)
                   WHERE l.document_id = v_doc_id
-                    AND CASE WHEN nullif(btrim(r.cod_articol), '') IS NOT NULL THEN strpos(l.linie, btrim(r.cod_articol)) > 0
-                             ELSE strpos(public.fn_ofertare_masura_norm(l.linie), public.fn_ofertare_masura_norm(r.denumire)) > 0 END
+                    AND CASE WHEN nullif(btrim(r.cod_articol), '') IS NOT NULL
+                             THEN strpos(' ' || upper(btrim(regexp_replace(l.linie, '[ ' || chr(9) || ']+', ' ', 'g'))) || ' ', ' ' || upper(btrim(r.cod_articol)) || ' ') > 0
+                             ELSE strpos(' ' || public.fn_ofertare_masura_norm(l.linie) || ' ', ' ' || public.fn_ofertare_masura_norm(r.denumire) || ' ') > 0 END
                     AND r.cantitate IS NOT NULL AND (public.fn_ofertare_numar_ro(t.tok) ->> 'valoare')::numeric = r.cantitate
                   ORDER BY l.pagina, l.nr, t.poz DESC LOOP
           v_dov := public.fn_ofertare_masura_verifica(v_doc_text, jsonb_build_object('pagina', o.pagina, 'fel_dovada', 'tabel', 'rand', o.linie, 'celula', o.tok, 'element', v_cl ->> 'element'));
-          IF v_g_linie IS NULL OR v_dov ->> 'verificare' = 'ok' THEN v_g_pag := o.pagina; v_g_linie := o.linie; v_g_tok := o.tok; v_ver := v_dov ->> 'verificare'; END IF;
-          IF v_ver = 'ok' THEN EXIT; END IF;
+          IF v_dov ->> 'verificare' = 'ok' THEN
+            IF v_ok_n = 0 THEN v_g_pag := o.pagina; v_g_nr := o.nr; v_g_linie := o.linie; v_g_tok := o.tok; v_ver := 'ok'; v_ok_n := 1;
+            ELSIF (o.pagina, o.nr) IS DISTINCT FROM (v_g_pag, v_g_nr) THEN v_ok_n := v_ok_n + 1;
+            END IF;
+          ELSIF v_ok_n = 0 AND v_g_linie IS NULL THEN v_g_pag := o.pagina; v_g_nr := o.nr; v_g_linie := o.linie; v_g_tok := o.tok; v_ver := v_dov ->> 'verificare';
+          END IF;
         END LOOP;
-        IF v_ver <> 'ok' AND v_g_linie IS NOT NULL THEN
+        IF v_ok_n > 1 THEN v_ver := 'rand_ambiguu'; END IF;
+        IF v_g_linie IS NOT NULL THEN
           v_dov := public.fn_ofertare_masura_verifica(v_doc_text, jsonb_build_object('pagina', v_g_pag, 'fel_dovada', 'tabel', 'rand', v_g_linie, 'celula', v_g_tok, 'element', v_cl ->> 'element'));
         END IF;
       END IF;
@@ -1548,18 +1563,20 @@ COMMENT ON VIEW public.v_ofertare_clarificari_baza IS 'R9b + 20270112a: starea r
 -- 9i. proveniența (20261026a) — ABATERE DECLARATĂ față de inventarul planului (#7 „neatins”), găsită de dry-run-ul cu JWT complet: fn_ofertare_surse_valideaza
 --     decide „utilizator” DOAR după rolul din request.jwt.claims; într-un RPC SECURITY DEFINER chemat de un om (ofertare_clarificare_reconfirma de azi,
 --     fn_ofertare_semnal_raspuns_leaga de aici) rolul JWT rămâne „authenticated”, deci scrierea baza_generare / sursa pe o ciornă automată era refuzată
---     („Proveniența clarificării automate … o scrie doar serverul”). Textul LIVE EXACT, cu O schimbare: utilizator = rolul JWT ȘI current_user ∈ (authenticated, anon)
---     (în DEFINER current_user = proprietarul funcției, postgres; scrierile directe prin PostgREST rămân cu current_user = authenticated → refuzate ca azi).
---     Verificabil pe clonă cu JWT real pe o ciornă auto_planse_*: înainte de migrare reconfirmarea pică, după migrare trece. Revenirea readuce textul LIVE.
+--     („Proveniența clarificării automate … o scrie doar serverul”). Textul LIVE cu DOUĂ schimbări: (1) SECURITY INVOKER (ca fn_trg_ofertare_clarificari_baza;
+--     într-un trigger DEFINER current_user ar fi MEREU proprietarul, deci nu poate deosebi căile — r1 P1); (2) utilizator = current_user ∈ (authenticated, anon):
+--     scrierea directă prin PostgREST (current_user = authenticated) e refuzată ca azi; scrierea din RPC-urile DEFINER ale lui postgres e a serverului.
+--     Citirile funcției (documente, cantități, cerințe ale aceleiași licitații) au politici SELECT pentru authenticated (auth.uid() IS NOT NULL: 20260912,
+--     20260928p), deci INVOKER nu le schimbă rezultatul; service_role are BYPASSRLS. Verificabil pe clonă cu JWT real pe o ciornă auto_planse_*: înainte
+--     de migrare reconfirmarea pică, după migrare trece; UPDATE direct pe surse_* ca authenticated = 42501 înainte și după. Revenirea readuce textul LIVE (DEFINER).
 CREATE OR REPLACE FUNCTION public.fn_ofertare_surse_valideaza()
  RETURNS trigger
  LANGUAGE plpgsql
- SECURITY DEFINER
+ SECURITY INVOKER
  SET search_path = public, pg_temp
 AS $fn$
 DECLARE
   v_lipsa bigint;
-  v_rol text := coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role', '');
   v_utilizator boolean;
   -- 20261026a: pe ofertare_cerinte se validează surse_document_ids (blocul comun de la final), ca pe cantități.
   -- sursele derivate de server (clarificarea automată): un ID DISPĂRUT (inexistent global) se păstrează — codul îl tratează ca
@@ -1567,8 +1584,8 @@ DECLARE
   v_derivat boolean := false;
   v_max constant int := 20000;   -- fără trunchiere: baza F3 a clarificării automate poate avea sute de rânduri (Jakarinos r6 P2)
 BEGIN
-  -- 20270112a: scrierile din RPC-urile SECURITY DEFINER (current_user = proprietarul) nu sunt scrieri de utilizator, oricare ar fi rolul din JWT
-  v_utilizator := v_rol IN ('authenticated', 'anon') AND current_user IN ('authenticated', 'anon');
+  -- 20270112a (INVOKER): scrierea directă a clientului = current_user authenticated / anon; din RPC-urile SECURITY DEFINER current_user = postgres (server)
+  v_utilizator := current_user IN ('authenticated', 'anon');
   IF v_utilizator THEN
     IF TG_OP = 'INSERT' THEN
       IF NEW.surse_document_ids IS NOT NULL THEN
@@ -1726,7 +1743,7 @@ BEGIN
       ('public.ofertare_clarificare_exceptie_identitate(bigint,text,text)', 'd35e5e1fb801d843a9d5192ce30df282', true, '{postgres=X/postgres,authenticated=X/postgres}'),
       ('public.ofertare_clarificari_export(bigint)', '328b25f3431c5fc51a016d5ef359e453', false, '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}'),
       ('public.ofertare_clarificari_notifica(bigint)', 'c18e8787e66b34f6b69b0d005f344896', true, '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}'),
-      ('public.fn_ofertare_surse_valideaza()', '739ba119df5d51bc4981091de810a25e', true, '{postgres=X/postgres}')
+      ('public.fn_ofertare_surse_valideaza()', '18ff9207d3cf797ee0d4ea021fda533e', false, '{postgres=X/postgres}')
       -- <<< AMPRENTE NOI
     ) v(fn, corp_md5, definer, acl) LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.oid = to_regprocedure(r.fn)

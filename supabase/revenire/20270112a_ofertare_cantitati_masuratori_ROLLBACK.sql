@@ -68,7 +68,7 @@ BEGIN
       ('public.ofertare_clarificare_exceptie_identitate(bigint,text,text)', 'd35e5e1fb801d843a9d5192ce30df282', true, '{postgres=X/postgres,authenticated=X/postgres}'),
       ('public.ofertare_clarificari_export(bigint)', '328b25f3431c5fc51a016d5ef359e453', false, '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}'),
       ('public.ofertare_clarificari_notifica(bigint)', 'c18e8787e66b34f6b69b0d005f344896', true, '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}'),
-      ('public.fn_ofertare_surse_valideaza()', '739ba119df5d51bc4981091de810a25e', true, '{postgres=X/postgres}')
+      ('public.fn_ofertare_surse_valideaza()', '18ff9207d3cf797ee0d4ea021fda533e', false, '{postgres=X/postgres}')
       -- <<< AMPRENTE NOI
     ) v(fn, corp_md5, definer, acl) LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.oid = to_regprocedure(r.fn)
@@ -92,7 +92,7 @@ BEGIN
       ('public.fn_ofertare_masura_pagini_permise(jsonb,integer)', '0dd4ca63111cbf405093cb03325cd691', 'sql', false, 'i', 'postgres:EXECUTE'),
       ('public.fn_ofertare_masura_pagini(text)', '3d9b5b9811e5d76cab058158a4f76873', 'sql', false, 'i', 'postgres:EXECUTE'),
       ('public.fn_ofertare_masura_pagina(text,integer)', '392b31108da66447cc0ea9882e349266', 'plpgsql', false, 'i', 'postgres:EXECUTE'),
-      ('public.fn_ofertare_masura_verifica(text,jsonb)', '5bf61f88d1dcfbc1b48f034e65291dc3', 'plpgsql', false, 's', 'postgres:EXECUTE'),
+      ('public.fn_ofertare_masura_verifica(text,jsonb)', '626ddb704f43d34d08f74978ea63f816', 'plpgsql', false, 's', 'postgres:EXECUTE'),
       ('public.fn_ofertare_masura_felii_autoritative(bigint)', '923fd984cb168018b77d67db759c8db6', 'sql', false, 's', 'postgres:EXECUTE'),
       ('public.fn_ofertare_masura_pagini_neacoperite(text,bigint)', 'b72dd3e5d9bb5385f9e2a8e5d691027c', 'sql', false, 's', 'postgres:EXECUTE'),
       ('public.fn_ofertare_semnale_fotografie(bigint)', '265a7379c98260864f81f0d1cdaacf1d', 'plpgsql', true, 's', 'postgres:EXECUTE, service_role:EXECUTE'),
@@ -106,7 +106,7 @@ BEGIN
       ('public.fn_ofertare_semnale_setari(bigint,numeric,integer)', '9cfb151c759aafb3f223e15c36fab5a9', 'plpgsql', true, 'v', 'authenticated:EXECUTE, postgres:EXECUTE'),
       ('public.fn_ofertare_semnal_raspuns_leaga(bigint,bigint,numeric)', '153f2870cc574ed9c71da19ce6efe1e5', 'plpgsql', true, 'v', 'authenticated:EXECUTE, postgres:EXECUTE'),
       ('public.fn_ofertare_semnale_lista(bigint)', '3ba12807cfc770f7302c16315454e03a', 'plpgsql', true, 's', 'authenticated:EXECUTE, postgres:EXECUTE'),
-      ('public.fn_ofertare_masuratori_propune(bigint,uuid,jsonb,jsonb)', '31d39b9bc0a3dcb252f16840ca9e7a06', 'plpgsql', true, 'v', 'postgres:EXECUTE, service_role:EXECUTE'),
+      ('public.fn_ofertare_masuratori_propune(bigint,uuid,jsonb,jsonb)', 'f70e55e7876b856459fa1220bfe15e2e', 'plpgsql', true, 'v', 'postgres:EXECUTE, service_role:EXECUTE'),
       ('public.fn_ofertare_semnale_publica(bigint,bigint,uuid)', 'd95ea61898ea47cacc2732af74075855', 'plpgsql', true, 'v', 'postgres:EXECUTE, service_role:EXECUTE'),
       ('public.ofertare_semnal_baza_stare(public.ofertare_clarificari,text)', '031261130e5f6e78c526ea05e22cbce3', 'plpgsql', true, 's', 'authenticated:EXECUTE, postgres:EXECUTE, service_role:EXECUTE'),
       ('public.fn_ofertare_ciorna_auto_stare(public.ofertare_clarificari,text)', '0664b97a62afc2d5e14f533b8e303876', 'plpgsql', true, 's', 'authenticated:EXECUTE, postgres:EXECUTE, service_role:EXECUTE')

@@ -173,7 +173,7 @@ END $t$;
 -- ── t_dovezi ──
 DO $t$
 DECLARE r record; v jsonb; v_cant2 bigint; v_p jsonb; v_pub jsonb; s record;
-  c_pag constant text := E'⟦PAGINA 1⟧\nNr. Cod Denumire UM DN Cantitate\n003 SA11G1 TEAVA PE100 DN160 M 160 6.400\nNr. Cod Denumire UM Cantitate\n010 Y TEAVA DN160 M 1.23\n011 Z TEAVA DN160 MM 160\nconductă DN 160, lungime 250 m\n';
+  c_pag constant text := E'⟦PAGINA 1⟧\nNr. Cod Denumire UM DN Cantitate\n003 SA11G1 TEAVA PE100 DN160 M 160 6.400\nNr. Cod Denumire UM Cantitate\n010 Y TEAVA DN160 M 1.23\n011 Z TEAVA DN160 MM 160\nconductă DN 160, lungime 250 m\nconductă DN110, lungime 100 m; conductă DN160, lungime 250 m\n';
 BEGIN
   FOR r IN SELECT * FROM (VALUES
       ('rand gresit', '{"pagina": 1, "fel_dovada": "tabel", "rand": "999 INEXISTENT M 1", "celula": "1", "element": "teava_pe_dn160"}'::jsonb, 'rand_lipsa'),
@@ -182,7 +182,8 @@ BEGIN
       ('diametru in loc de cantitate', '{"pagina": 1, "fel_dovada": "tabel", "rand": "011 Z TEAVA DN160 MM 160", "celula": "160", "element": "teava_dn160"}'::jsonb, 'diametru_nu_cantitate'),
       ('1.23 ambiguu', '{"pagina": 1, "fel_dovada": "tabel", "rand": "010 Y TEAVA DN160 M 1.23", "celula": "1.23", "element": "teava_dn160"}'::jsonb, 'numar_ambiguu'),
       ('text: lungime 250 m', '{"pagina": 1, "fel_dovada": "text", "fragment": "conductă DN 160, lungime 250 m", "element": "teava_pe_dn160"}'::jsonb, 'ok'),
-      ('text: DN160 fara cuvant-cheie', '{"pagina": 1, "fel_dovada": "text", "fragment": "TEAVA DN160 M", "element": "teava_dn160"}'::jsonb, 'tipar_necunoscut')
+      ('text: DN160 fara cuvant-cheie', '{"pagina": 1, "fel_dovada": "text", "fragment": "TEAVA DN160 M", "element": "teava_dn160"}'::jsonb, 'tipar_necunoscut'),
+      ('text: doua cantitati in fragment → ambiguu, nu prima', '{"pagina": 1, "fel_dovada": "text", "fragment": "conductă DN110, lungime 100 m; conductă DN160, lungime 250 m", "element": "teava_pe_dn160"}'::jsonb, 'fragment_ambiguu')
     ) x(ce, dov, astept) LOOP
     v := public.fn_ofertare_masura_verifica(c_pag, r.dov);
     IF v ->> 'verificare' IS DISTINCT FROM r.astept THEN RAISE EXCEPTION 't_dovezi FAIL: % → % (astept %)', r.ce, v ->> 'verificare', r.astept; END IF;
@@ -331,6 +332,19 @@ BEGIN
   EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   BEGIN
     UPDATE public.ofertare_cantitati_semnale SET verdict = 'in_regula'; RAISE EXCEPTION 't_acces FAIL: UPDATE direct acceptat';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  -- provenienta (fn_ofertare_surse_valideaza, acum INVOKER): scrierea DIRECTA a clientului pe surse_* / origine ramane refuzata (42501), cu id valid din aceeasi licitatie
+  BEGIN
+    UPDATE public.ofertare_clarificari SET surse_document_ids = ARRAY[current_setting('dry.atr')::bigint] WHERE id = current_setting('dry.ciorna')::bigint;
+    RAISE EXCEPTION 't_acces FAIL: provenienta ciornei scrisa direct de utilizator';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN
+    UPDATE public.ofertare_cantitati SET surse_document_ids = NULL WHERE id = current_setting('dry.cant')::bigint;
+    RAISE EXCEPTION 't_acces FAIL: provenienta pozitiei F3 scrisa direct de utilizator';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN
+    INSERT INTO public.ofertare_clarificari (licitatie_id, nr, intrebare, status, origine) VALUES (pg_temp.rd_lic(1), 78, 'x', 'propunere', 'automat');
+    RAISE EXCEPTION 't_acces FAIL: INSERT cu origine automat acceptat de la utilizator';
   EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   PERFORM pg_temp.rd_postgres();
   -- doua licitatii → CM_ALTA_LICITATIE (documentul licitatiei 2 pe o masuratoare a licitatiei 1)

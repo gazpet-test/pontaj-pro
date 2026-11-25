@@ -134,7 +134,9 @@ marcaje = re.findall(r'^-- ─── ([0-9]+)\. ', MIG, re.M)
 if marcaje != ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']: sys.exit('migrarea: marcajele sectiunilor nu sunt 0..10 (o data fiecare): %r' % marcaje)
 inc, sf = '\n-- ─── 2. ', '\n-- ─── 10. '
 ddl = MIG[MIG.index(inc) + 1:MIG.index(sf) + 1]
-for interzis in ('$pre$', '$lock$', '$post$', '$stare$', 'gazpet.livrare_migrare', 'gazpet.plafon_tranzactie', 'gazpet.lock_puternic_la'):
+# blocurile garzilor (DO/END), nu simplele mentiuni din comentarii (sectiunea 5 trimite la preflight-ul din $stare$); GUC-urile runnerului oriunde
+for interzis in ('DO $pre$', 'END $pre$', 'DO $lock$', 'END $lock$', 'DO $stare$', 'END $stare$', 'DO $post$', 'END $post$',
+                 'gazpet.livrare_migrare', 'gazpet.plafon_tranzactie', 'gazpet.lock_puternic_la'):
     if interzis in ddl: sys.exit('sectiunile extrase contin o garda a runnerului: ' + interzis)
 pre = ("CREATE TEMP TABLE cm_view_acl ON COMMIT DROP AS\n  SELECT CASE e.grantee WHEN 0 THEN 'PUBLIC' ELSE pg_get_userbyid(e.grantee) END AS rol, e.privilege_type AS drept\n"
        "    FROM pg_class c, aclexplode(coalesce(c.relacl, acldefault('r', c.relowner))) e WHERE c.oid = 'public.v_ofertare_clarificari_baza'::regclass;\n")
@@ -211,6 +213,9 @@ asteaptaA() {
   A_STARE='FARA_RASPUNS'; return 1
 }
 pasA() { local marcaj="$1"; shift; printf '%s\n' "$@" "\\warn $marcaj :SQLSTATE" >&"$A_IN"; asteaptaA "$marcaj"; }
+# valoarea unei variabile psql din A (după un \gset), cu marcajul ei, DUPĂ marcajul de stare al pasului (asteaptaA consumă liniile până la marcajul cerut:
+# un marcaj emis înaintea celui așteptat s-ar pierde — r1 P2)
+valA() { printf '%s\n' "\\warn $1 :$2" >&"$A_IN"; asteaptaA "$1"; }
 inchideA() { local linie; { printf '%s\n' '\q' >&"$A_IN"; } 2>/dev/null || true; while IFS= read -r -t 60 -u "$A_FD_OUT" linie 2>/dev/null; do printf '%s\n' "$linie" >> "$A_ERR"; done; wait "$A_PID_C" 2>/dev/null; A_DESCHIS=0; }
 pornesteB() {   # <prolog rol> <SELECT … AS r>
   printf '%s\n' "SET lock_timeout = '20s';" "BEGIN;" "$1" "\\set r -" "$2 \\gset" "\\echo B_REZ :SQLSTATE" "\\echo B_MSG :LAST_ERROR_MESSAGE" "\\echo B_R :r" "COMMIT;" "\\echo B_COMMIT :SQLSTATE" > "$D/B.sql"
@@ -255,8 +260,8 @@ echo "c_doua_publicari (licitatia 900101)"
 {
   L=900101; TA="$(token)"; TB="$(token)"
   deschideA
-  pasA C1a "BEGIN;" "$(caService)" "\\set r -" "SELECT (public.fn_ofertare_masuratori_propune($L, '$TA', public.fn_ofertare_semnale_fotografie($L), '{\"plafon\": 200, \"plafon_atins\": false, \"pagini_necitite\": [], \"documente_necitite\": [], \"felii_incomplete\": []}'::jsonb)) ->> 'evaluare_id' AS r \\gset" "\\warn C1a_r :r"
-  astept 00000 "$A_STARE" "A: propune (necomis)"; asteaptaA C1a_r; EVA="$A_STARE"
+  pasA C1a "BEGIN;" "$(caService)" "\\set r -" "SELECT (public.fn_ofertare_masuratori_propune($L, '$TA', public.fn_ofertare_semnale_fotografie($L), '{\"plafon\": 200, \"plafon_atins\": false, \"pagini_necitite\": [], \"documente_necitite\": [], \"felii_incomplete\": []}'::jsonb)) ->> 'evaluare_id' AS r \\gset"
+  astept 00000 "$A_STARE" "A: propune (necomis)"; valA C1a_r r; EVA="$A_STARE"
   pornesteB "$(caService)" "SELECT (public.fn_ofertare_masuratori_propune($L, '$TB', public.fn_ofertare_semnale_fotografie($L), '{\"plafon\": 200, \"plafon_atins\": false, \"pagini_necitite\": [], \"documente_necitite\": [], \"felii_incomplete\": []}'::jsonb)) ->> 'evaluare_id' AS r"
   bariera
   pasA C1b "COMMIT;"; astept 00000 "$A_STARE" "A: COMMIT"
@@ -326,8 +331,8 @@ echo "c_sursa_dupa_verificare (licitatia 900104)"
   L=900104; evalueaza "$L" > /dev/null; C="$(ciorna $L)"; aproba "$C" > /dev/null
   T="$(token)"; CANT="$(q "SELECT id FROM public.ofertare_cantitati WHERE licitatie_id = $L")"
   deschideA
-  pasA C4a "BEGIN;" "$(caService)" "\\set r -" "SELECT (public.fn_ofertare_masuratori_propune($L, '$T', public.fn_ofertare_semnale_fotografie($L), '{\"plafon\": 200, \"plafon_atins\": false, \"pagini_necitite\": [], \"documente_necitite\": [], \"felii_incomplete\": []}'::jsonb)) ->> 'evaluare_id' AS r \\gset" "\\warn C4a_r :r"
-  astept 00000 "$A_STARE" "A: propune (necomis)"; asteaptaA C4a_r; EV="$A_STARE"
+  pasA C4a "BEGIN;" "$(caService)" "\\set r -" "SELECT (public.fn_ofertare_masuratori_propune($L, '$T', public.fn_ofertare_semnale_fotografie($L), '{\"plafon\": 200, \"plafon_atins\": false, \"pagini_necitite\": [], \"documente_necitite\": [], \"felii_incomplete\": []}'::jsonb)) ->> 'evaluare_id' AS r \\gset"
+  astept 00000 "$A_STARE" "A: propune (necomis)"; valA C4a_r r; EV="$A_STARE"
   pasA C4b "SELECT (public.fn_ofertare_semnale_publica($L, $EV, '$T')) -> 'semnale' -> 0 ->> 'verdict';"; astept 00000 "$A_STARE" "A: publica dupa reverificarea fotografiei, NECOMISA (cantitatile FOR SHARE)"
   pornesteB "-- postgres: schimbarea sursei" "WITH x AS (UPDATE public.ofertare_cantitati SET cantitate = 6401 WHERE id = $CANT RETURNING 1) SELECT count(*)::text AS r FROM x"
   bariera
@@ -342,15 +347,13 @@ echo "c_sursa_dupa_verificare (licitatia 900104)"
 
 # ── perechile fără deadlock pe două ciorne cu nr inversat ──
 pereche() {   # <scenariu> <lic> <prolog A> <sql A> <prolog B> <sql B (SELECT … AS r)>
-  local S="$1" L="$2"
+  local S="$1" L="$2" PA="$3" SA="$4" PB="$5" SB="$6"   # argumentele se copiază ÎNAINTE de orice altceva (r1 P2: `set --` le-ar înlocui)
   echo "$S (licitatia $L): doua ciorne auto_surse_* cu nr in ordine inversa fata de id"
-  local IDS; IDS="$(doua_ciorne "$L")"; echo "      ciorne (id1 id2 nr1 nr2): $IDS"
-  set -- $IDS
-  [ "$3" -gt "$4" ]; ok $? "nr-urile sunt inversate fata de id ($3 > $4)"
-  local C1="$1" C2="$2"
+  local IDS C1 C2 N1 N2; IDS="$(doua_ciorne "$L")"; echo "      ciorne (id1 id2 nr1 nr2): $IDS"
+  read -r C1 C2 N1 N2 _ <<< "$IDS"
+  [ -n "${N2:-}" ] && [ "$N1" -gt "$N2" ]; ok $? "nr-urile sunt inversate fata de id (${N1:-?} > ${N2:-?})"
   aproba "$C1" > /dev/null; aproba "$C2" > /dev/null
   astept "2" "$(q "SELECT count(*) FROM public.ofertare_clarificari WHERE licitatie_id = $L AND status = 'de_trimis'")" "ambele ciorne aprobate (de_trimis)"
-  local PA="$5" SA="$6" PB="$7" SB="$8"
   deschideA
   pasA "${S}_a" "BEGIN;" "$PA" "$SA"; astept 00000 "$A_STARE" "A: prima functie, NECOMISA"
   pornesteB "$PB" "$SB"

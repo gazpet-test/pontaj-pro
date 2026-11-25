@@ -403,7 +403,8 @@ async function verificaT2(db) {
   }
   const ATR = PAG(1, 'AVIZ TEHNIC DE RACORDARE', 'Se va executa o conductă DN 160, lungime 250 m, din PE100.', 'Rețeaua este în lungime totală de 3.995 m.', 'L = 1.200 m pe strada A.',
     'număr de bucăți 12 buc robineți.', 'Tub DN160 montat.', 'Tubul are lungime 160 mm grosime.', 'lungime DN160 m', 'lungime Dn 160 m', 'conductă Dn 160, lungime 250 m',
-    'aproximativ 250 de metri', '250 m de conductă', 'lungime 3.995,50 m', 'lungime 1.23 m', 'lungime 250 t', 'lungime 6' + String.fromCharCode(160) + '400 m', 'lungime 2 km', 'cablul 250 m')
+    'aproximativ 250 de metri', '250 m de conductă', 'lungime 3.995,50 m', 'lungime 1.23 m', 'lungime 250 t', 'lungime 6' + String.fromCharCode(160) + '400 m', 'lungime 2 km', 'cablul 250 m',
+    'conductă DN110, lungime 100 m; conductă DN160, lungime 250 m', 'tronson A lungime 100 m și tronson B în lungime totală de 250 m')
     + PAG(3, 'fragment prezent pe pagina 3')
   const X = (fragment, pagina = 1, element = 'teava_pe_dn160') => ({ pagina, fel_dovada: 'text', fragment, element })
   const cazX = [
@@ -424,6 +425,10 @@ async function verificaT2(db) {
     ['t2_text_nelegat neîntreg', X('lungime 3.995,50 m'), { verificare: 'numar_neintreg' }],
     ['t2_text_nelegat ambiguu', X('lungime 1.23 m'), { verificare: 'numar_ambiguu' }],
     ['t2_text_nelegat unitate_incompatibila', X('lungime 250 t'), { verificare: 'unitate_incompatibila' }],
+    // r1 P1: două cantități cu cuvânt-cheie în același fragment → niciuna nu e dovedită (nu prima potrivire: ar da altei măsuri cantitatea vecinei)
+    ['t2_text fragment_ambiguu (două cantități, două DN-uri)', X('conductă DN110, lungime 100 m; conductă DN160, lungime 250 m'), { verificare: 'fragment_ambiguu' }],
+    ['t2_text fragment_ambiguu (două cuvinte-cheie diferite)', X('tronson A lungime 100 m și tronson B în lungime totală de 250 m'), { verificare: 'fragment_ambiguu' }],
+    ['t2_text fragmentul tăiat la o singură cantitate → ok 250', X('conductă DN160, lungime 250 m'), { verificare: 'ok', valoare: 250 }],
     ['t2_text fragment_lipsa (altă pagină)', X('fragment prezent pe pagina 3', 4), { verificare: 'fragment_lipsa' }],
     ['t2_text fragment prezent pe pagina 3 → tipar', X('fragment prezent pe pagina 3', 3), { verificare: 'tipar_necunoscut' }],
     ['t2_text fragment inexistent', X('text care nu e in document'), { verificare: 'fragment_lipsa' }],
@@ -631,6 +636,26 @@ const ast = (ab, cond, msg) => { if (!cond) ab.push(msg) }
     await publica(db, LIC, p.evaluare_id, p.token)
     const s = (await semnalCunoscut(db))[0]
     ast(ab, Number(s.valoare_a) === 6400 && s.inventar.a.componente === 1, 'cantitate_id dublat → A = 6400, o componentă: ' + JSON.stringify([s.valoare_a, s.inventar.a]))
+  }
+  S3['t3_dovada_a_cod_intreg + t3_dovada_a_ambigua'] = async (db, ab) => {
+    // r1 P1: codul articolului e ancoră ca TOKEN întreg — „SA11G1” NU e dovedit de rândul „SA11G10 … 6.400” (alt articol, aceeași cantitate)
+    await fixturaTichet(db, { f3Text: PAG(1, 'Formularul F3', 'Nr. Cod Denumire UM Cantitate', '003 SA11G10 TEAVA PE100 DN110 M 6.400'), obsF3: [] })
+    await evalueaza(db)
+    let s = (await semnalCunoscut(db))[0]
+    let m = (await masuratori(db, s.id, s.evaluare_id)).filter(x => x.parte === 'a')
+    ast(ab, m.length === 1 && m[0].verificare === 'nedovedit' && m[0].rand === null && s.verdict === 'neverificat', 'SA11G1 nu e dovedit de SA11G10: ' + JSON.stringify(m.map(x => [x.verificare, x.rand])))
+    // același cod pe DOUĂ rânduri distincte cu aceeași cantitate → asocierea poziție → rând nu e neambiguă → rand_ambiguu (la om), nu „primul rând”
+    await fixturaTichet(db, { lic: LIC2, f3Text: PAG(1, 'Formularul F3', 'Nr. Cod Denumire UM Cantitate', '003 SA11G1 TEAVA PE100 DN160 M 6.400', '007 SA11G1 TEAVA PE100 DN160 M 6.400'), obsF3: [] })
+    await evalueaza(db, LIC2)
+    s = (await semnalCunoscut(db, LIC2))[0]
+    m = (await masuratori(db, s.id, s.evaluare_id)).filter(x => x.parte === 'a')
+    ast(ab, m.length === 1 && m[0].verificare === 'rand_ambiguu' && m[0].valoare === null && s.verdict === 'neverificat', 'două rânduri cu același cod și aceeași cantitate → rand_ambiguu: ' + JSON.stringify(m.map(x => [x.verificare, x.valoare])))
+    // codul la începutul / sfârșitul rândului și cu mai multe spații: tot token întreg → ok
+    await db.query(`UPDATE public.ofertare_documente_atribuire SET text_extras = $2 WHERE licitatie_id = $1 AND nume_original = 'DOC_F3_T'`, [LIC2, PAG(1, 'Formularul F3', 'Nr. Cod Denumire UM Cantitate', 'SA11G1  TEAVA PE100 DN160   M  6.400')])
+    await evalueaza(db, LIC2)
+    s = (await semnalCunoscut(db, LIC2))[0]
+    m = (await masuratori(db, s.id, s.evaluare_id)).filter(x => x.parte === 'a')
+    ast(ab, m.length === 1 && m[0].verificare === 'ok' && Number(m[0].valoare) === 6400, 'codul ca token la început de rând, spații multiple → ok: ' + JSON.stringify(m.map(x => [x.verificare, x.valoare])))
   }
   S3['t3_loturi'] = async (db, ab) => {
     // licitație cu loturi: F3 lot 1 vs observație lista {2} → măsuri diferite, fără semnal
@@ -1114,8 +1139,9 @@ async function aproba(db, ab, clarId, cont = 'RESP') {
     // INSERT cu cheie auto_surse_x ca authenticated → refuz; UPDATE baza_generare → refuz; UPDATE sursa → păstrată; DELETE → refuz
     asteptMesaj(await scrieCa(db, 'RESP', `INSERT INTO public.ofertare_clarificari (licitatie_id, nr, intrebare, status, cheie) VALUES ($1, 50, 'x', 'propunere', 'auto_surse_0123456789abcdef')`, [LIC]), /generatorul controlat|doar serverul/, 'INSERT auto_surse_x ca authenticated', ab)
     asteptMesaj(await upd(db, 'RESP', c.id, `baza_generare = '{}'`), /reconfirmare|doar serverul/, 'UPDATE baza_generare', ab)
-    const su = await upd(db, 'RESP', c.id, `sursa = 'altceva'`)
-    ast(ab, su.ok && (await ciorne(db))[0].sursa === c.sursa, 'UPDATE sursa → păstrată de trigger: ' + (su.message || (await ciorne(db))[0].sursa))
+    // sursa unei ciorne automate: scrierea directă a clientului e refuzată de triggerul de proveniență (20261026a, INVOKER aici) — 42501, nu „păstrată” tăcut
+    asteptCod(await upd(db, 'RESP', c.id, `sursa = 'altceva'`), '42501', 'UPDATE sursa ca authenticated', ab)
+    ast(ab, (await ciorne(db))[0].sursa === c.sursa, 'sursa neschimbată după încercare')
     asteptMesaj(await scrieCa(db, 'RESP', `DELETE FROM public.ofertare_clarificari WHERE id = $1`, [c.id]), /retrage ciorna/, 'DELETE', ab)
     asteptMesaj(await scrieCa(db, 'OWNER', `DELETE FROM public.ofertare_clarificari WHERE id = $1`, [c.id]), /retrage ciorna/, 'DELETE ca owner', ab)
     // view: ciorna auto_surse_* apare cu stare, amprenta_curenta, text, detalii.evaluare = surse_v1; fără acces Ofertare → 0 rânduri
@@ -1281,6 +1307,30 @@ async function aproba(db, ab, clarId, cont = 'RESP') {
     const vo = await vedere(db, 'RESP', orf)
     ast(ab, vo.stare === 'indisponibila' && /necesită review/.test(vo.text), 'ciornă fără semnal → indisponibila: ' + JSON.stringify([vo.stare, vo.text]))
     asteptMesaj(await upd(db, 'RESP', orf, `status = 'de_trimis'`), /Clarificare blocată/, 'orfana nu trece la de_trimis', ab)
+  }
+  S4['t4_provenienta_directa'] = async (db, ab) => {
+    // r1 P1: proveniența (surse_*, origine, sursa / baza_generare pe automat) rămâne a serverului: scrierea DIRECTĂ a clientului (current_user authenticated)
+    // e refuzată cu 42501 de fn_ofertare_surse_valideaza (acum INVOKER), iar calea RPC DEFINER (reconfirmarea, legarea răspunsului) trece
+    const f = await fixturaTichet(db)
+    await evalueaza(db)
+    const c = (await ciorne(db))[0]
+    asteptCod(await upd(db, 'RESP', c.id, `surse_document_ids = ARRAY[${f.dF3}]::bigint[]`), '42501', 'UPDATE direct surse_document_ids (id valid, aceeași licitație) pe ciorna automată', ab)
+    asteptCod(await upd(db, 'RESP', c.id, `surse_cantitati_ids = NULL`), '42501', 'UPDATE direct surse_cantitati_ids = NULL pe ciorna automată', ab)
+    asteptCod(await upd(db, 'OWNER', c.id, `surse_document_ids = ARRAY[${f.dF3}]::bigint[]`), '42501', 'UPDATE direct surse ca owner (tot client)', ab)
+    await db.query(`INSERT INTO public.ofertare_clarificari (licitatie_id, nr, intrebare, status) VALUES ($1, 40, 'intrebare manuala', 'propunere')`, [LIC])
+    const cm = (await q(db, `SELECT id FROM public.ofertare_clarificari WHERE licitatie_id = $1 AND nr = 40`, [LIC]))[0].id
+    asteptCod(await upd(db, 'RESP', cm, `surse_document_ids = ARRAY[${f.dF3}]::bigint[]`), '42501', 'UPDATE direct surse pe o clarificare manuală', ab)
+    asteptCod(await upd(db, 'RESP', cm, `origine = 'automat'`), '42501', 'UPDATE direct origine → automat', ab)
+    asteptCod(await scrieCa(db, 'RESP', `INSERT INTO public.ofertare_clarificari (licitatie_id, nr, intrebare, status, origine) VALUES ($1, 41, 'x', 'propunere', 'automat')`, [LIC]), '42501', 'INSERT cu origine automat ca authenticated', ab)
+    asteptCod(await scrieCa(db, 'RESP', `INSERT INTO public.ofertare_clarificari (licitatie_id, nr, intrebare, status, surse_document_ids) VALUES ($1, 42, 'x', 'propunere', ARRAY[${f.dF3}]::bigint[])`, [LIC]), '42501', 'INSERT cu surse ca authenticated', ab)
+    asteptCod(await scrieCa(db, 'RESP', `UPDATE public.ofertare_cantitati SET surse_document_ids = NULL WHERE id = $1 RETURNING id`, [f.cant[0]]), '42501', 'UPDATE direct surse_document_ids pe o poziție F3', ab)
+    // textul rămâne editabil de om (proveniența nu); calea serverului (service_role direct, RPC DEFINER) scrie
+    const e = await upd(db, 'RESP', c.id, `intrebare = intrebare || ' (editat)'`)
+    ast(ab, e.ok, 'editarea textului de om trece: ' + (e.message || ''))
+    const sr = await scrieCa(db, null, `UPDATE public.ofertare_cantitati SET surse_document_ids = ARRAY[${f.dF3}]::bigint[] WHERE id = $1 RETURNING id`, [f.cant[0]], { rol: 'service_role' })
+    ast(ab, sr.ok && sr.rows.length === 1, 'service_role scrie sursele pe poziția F3: ' + (sr.message || ''))
+    const c2 = (await ciorne(db))[0]
+    ast(ab, JSON.stringify((c2.surse_document_ids || []).map(Number).sort()) === JSON.stringify([f.dF3, f.dAtr].sort()) && c2.origine === 'automat', 'proveniența ciornei neschimbată după încercări: ' + JSON.stringify(c2.surse_document_ids))
   }
   S4['t4_lant_authenticated + t4_planse_neschimbat + t4_fara_advisory + t4_drepturi'] = async (db, ab) => {
     const f = await fixturaTichet(db)
@@ -1561,7 +1611,7 @@ if (vrea('t5') && MIG) {
   }
   const MUTANTI = [
     ['M01 dovada text acceptă diametrul (3c scos: „lungime DN160 m” → 160)', [["  IF m[1] IS NOT NULL OR m[3] = 'mm' THEN RETURN jsonb_build_object('verificare', 'diametru_nu_cantitate'", "  IF false THEN RETURN jsonb_build_object('verificare', 'diametru_nu_cantitate'"]], ['t2']],
-    ['M01b dovada text fără ancora de cuvânt (\\m): fragment ca subșir', [["  m := regexp_match(public.fn_ofertare_masura_norm(v_frag),\n         '\\m(?:' || v_kw || ')", "  m := regexp_match(public.fn_ofertare_masura_norm(v_frag),\n         '(?:' || v_kw || ')"]], ['t2']],
+    ['M01b dovada text fără ancora de cuvânt (\\m): fragment ca subșir', [["  v_re := '\\m(?:' || v_kw || ')", "  v_re := '(?:' || v_kw || ')"]], ['t2']],
     ['M02 coloana acceptată la indexul vecin (±1)', [["    IF cardinality(toks) - v_pos < 1 OR toks[cardinality(toks) - v_pos] IS DISTINCT FROM v_cel THEN RETURN jsonb_build_object('verificare', 'coloana_necunoscuta'); END IF;",
       "    IF cardinality(toks) - v_pos < 1 OR NOT (v_cel IN (toks[cardinality(toks) - v_pos], toks[cardinality(toks) - v_pos - 1], toks[cardinality(toks) - v_pos + 1])) THEN RETURN jsonb_build_object('verificare', 'coloana_necunoscuta'); END IF;"]], ['t2']],
     ['M03 numar_ro acceptă grup de 2 cifre după punct', [["  IF s ~ '^[0-9]{1,3}([.][0-9]{3})*(,[0-9]+)?$' OR s ~ '^[0-9]+(,[0-9]+)?$' THEN", "  IF s ~ '^[0-9]{1,3}([.][0-9]{2,3})*(,[0-9]+)?$' OR s ~ '^[0-9]+(,[0-9]+)?$' THEN"]], ['t2']],
@@ -1616,6 +1666,11 @@ if (vrea('t5') && MIG) {
     ['M50 lista fără verificarea accesului (fail-open)', [["  IF auth.uid() IS NULL OR NOT coalesce(public.fn_are_acces_ofertare(), false) THEN RAISE EXCEPTION 'CM_FARA_DREPT: fara acces la Ofertare' USING ERRCODE = '42501'; END IF;\n  v_sha :=", "  v_sha :="]], ['t3_drept + t3_lista_actual + t3_felii + t3_context']],
     ['M51 propune fără refuzul fotografiei vechi', [["  IF p_fotografie ->> 'sha' IS DISTINCT FROM v_foto ->> 'sha' THEN RETURN jsonb_build_object('refuz', 'evaluare_depasita', 'sha_acum', v_foto ->> 'sha'); END IF;\n", ""]], ['t3_depasita + t3_izolare + t3_extragere_noua_intre_rpc + t3_plafon_vechi']],
     ['M52 publica fără refuzul fotografiei schimbate', [["  IF v_foto ->> 'sha' IS DISTINCT FROM v_ev.surse_sha THEN\n    PERFORM set_config('ofertare.masuratori_rpc', '1', true);", "  IF false THEN\n    PERFORM set_config('ofertare.masuratori_rpc', '1', true);"]], ['t3_depasita + t3_izolare + t3_extragere_noua_intre_rpc + t3_plafon_vechi']],
+    // r1 (Jakarinos): P1 proveniența ca DEFINER (current_user = mereu postgres → protecția dispare), P1 codul ca subșir, P1 prima potrivire în text, ambiguitatea A
+    ['M53 proveniența ca SECURITY DEFINER (forma r1)', [[" LANGUAGE plpgsql\n SECURITY INVOKER\n SET search_path = public, pg_temp\nAS $fn$", " LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path = public, pg_temp\nAS $fn$"]], ['t4_provenienta_directa']],
+    ['M54 codul articolului acceptat ca subșir (SA11G10 dovedește SA11G1)', [["                             THEN strpos(' ' || upper(btrim(regexp_replace(l.linie, '[ ' || chr(9) || ']+', ' ', 'g'))) || ' ', ' ' || upper(btrim(r.cod_articol)) || ' ') > 0", "                             THEN strpos(upper(l.linie), upper(btrim(r.cod_articol))) > 0"]], ['t3_dovada_a_cod_intreg + t3_dovada_a_ambigua']],
+    ['M55 textul liber ia prima potrivire (fragment cu două cantități)', [["  IF v_nn > 1 THEN RETURN jsonb_build_object('verificare', 'fragment_ambiguu'); END IF;\n", ""]], ['t2']],
+    ['M56 două rânduri distincte cu același cod și aceeași cantitate → primul (nu rand_ambiguu)', [["        IF v_ok_n > 1 THEN v_ver := 'rand_ambiguu'; END IF;\n", ""]], ['t3_dovada_a_cod_intreg + t3_dovada_a_ambigua']],
   ]
   const DOAR_MUTANT = (process.argv.find(a => a.startsWith('--mutant=')) || '').slice('--mutant='.length)   // depanare: un singur mutant
   for (const [nume, inl, scenarii] of MUTANTI) {
