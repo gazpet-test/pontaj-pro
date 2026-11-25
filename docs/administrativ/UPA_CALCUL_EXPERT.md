@@ -24,7 +24,8 @@ reportul inițial (mai jos).
    Ziua nelucrătoare se mută pe **următoarea zi lucrătoare** pentru orice valoare (regula generală a termenelor, Codul de procedură fiscală
    art. 75; până la runda 6 codul muta 21 nelucrător pe ziua dinainte — regulă neconfirmată, înlocuită cu cea generală; în 2026 și 2027
    ziua de 21.12 e lucrătoare, deci fără efect). Limita 1..25 (CHECK + RPC + ecran): termenul rămâne în luna următoare.
-   Ziua e în amprenta calculului (schimbată după afișare = închiderea refuză) și nu se mai schimbă pentru o lună închisă (UPA03).
+   Ziua configurată e în amprenta calculului, separat de data rezultată (20 → 21 pentru ianuarie 2027 dă aceeași dată, 22.02.2027, dar
+   schimbarea după afișare face închiderea să refuze), și nu se mai schimbă pentru o lună închisă (UPA03).
 4. **Reportul inițial 0 la octombrie 2026** (rândul migrării; confirmat).
 
 Ce NU s-a schimbat (până confirmă experta): partea de plată (cel puțin jumătate la stat, cel mult jumătate din achiziții, restul reportat),

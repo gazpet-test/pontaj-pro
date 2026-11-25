@@ -506,7 +506,9 @@ $f$;
 --   zi se deduc DOAR cele plătite până la ultima zi; 'neplatita' și plătită după termen ies din deducere (avertisment); plata necunoscută
 --   și, pentru cele plătite la termen, valoarea fără TVA lipsă = blocaj. Reportul intrat: luna anterioară închisă; la prima lună =
 --   report_initial; altfel = previziunea ei (cel mult 2 niveluri, p_adancime), cu blocajul luna_anterioara_neinchisa.
---   amprenta = md5 pe intrări (detaliul pe angajat, achizițiile, parametrii, reportul, termenul, versiunea): închiderea cere exact valoarea văzută.
+--   amprenta = md5 pe intrări (detaliul pe angajat, achizițiile, parametrii, reportul, ZIUA configurată a termenului și termenul rezultat,
+--   versiunea): închiderea cere exact valoarea văzută. Ziua configurată intră separat (Jakarinos r6, P2): 20 -> 21 pentru ianuarie 2027 dă
+--   aceeași dată (22.02.2027), dar parametrul s-a schimbat după afișare -> 40001.
 -- fn_upa_calcul_previziune_la = calculul din sursele de ACUM, și pentru o lună deja închisă (runda 3: închiderea îl reverifică după scriere,
 --   iar luna închisă îl compară cu instantaneul); fn_upa_calcul_la = instantaneul dacă luna e închisă, altfel previziunea.
 CREATE FUNCTION public.fn_upa_calcul_previziune_la(p_luna date, p_azi date, p_adancime integer DEFAULT 0) RETURNS jsonb
@@ -515,7 +517,7 @@ DECLARE v_l date; v_l1 date; v_start date; v_zile integer; v_sum numeric; v_n in
         v_fp integer; v_cor integer; v_lg integer; v_amp_ang text; v_amp_ach text; v_inact integer; v_nma numeric; v_sal numeric; v_hand numeric; v_post numeric;
         v_loc numeric; v_d numeric; v_jum numeric; v_a numeric; v_na integer; v_astept numeric; v_fstare integer; v_nepl integer; v_tarziu integer;
         v_ftva integer; v_ftva_t integer; v_rin numeric; v_ant jsonb; v_ded numeric; v_plata numeric; v_rout numeric; v_ramas numeric;
-        v_bl text[] := '{}'; v_av text[] := '{}'; v_acum numeric; v_inchis boolean; v_final boolean; v_termen date; v_cal integer;
+        v_bl text[] := '{}'; v_av text[] := '{}'; v_acum numeric; v_inchis boolean; v_final boolean; v_termen date; v_tz numeric; v_cal integer;
         v_vers constant text := 'v2-20270101a';
 BEGIN
   IF p_luna IS NULL OR p_azi IS NULL THEN RAISE EXCEPTION 'upa: luna si ziua sunt obligatorii' USING ERRCODE = '22023'; END IF;
@@ -539,6 +541,7 @@ BEGIN
     v_bl := v_bl || ('calendar_incomplet:' || (extract(year FROM v_l)::integer + 1));
   END IF;
   v_termen := public.fn_upa_termen_stat(v_l);
+  v_tz := public.fn_upa_parametru_la('termen_stat_zi', v_l);
   -- NMA (o singură citire a detaliului: sumele și amprenta din aceleași rânduri)
   SELECT coalesce(sum(x.contributie), 0), count(*)::integer, (count(*) FILTER (WHERE x.fara_data_angajare))::integer,
          (count(*) FILTER (WHERE x.fara_norma))::integer, coalesce(sum(x.zile_fara_pontaj), 0)::integer, (count(*) FILTER (WHERE x.corectii))::integer,
@@ -627,7 +630,7 @@ BEGIN
     'blocaje', to_jsonb(v_bl), 'avertismente', to_jsonb(v_av), 'versiune', v_vers,
     'amprenta_angajati', v_amp_ang, 'amprenta_achizitii', v_amp_ach,
     'amprenta', md5(concat_ws('|', v_amp_ang, v_amp_ach, coalesce(v_sal::text, '-'), coalesce(v_hand::text, '-'), coalesce(v_rin::text, '-'),
-                              v_termen::text, v_vers)));
+                              coalesce(v_tz::text, '-'), v_termen::text, v_vers)));
 END $f$;
 -- luna închisă = instantaneul + surse_schimbate: ce arată ACUM sursele față de închidere (detaliul pe angajat, achizițiile) și dacă datele
 --   lunii mai sunt complete (runda 3, P1: o zi de pontaj ștearsă după închidere se numără la fel ca una pontată, deci se semnalează din
@@ -1343,9 +1346,9 @@ BEGIN
              'fn_upa_alerta_proba')
   ) x;
   -- AMPRENTA_20270101a_SFARSIT
-  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM 'a7d5d33685bd2bdffa816515b5e6fd24' THEN
+  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '10d0f74e66c5b40b4dda297d1df21edc' THEN
     RAISE NOTICE 'AMPRENTA_20270101a_TEXT %', v_amp;
-    RAISE EXCEPTION '20270101a post: AMPRENTA obiectelor % (asteptat a7d5d33685bd2bdffa816515b5e6fd24)', md5(coalesce(v_amp, ''));
+    RAISE EXCEPTION '20270101a post: AMPRENTA obiectelor % (asteptat 10d0f74e66c5b40b4dda297d1df21edc)', md5(coalesce(v_amp, ''));
   END IF;
   IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20270101a_administrativ_upa_calcul:' || txid_current() THEN
     RAISE EXCEPTION '20270101a: garda final invalida';

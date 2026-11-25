@@ -653,7 +653,8 @@ async function suspendariPerioada(db) {
 //   Nov: A 0 -> deducere 5.190 din report, de plată 5.190, report 9.620; termenul 21.12.2026 (luni; rândul migrării 21).
 //   Dec: deducere 5.190, de plată 5.190, report 4.430; termenul 25.01.2027 (luni; rândul migrării 25 din decembrie).
 //   Ian 2027: report intrat 4.430 (PESTE 31.12), deducere 4.430, de plată 10.380 − 4.430 = 5.950, report 0; termenul implicit 25.02.2027 (joi);
-//     cu ziua 20 pusă din ecran de la ianuarie 2027: 20.02.2027 e sâmbătă -> luni 22.02.2027 (și februarie: 20.03 sâmbătă -> 22.03); cu 19: vineri 19.02.
+//     cu ziua 20 pusă din ecran de la ianuarie 2027: 20.02.2027 e sâmbătă -> luni 22.02.2027 (și februarie: 20.03 sâmbătă -> 22.03); cu 21 (duminică)
+//     tot 22.02, dar altă amprentă (ziua configurată e în amprentă, Jakarinos r6 P2); cu 19: vineri 19.02.
 const PONTAJ_AN = pontajPlin('0', '2026-10-01', '2027-02-01')
 async function reportPesteAn(db) {
   const ab = []
@@ -687,20 +688,28 @@ async function reportPesteAn(db) {
   c = await calcul(db, '2027-01-01', '2027-02-13')
   const tf = await q1(db, `SELECT public.fn_upa_termen_stat('2027-02-01')::text AS t`)
   tine(c.termen_stat === '2027-02-22' && tf.t === '2027-03-22', `ziua 20: ianuarie -> 22.02.2027 (20 e sâmbătă), februarie -> 22.03.2027 (${c.termen_stat} ${tf.t})`)
-  // termenul e în amprentă: schimbat după afișare -> închiderea refuză (40001), nimic scris
+  // ziua configurată e în amprentă (Jakarinos r6, P2): 20 -> 21 dă ACEEAȘI dată (22.02.2027), dar parametrul s-a schimbat după afișare -> 40001
   const amp = c.amprenta
-  s = await seteaza(db, U.OWNER, 'termen_stat_zi', '2027-01-01', 19, 20)
-  tine(!s.err, `ziua 19 peste 20 (CAS cu valoarea văzută) (${s.err || 'ok'})`)
-  tine(/s-au schimbat/.test(await eroare(inchide(db, '2027-01-01', '2027-02-13', amp)) || '') && (await q1(db, `SELECT count(*)::int AS n FROM public.upa_calcul_lunar WHERE luna = '2027-01-01'`)).n === 0,
-    'ziua termenului schimbată după afișare: 40001, nimic scris')
+  const nInchise = async () => (await q1(db, `SELECT count(*)::int AS n FROM public.upa_calcul_lunar WHERE luna = '2027-01-01'`)).n
+  s = await seteaza(db, U.OWNER, 'termen_stat_zi', '2027-01-01', 21, 20)
+  tine(!s.err, `ziua 21 peste 20 (CAS cu valoarea văzută) (${s.err || 'ok'})`)
+  const c21 = await calcul(db, '2027-01-01', '2027-02-13')
+  tine(c21.termen_stat === '2027-02-22' && c21.amprenta !== amp, `ziua 21: aceeași dată 22.02.2027 (21 e duminică), altă amprentă (${c21.termen_stat} ${c21.amprenta !== amp})`)
+  tine(/s-au schimbat/.test(await eroare(inchide(db, '2027-01-01', '2027-02-13', amp)) || '') && await nInchise() === 0,
+    'ziua 20 -> 21 după afișare (aceeași dată): 40001, nimic scris')
+  // și cu data schimbată: 19 (vineri)
+  s = await seteaza(db, U.OWNER, 'termen_stat_zi', '2027-01-01', 19, 21)
+  tine(!s.err, `ziua 19 peste 21 (${s.err || 'ok'})`)
+  tine(/s-au schimbat/.test(await eroare(inchide(db, '2027-01-01', '2027-02-13', amp)) || '') && await nInchise() === 0,
+    'ziua termenului schimbată după afișare (altă dată): 40001, nimic scris')
   await inchideLuna('2027-01-01', '2027-02-13', ['60.00', '4430.00', '4430.00', '5950.00', '0.00', '2027-02-19'])
   // refuzuri: o lună închisă folosește ziua (UPA03, și pentru rândurile migrării); CAS vechi (40001); în afara 1..25 sau cu zecimale (22023); CHECK-ul tabelului
   s = await seteaza(db, U.OWNER, 'termen_stat_zi', '2026-11-01', 25, 21)
   tine(s.err === 'UPA03', `ziua termenului pentru noiembrie 2026 (închis): UPA03 (${s.err || 'trecut'})`)
   s = await seteaza(db, U.OWNER, 'termen_stat_zi', '2026-12-01', 22, 25)
   tine(s.err === 'UPA03', `ziua termenului pentru decembrie 2026 (închis): UPA03 (${s.err || 'trecut'})`)
-  s = await seteaza(db, U.OWNER, 'termen_stat_zi', '2027-01-01', 18, 20)
-  tine(s.err === '40001', `CAS: valoarea văzută veche (20, acum 19) -> 40001 (${s.err || 'trecut'})`)
+  s = await seteaza(db, U.OWNER, 'termen_stat_zi', '2027-01-01', 18, 21)
+  tine(s.err === '40001', `CAS: valoarea văzută veche (21, acum 19) -> 40001 (${s.err || 'trecut'})`)
   for (const v of [0, 26, 21.5]) {
     s = await seteaza(db, U.ED, 'termen_stat_zi', '2027-03-01', v, null)
     tine(s.err === '22023', `ziua ${v}: 22023 (${s.err || 'trecut'})`)
@@ -1163,6 +1172,8 @@ for (const [nume, din, in_] of [
   ['pontajul închis o zi mai devreme', "interval '1 month' + interval '11 days')::date", "interval '1 month' + interval '10 days')::date"],
   ['închiderea fără amprenta văzută', "IF p_amprenta IS NULL OR p_amprenta IS DISTINCT FROM v_c ->> 'amprenta' THEN", 'IF false THEN'],
   ['amprenta fără achiziții', "'amprenta', md5(concat_ws('|', v_amp_ang, v_amp_ach,", "'amprenta', md5(concat_ws('|', v_amp_ang,"],
+  // Jakarinos r6, P2: doar data rezultată în amprentă (20 -> 21 = aceeași dată) — prins în 3e
+  ['amprenta fără ziua configurată a termenului', "coalesce(v_tz::text, '-'), v_termen::text, v_vers)", 'v_termen::text, v_vers)'],
   ['închiderea de editor', "IF auth.uid() IS NULL OR NOT EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.is_owner IS TRUE) THEN\n    RAISE EXCEPTION 'upa: inchiderea", "IF NOT public.fn_upa_poate_scrie() THEN\n    RAISE EXCEPTION 'upa: inchiderea"],
   // achizițiile (P1-7)
   ['plata după termen numărată', "coalesce(sum(a.valoare_fara_tva) FILTER (WHERE a.stare_plata = 'platita' AND a.data_plata <= v_l1), 0),", "coalesce(sum(a.valoare_fara_tva) FILTER (WHERE a.stare_plata = 'platita'), 0),"],

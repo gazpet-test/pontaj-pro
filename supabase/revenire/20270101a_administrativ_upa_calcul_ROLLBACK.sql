@@ -125,9 +125,9 @@ BEGIN
              'fn_upa_alerta_proba')
   ) x;
   -- AMPRENTA_20270101a_SFARSIT
-  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM 'a7d5d33685bd2bdffa816515b5e6fd24' THEN
+  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM '10d0f74e66c5b40b4dda297d1df21edc' THEN
     RAISE NOTICE 'AMPRENTA_20270101a_TEXT %', v_amp;
-    RAISE EXCEPTION '20270101a revenire: AMPRENTA obiectelor % (asteptat a7d5d33685bd2bdffa816515b5e6fd24); nimic schimbat', md5(coalesce(v_amp, ''));
+    RAISE EXCEPTION '20270101a revenire: AMPRENTA obiectelor % (asteptat 10d0f74e66c5b40b4dda297d1df21edc); nimic schimbat', md5(coalesce(v_amp, ''));
   END IF;
   -- date noi = refuz (calculul închis, parametrii schimbați, corecțiile HR, achizițiile cu valori în coloanele noi, alerta exactă)
   IF EXISTS (SELECT 1 FROM public.upa_calcul_lunar) OR EXISTS (SELECT 1 FROM public.upa_calcul_angajat) THEN
