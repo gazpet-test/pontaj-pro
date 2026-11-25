@@ -539,7 +539,9 @@ const ast = (ab, cond, msg) => { if (!cond) ab.push(msg) }
     ast(ab, s2.evaluare_amprenta === s.evaluare_amprenta, 'amprenta evaluării stabilă')
   }
   S3['t3_natura'] = async (db, ab) => {
-    await fixturaTichet(db, { cantitati: [{ denumire: 'Furnizare teava PE100 DN160', um: 'M', cantitate: 6400, cod: 'SA11G1' }, { denumire: 'Montaj teava PE100 DN160', um: 'M', cantitate: 6400, cod: 'SA11G1' }] })
+    // furnizarea și montajul au fiecare rândul lor în F3 (coduri diferite); același rând pentru două poziții ar fi rand_ambiguu (r3)
+    await fixturaTichet(db, { f3Text: PAG(1, 'Formularul F3', 'Nr. Cod Denumire UM Cantitate', '003 SA11G1 TEAVA PE100 DN160 M 6.400', '004 SA11G2 MONTAJ TEAVA PE100 DN160 M 6.400'),
+      cantitati: [{ denumire: 'Furnizare teava PE100 DN160', um: 'M', cantitate: 6400, cod: 'SA11G1' }, { denumire: 'Montaj teava PE100 DN160', um: 'M', cantitate: 6400, cod: 'SA11G2' }] })
     const r = await evalueaza(db)
     const ss = await semnale(db)
     const fiz = ss.find(x => x.clasa === 'fizica'), mon = ss.find(x => x.clasa === 'montaj')
@@ -675,7 +677,7 @@ const ast = (ab, cond, msg) => { if (!cond) ab.push(msg) }
     m = await reeval(PAG(1, 'Formularul F3', 'Nr. Cod Denumire UM Cantitate', '003 SA11G1 TEAVA PE100 DN160 M 6.400'))
     ast(ab, m.length === 2 && m.every(x => x.verificare === 'rand_ambiguu' && x.valoare === null && x.rand === '003 SA11G1 TEAVA PE100 DN160 M 6.400') && s.verdict === 'neverificat' && s.valoare_a === null,
       'un rând revendicat de două poziții → rand_ambiguu la ambele, A nedefinit: ' + JSON.stringify(m.map(x => [x.cantitate_id, x.verificare, x.valoare])))
-    await db.query(`UPDATE public.ofertare_cantitati SET status = 'retrasa' WHERE id = $1`, [p2])
+    await db.query(`DELETE FROM public.ofertare_cantitati WHERE id = $1`, [p2])   // pozițiile F3 nu au stare „retrasa” în CHECK (extras / validat / diferenta / revizuit_clarificare): se șterg
     // r3 P1: fără cod, denumiri incluse una în alta: ancora = denumirea URMATĂ de UM-ul poziției; rândul „… DN160 SDR17 M 100” e al poziției SDR17, nu și al celei scurte
     const p3 = await cantitate(db, { lic: LIC2, denumire: 'Furnizare teava PE100 DN160', um: 'M', cantitate: 100, cod: null, surse: [f2.dF3] })
     const p4 = await cantitate(db, { lic: LIC2, denumire: 'Furnizare teava PE100 DN160 SDR17', um: 'M', cantitate: 100, cod: null, surse: [f2.dF3] })
@@ -1700,9 +1702,9 @@ if (vrea('t5') && MIG) {
     ['M52 publica fără refuzul fotografiei schimbate', [["  IF v_foto ->> 'sha' IS DISTINCT FROM v_ev.surse_sha THEN\n    PERFORM set_config('ofertare.masuratori_rpc', '1', true);", "  IF false THEN\n    PERFORM set_config('ofertare.masuratori_rpc', '1', true);"]], ['t3_depasita + t3_izolare + t3_extragere_noua_intre_rpc + t3_plafon_vechi']],
     // r1 (Jakarinos): P1 proveniența ca DEFINER (current_user = mereu postgres → protecția dispare), P1 codul ca subșir, P1 prima potrivire în text, ambiguitatea A
     ['M53 proveniența ca SECURITY DEFINER (forma r1)', [[" LANGUAGE plpgsql\n SECURITY INVOKER\n SET search_path = public, pg_temp\nAS $fn$", " LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path = public, pg_temp\nAS $fn$"]], ['t4_provenienta_directa']],
-    ['M54 codul articolului acceptat ca subșir (SA11G10 dovedește SA11G1)', [["THEN strpos(' ' || upper(btrim(regexp_replace(l.linie, '[ ' || chr(9) || ']+', ' ', 'g'))) || ' ', ' ' || upper(btrim(r.cod_articol)) || ' ') > 0", "THEN strpos(upper(l.linie), upper(btrim(r.cod_articol))) > 0"]], ['t3_dovada_a_cod_intreg + t3_dovada_a_ambigua']],
+    ['M54 codul articolului acceptat ca subșir (SA11G10 dovedește SA11G1)', [["THEN strpos(' ' || upper(btrim(regexp_replace(l.linie, '[ ' || chr(9) || ']+', ' ', 'g'))) || ' ', ' ' || upper(btrim(q.cod_articol)) || ' ') > 0", "THEN strpos(upper(l.linie), upper(btrim(q.cod_articol))) > 0"]], ['t3_dovada_a_cod_intreg + t3_dovada_a_ambigua']],
     ['M55 textul liber ia prima potrivire (fragment cu două cantități)', [["  IF v_nn > 1 THEN RETURN jsonb_build_object('verificare', 'fragment_ambiguu'); END IF;\n", ""]], ['t2']],
-    ['M56 mai multe rânduri-ancoră → primul (nu rand_ambiguu)', [["          IF v_anc_n > 1 THEN v_ver := 'rand_ambiguu'; END IF;\n", ""]], ['t3_dovada_a_cod_intreg + t3_dovada_a_ambigua']],
+    ['M56 mai multe rânduri-ancoră → primul (nu rand_ambiguu)', [["          IF v_anc_n > 1 OR v_rev > 0 THEN v_ver := 'rand_ambiguu'; END IF;", "          IF v_rev > 0 THEN v_ver := 'rand_ambiguu'; END IF;"]], ['t3_dovada_a_cod_intreg + t3_dovada_a_ambigua']],
     // r2 P1: ancora filtrată după cantitate ÎNAINTE de numărarea ambiguității (rândul cu altă cantitate dispare → „ok” pe rândul vecin)
     ['M57 rândul-ancoră ales după cantitate (forma r2)', [["END;   -- ancora, FARA cantitate", "END\n       AND EXISTS (SELECT 1 FROM unnest(regexp_split_to_array(btrim(regexp_replace(l.linie, '[ ' || chr(9) || ']+', ' ', 'g')), ' ')) t WHERE (public.fn_ofertare_numar_ro(t) ->> 'valoare')::numeric = q.cantitate);   -- ancora, FARA cantitate"]], ['t3_dovada_a_cod_intreg + t3_dovada_a_ambigua']],
     // r3 P1: același rând revendicat de două poziții; denumirea ca subșir al alteia (fără UM-ul poziției după ea)
