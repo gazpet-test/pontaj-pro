@@ -902,7 +902,7 @@ LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
 AS $f$
 DECLARE v_lic record; v_foto jsonb; v_ev bigint; v_vechi bigint[]; v_lim jsonb; r record; o record; v_cl jsonb; v_lot jsonb; v_um text; v_ob text; v_sem bigint;
         v_ver text; v_dov jsonb; v_tip text; v_dn numeric[]; v_masura text; v_ignorate jsonb; v_semnale jsonb; v_obiecte text[]; v_o text;
-        v_el text; v_cls text; v_nat text; v_cunoscut boolean; v_doc_id bigint; v_doc_rev text; v_doc_text text; v_doc_sha text; v_g_pag integer; v_g_nr integer; v_g_linie text; v_g_tok text; v_anc_n integer;
+        v_el text; v_cls text; v_nat text; v_cunoscut boolean; v_doc_id bigint; v_doc_rev text; v_doc_text text; v_doc_sha text; v_g_pag integer; v_g_nr integer; v_g_linie text; v_g_tok text; v_anc_n integer; v_rev integer;
 BEGIN
   IF p_licitatie_id IS NULL OR p_token IS NULL OR jsonb_typeof(p_fotografie) IS DISTINCT FROM 'object' OR jsonb_typeof(p_pagini) IS DISTINCT FROM 'object' THEN
     RAISE EXCEPTION 'CM_PARAMETRI: licitatie, token, fotografie (obiect) si pagini (obiect) sunt obligatorii' USING ERRCODE = '22023';
@@ -940,6 +940,19 @@ BEGIN
       CROSS JOIN LATERAL regexp_split_to_table(coalesce(public.fn_ofertare_masura_pagina(d.text_extras, pg.n), ''), chr(10)) WITH ORDINALITY l(linie, nr)
      WHERE d.licitatie_id = p_licitatie_id
        AND d.id IN (SELECT q.surse_document_ids[1] FROM public.ofertare_cantitati q WHERE q.licitatie_id = p_licitatie_id AND q.surse_document_ids IS NOT NULL AND cardinality(q.surse_document_ids) > 0);
+  -- (c2) ancorele pozitiilor F3 (pasul (1) al dovezii A), pentru TOATE pozitiile deodata si FARA cantitate (r2 / r3 P1): randurile documentului-sursa
+  --      care contin codul articolului CA TOKEN INTREG (intre spatii, dupa normalizarea spatiilor; „SA11G1” NU e „SA11G10”) sau, fara cod, denumirea
+  --      normalizata URMATA de UM-ul pozitiei (celula de denumire se termina inaintea coloanei UM: „furnizare teava pe100 dn160 m” nu e inclusa in
+  --      „… dn160 sdr17 m”). Un rand revendicat de MAI MULTE pozitii nu dovedeste pe niciuna (rand_ambiguu la toate, pasul (d)).
+  DROP TABLE IF EXISTS cm_ancore;
+  CREATE TEMP TABLE cm_ancore ON COMMIT DROP AS
+    SELECT q.id AS cantitate_id, l.document_id, l.pagina, l.nr, l.linie
+      FROM public.ofertare_cantitati q
+      JOIN cm_linii l ON l.document_id = q.surse_document_ids[1]
+     WHERE q.licitatie_id = p_licitatie_id AND q.status IS DISTINCT FROM 'retrasa' AND q.surse_document_ids IS NOT NULL AND cardinality(q.surse_document_ids) > 0
+       AND CASE WHEN nullif(btrim(q.cod_articol), '') IS NOT NULL
+                THEN strpos(' ' || upper(btrim(regexp_replace(l.linie, '[ ' || chr(9) || ']+', ' ', 'g'))) || ' ', ' ' || upper(btrim(q.cod_articol)) || ' ') > 0
+                ELSE strpos(' ' || public.fn_ofertare_masura_norm(l.linie) || ' ', ' ' || public.fn_ofertare_masura_norm(q.denumire) || ' ' || public.fn_ofertare_masura_norm(q.um) || ' ') > 0 END;   -- ancora, FARA cantitate
   -- (d) pozitiile F3 (partea A): clasificare in SQL, lot, obiect; componenta A se scrie MEREU (pe obiect SI pe nivelul lucrarii '*')
   FOR r IN SELECT q.* FROM public.ofertare_cantitati q WHERE q.licitatie_id = p_licitatie_id AND q.status IS DISTINCT FROM 'retrasa' ORDER BY q.id LOOP
     v_tip := CASE WHEN public.fn_ofertare_masura_norm(r.denumire) ~ 'protect' THEN 'protectie' WHEN public.fn_ofertare_masura_norm(r.denumire) ~ 'bransament' THEN 'bransament'
@@ -951,28 +964,26 @@ BEGIN
     v_lot := public.fn_ofertare_masura_lot(r.lot_domeniu, r.lot_nr, v_lic.stare_loturi);
     v_ob := nullif(public.fn_ofertare_masura_norm(r.obiect), '');
     v_cunoscut := (v_cl ->> 'cunoscut')::boolean AND (v_lot ->> 'cunoscut')::boolean;
-    -- dovada A (L11; review r1 / r2 P1), in DOI pasi independenti:
-    --   (1) randul-ancora al pozitiei se alege FARA cantitate: codul articolului CA TOKEN INTREG (intre spatii, dupa normalizarea spatiilor; „SA11G1” NU e
-    --       „SA11G10”), fara cod = denumirea normalizata intre spatii. Zero randuri = nedovedit; MAI MULTE randuri distincte (orice cantitati ar avea) =
-    --       rand_ambiguu — asocierea pozitie → rand nu e neambigua si merge la om (primul rand ramane ca dovada vizibila); exact unul = randul pozitiei.
+    -- dovada A (L11; review r1 / r2 / r3 P1), in DOI pasi independenti:
+    --   (1) randul-ancora al pozitiei (cm_ancore, pasul (c2)): FARA cantitate. Zero randuri = nedovedit; MAI MULTE randuri distincte (orice cantitati ar
+    --       avea) SAU un rand revendicat si de ALTA pozitie = rand_ambiguu — asocierea pozitie → rand nu e neambigua si merge la om (primul rand ramane
+    --       ca dovada vizibila, fara valoare); exact unul, revendicat doar de aceasta pozitie = randul pozitiei.
     --   (2) DOAR pe acel rand: tokenii egali cu cantitatea pozitiei (de la dreapta spre stanga: coloana cantitatii e la dreapta, „003” s-ar citi ca 3)
     --       trec prin verificarea deterministă (antet, coloana, UM, numar); primul ok decide, altfel prima verificare picata (vizibila cu motivul ei);
     --       niciun token egal = nedovedit, cu randul pastrat (cantitatea din ERP nu e pe randul ei din F3).
-    v_doc_id := NULL; v_doc_rev := NULL; v_doc_text := NULL; v_doc_sha := NULL; v_dov := NULL; v_ver := 'fara_sursa'; v_g_pag := NULL; v_g_nr := NULL; v_g_linie := NULL; v_g_tok := NULL; v_anc_n := 0;
+    v_doc_id := NULL; v_doc_rev := NULL; v_doc_text := NULL; v_doc_sha := NULL; v_dov := NULL; v_ver := 'fara_sursa'; v_g_pag := NULL; v_g_nr := NULL; v_g_linie := NULL; v_g_tok := NULL; v_anc_n := 0; v_rev := 0;
     IF r.surse_document_ids IS NOT NULL AND cardinality(r.surse_document_ids) > 0 THEN
       SELECT d.id, coalesce(d.revizie, '-'), d.text_extras, encode(sha256(convert_to(coalesce(d.text_extras, ''), 'UTF8')), 'hex')
         INTO v_doc_id, v_doc_rev, v_doc_text, v_doc_sha FROM public.ofertare_documente_atribuire d WHERE d.id = r.surse_document_ids[1] AND d.licitatie_id = p_licitatie_id;
       IF v_doc_id IS NOT NULL THEN
         v_ver := 'nedovedit';
         SELECT count(*) OVER (), a.pagina, a.nr, a.linie INTO v_anc_n, v_g_pag, v_g_nr, v_g_linie
-          FROM (SELECT l.pagina, l.nr, l.linie FROM cm_linii l
-                 WHERE l.document_id = v_doc_id
-                   AND CASE WHEN nullif(btrim(r.cod_articol), '') IS NOT NULL
-                            THEN strpos(' ' || upper(btrim(regexp_replace(l.linie, '[ ' || chr(9) || ']+', ' ', 'g'))) || ' ', ' ' || upper(btrim(r.cod_articol)) || ' ') > 0
-                            ELSE strpos(' ' || public.fn_ofertare_masura_norm(l.linie) || ' ', ' ' || public.fn_ofertare_masura_norm(r.denumire) || ' ') > 0 END
-               ) a   -- ancora, FARA cantitate
-         ORDER BY a.pagina, a.nr LIMIT 1;
+          FROM cm_ancore a WHERE a.cantitate_id = r.id ORDER BY a.pagina, a.nr LIMIT 1;
         IF NOT FOUND THEN v_anc_n := 0; v_g_pag := NULL; v_g_nr := NULL; v_g_linie := NULL; END IF;
+        -- alte pozitii care revendica ACELASI rand (acelasi cod pe obiecte diferite, denumiri incluse una in alta): nimeni nu-l primeste (r3 P1)
+        IF v_anc_n >= 1 THEN
+          SELECT count(*) INTO v_rev FROM cm_ancore b WHERE b.document_id = v_doc_id AND b.pagina = v_g_pag AND b.nr = v_g_nr AND b.cantitate_id <> r.id;
+        END IF;
         IF v_anc_n >= 1 THEN
           FOR o IN SELECT t.tok FROM unnest(regexp_split_to_array(btrim(regexp_replace(v_g_linie, '[ ' || chr(9) || ']+', ' ', 'g')), ' ')) WITH ORDINALITY t(tok, poz)
                     WHERE r.cantitate IS NOT NULL AND (public.fn_ofertare_numar_ro(t.tok) ->> 'valoare')::numeric = r.cantitate ORDER BY t.poz DESC LOOP
@@ -986,7 +997,7 @@ BEGIN
           ELSIF v_g_tok IS NOT NULL AND v_ver <> 'ok' THEN
             v_dov := public.fn_ofertare_masura_verifica(v_doc_text, jsonb_build_object('pagina', v_g_pag, 'fel_dovada', 'tabel', 'rand', v_g_linie, 'celula', v_g_tok, 'element', v_cl ->> 'element'));
           END IF;
-          IF v_anc_n > 1 THEN v_ver := 'rand_ambiguu'; END IF;
+          IF v_anc_n > 1 OR v_rev > 0 THEN v_ver := 'rand_ambiguu'; END IF;
         END IF;
       END IF;
     END IF;
