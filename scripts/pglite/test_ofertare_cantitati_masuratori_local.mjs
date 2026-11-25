@@ -650,12 +650,26 @@ const ast = (ab, cond, msg) => { if (!cond) ab.push(msg) }
     s = (await semnalCunoscut(db, LIC2))[0]
     m = (await masuratori(db, s.id, s.evaluare_id)).filter(x => x.parte === 'a')
     ast(ab, m.length === 1 && m[0].verificare === 'rand_ambiguu' && m[0].valoare === null && s.verdict === 'neverificat', 'două rânduri cu același cod și aceeași cantitate → rand_ambiguu: ' + JSON.stringify(m.map(x => [x.verificare, x.valoare])))
-    // codul la începutul / sfârșitul rândului și cu mai multe spații: tot token întreg → ok
-    await db.query(`UPDATE public.ofertare_documente_atribuire SET text_extras = $2 WHERE licitatie_id = $1 AND nume_original = 'DOC_F3_T'`, [LIC2, PAG(1, 'Formularul F3', 'Nr. Cod Denumire UM Cantitate', 'SA11G1  TEAVA PE100 DN160   M  6.400')])
-    await evalueaza(db, LIC2)
-    s = (await semnalCunoscut(db, LIC2))[0]
-    m = (await masuratori(db, s.id, s.evaluare_id)).filter(x => x.parte === 'a')
+    // r2 P1: rândul-ancoră se alege INDEPENDENT de cantitate — două rânduri cu același cod și cantități DIFERITE (doar al doilea are 6.400) → rand_ambiguu, nu „ok pe rândul care are cantitatea”
+    const reeval = async (text) => {
+      await db.query(`UPDATE public.ofertare_documente_atribuire SET text_extras = $2 WHERE licitatie_id = $1 AND nume_original = 'DOC_F3_T'`, [LIC2, text])
+      await evalueaza(db, LIC2)
+      s = (await semnalCunoscut(db, LIC2))[0]
+      return (await masuratori(db, s.id, s.evaluare_id)).filter(x => x.parte === 'a')
+    }
+    m = await reeval(PAG(1, 'Formularul F3', 'Nr. Cod Denumire UM Cantitate', '003 SA11G1 TEAVA PE100 DN160 M 250', '007 SA11G1 TEAVA PE100 DN110 M 6.400'))
+    ast(ab, m.length === 1 && m[0].verificare === 'rand_ambiguu' && m[0].valoare === null && m[0].rand === '003 SA11G1 TEAVA PE100 DN160 M 250' && s.verdict === 'neverificat',
+      'același cod pe două rânduri cu cantități diferite → rand_ambiguu (primul rând păstrat ca dovadă vizibilă): ' + JSON.stringify(m.map(x => [x.verificare, x.valoare, x.rand])))
+    // un singur rând-ancoră, dar cu altă cantitate decât poziția din ERP → nedovedit, cu rândul păstrat (nu „ok” pe alt rând, nu dispare)
+    m = await reeval(PAG(1, 'Formularul F3', 'Nr. Cod Denumire UM Cantitate', '003 SA11G1 TEAVA PE100 DN160 M 250'))
+    ast(ab, m.length === 1 && m[0].verificare === 'nedovedit' && m[0].valoare === null && m[0].rand === '003 SA11G1 TEAVA PE100 DN160 M 250' && m[0].fel_dovada === 'tabel' && s.verdict === 'neverificat',
+      'rândul unic al codului cu altă cantitate (250 ≠ 6400) → nedovedit, rândul păstrat: ' + JSON.stringify(m.map(x => [x.verificare, x.rand, x.celula])))
+    // codul la începutul rândului și cu mai multe spații: tot token întreg → ok
+    m = await reeval(PAG(1, 'Formularul F3', 'Nr. Cod Denumire UM Cantitate', 'SA11G1  TEAVA PE100 DN160   M  6.400'))
     ast(ab, m.length === 1 && m[0].verificare === 'ok' && Number(m[0].valoare) === 6400, 'codul ca token la început de rând, spații multiple → ok: ' + JSON.stringify(m.map(x => [x.verificare, x.valoare])))
+    // rândul unic cu cantitatea în coloana greșită (DN = 6.400? nu: cantitatea 6.400 ca DN și 160 ca cantitate) → verificarea deterministă pică (coloana), rândul păstrat
+    m = await reeval(PAG(1, 'Formularul F3', 'Nr. Cod Denumire UM DN Cantitate', '003 SA11G1 TEAVA PE100 DN160 M 6.400 160'))
+    ast(ab, m.length === 1 && m[0].verificare === 'coloana_necunoscuta' && m[0].valoare === null && m[0].rand === '003 SA11G1 TEAVA PE100 DN160 M 6.400 160', 'cantitatea pe altă coloană → coloana_necunoscuta, nu ok: ' + JSON.stringify(m.map(x => [x.verificare, x.celula])))
   }
   S3['t3_loturi'] = async (db, ab) => {
     // licitație cu loturi: F3 lot 1 vs observație lista {2} → măsuri diferite, fără semnal
@@ -1670,7 +1684,9 @@ if (vrea('t5') && MIG) {
     ['M53 proveniența ca SECURITY DEFINER (forma r1)', [[" LANGUAGE plpgsql\n SECURITY INVOKER\n SET search_path = public, pg_temp\nAS $fn$", " LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path = public, pg_temp\nAS $fn$"]], ['t4_provenienta_directa']],
     ['M54 codul articolului acceptat ca subșir (SA11G10 dovedește SA11G1)', [["                             THEN strpos(' ' || upper(btrim(regexp_replace(l.linie, '[ ' || chr(9) || ']+', ' ', 'g'))) || ' ', ' ' || upper(btrim(r.cod_articol)) || ' ') > 0", "                             THEN strpos(upper(l.linie), upper(btrim(r.cod_articol))) > 0"]], ['t3_dovada_a_cod_intreg + t3_dovada_a_ambigua']],
     ['M55 textul liber ia prima potrivire (fragment cu două cantități)', [["  IF v_nn > 1 THEN RETURN jsonb_build_object('verificare', 'fragment_ambiguu'); END IF;\n", ""]], ['t2']],
-    ['M56 două rânduri distincte cu același cod și aceeași cantitate → primul (nu rand_ambiguu)', [["        IF v_ok_n > 1 THEN v_ver := 'rand_ambiguu'; END IF;\n", ""]], ['t3_dovada_a_cod_intreg + t3_dovada_a_ambigua']],
+    ['M56 mai multe rânduri-ancoră → primul (nu rand_ambiguu)', [["          IF v_anc_n > 1 THEN v_ver := 'rand_ambiguu'; END IF;\n", ""]], ['t3_dovada_a_cod_intreg + t3_dovada_a_ambigua']],
+    // r2 P1: ancora filtrată după cantitate ÎNAINTE de numărarea ambiguității (rândul cu altă cantitate dispare → „ok” pe rândul vecin)
+    ['M57 rândul-ancoră ales după cantitate (forma r2)', [["               ) a   -- ancora, FARA cantitate", "                   AND EXISTS (SELECT 1 FROM unnest(regexp_split_to_array(btrim(regexp_replace(l.linie, '[ ' || chr(9) || ']+', ' ', 'g')), ' ')) t WHERE (public.fn_ofertare_numar_ro(t) ->> 'valoare')::numeric = r.cantitate)\n               ) a   -- ancora, FARA cantitate"]], ['t3_dovada_a_cod_intreg + t3_dovada_a_ambigua']],
   ]
   const DOAR_MUTANT = (process.argv.find(a => a.startsWith('--mutant=')) || '').slice('--mutant='.length)   // depanare: un singur mutant
   for (const [nume, inl, scenarii] of MUTANTI) {

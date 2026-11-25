@@ -106,7 +106,7 @@ BEGIN
       ('public.fn_ofertare_semnale_setari(bigint,numeric,integer)', '9cfb151c759aafb3f223e15c36fab5a9', 'plpgsql', true, 'v', 'authenticated:EXECUTE, postgres:EXECUTE'),
       ('public.fn_ofertare_semnal_raspuns_leaga(bigint,bigint,numeric)', '153f2870cc574ed9c71da19ce6efe1e5', 'plpgsql', true, 'v', 'authenticated:EXECUTE, postgres:EXECUTE'),
       ('public.fn_ofertare_semnale_lista(bigint)', '3ba12807cfc770f7302c16315454e03a', 'plpgsql', true, 's', 'authenticated:EXECUTE, postgres:EXECUTE'),
-      ('public.fn_ofertare_masuratori_propune(bigint,uuid,jsonb,jsonb)', 'f70e55e7876b856459fa1220bfe15e2e', 'plpgsql', true, 'v', 'postgres:EXECUTE, service_role:EXECUTE'),
+      ('public.fn_ofertare_masuratori_propune(bigint,uuid,jsonb,jsonb)', '2213338df444e4103541369cc54023ae', 'plpgsql', true, 'v', 'postgres:EXECUTE, service_role:EXECUTE'),
       ('public.fn_ofertare_semnale_publica(bigint,bigint,uuid)', 'd95ea61898ea47cacc2732af74075855', 'plpgsql', true, 'v', 'postgres:EXECUTE, service_role:EXECUTE'),
       ('public.ofertare_semnal_baza_stare(public.ofertare_clarificari,text)', '031261130e5f6e78c526ea05e22cbce3', 'plpgsql', true, 's', 'authenticated:EXECUTE, postgres:EXECUTE, service_role:EXECUTE'),
       ('public.fn_ofertare_ciorna_auto_stare(public.ofertare_clarificari,text)', '0664b97a62afc2d5e14f533b8e303876', 'plpgsql', true, 's', 'authenticated:EXECUTE, postgres:EXECUTE, service_role:EXECUTE')
