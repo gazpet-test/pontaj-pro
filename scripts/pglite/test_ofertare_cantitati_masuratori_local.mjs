@@ -310,5 +310,136 @@ if (vrea('t1') && MIG) {
   await b.close()
 }
 
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+if (vrea('t2') && MIG) {
+  console.log('t2. regula numerică, clasificarea, lotul, paginile permise, verificarea dovezilor (tabel / text)')
+  const db = await bazaAplicata()
+  const ab = []
+  const J = async (sql, params = []) => (await q(db, sql, params))[0].x
+  // t2_numar_ro — tabelul comun de cazuri
+  const TN = JSON.parse(citeste('supabase/tests/20270112a_cazuri_numar.json'))
+  const decod = s => Object.entries(TN._marcaje).reduce((t, [k, [cod, ori]]) => t.split(k).join(String.fromCharCode(cod).repeat(ori)), s)
+  for (const c of TN.cazuri) {
+    const r = await J(`SELECT public.fn_ofertare_numar_ro($1) x`, [decod(c.text)])
+    const bun = c.motiv ? (r.motiv === c.motiv && r.valoare === null) : (r.motiv === null && Number(r.valoare) === Number(c.valoare) && r.intreg === c.intreg)
+    if (!bun) ab.push(`t2_numar_ro ${JSON.stringify(c.text)}: ${JSON.stringify(r)} (aștepta ${JSON.stringify(c)})`)
+  }
+  // t2_clasifica
+  const CL = [
+    [['TEAVA PE100 DN160', 'm', 'conducta', [160], 'PE100', 'material', 'f3'], { element: 'teava_pe_dn160', natura: 'furnizare', clasa: 'fizica', um_canonica: 'm', cunoscut: true }],
+    [['conducta Dn 160', 'm', 'conducta', [160], null, 'lungime', 'atr'], { element: 'teava_dn160', natura: 'total_lucrare', clasa: 'fizica', um_canonica: 'm', cunoscut: true }],
+    [['MONTAJ CONDUCTA PE100 DN160', 'm', 'conducta', [160], 'PE100', 'lungime', 'f3'], { element: 'teava_pe_dn160', natura: 'montaj', clasa: 'montaj', cunoscut: true }],
+    [['teava DN160', 'm', 'conducta', [160], null, 'lungime', 'f3'], { element: 'teava_dn160', natura: null, clasa: 'necunoscuta', cunoscut: false, motiv: 'natura necunoscuta' }],
+    [['robinet sertar Dn 100', 'buc', 'alt', [100], null, 'alt', 'f3'], { element: 'robinet_dn100', um_canonica: 'buc' }],
+    [['Sapatura manuala', 'mc', 'alt', [], null, 'alt', 'f3'], { element: 'sapatura', um_canonica: 'mc' }],
+    [['teava DN160 si DN110', 'm', 'conducta', [110, 160], null, 'lungime', 'atr'], { element: null, cunoscut: false }],
+    [['Proba de presiune conducta PE DN160', 'm', 'conducta', [160], null, 'lungime', 'f3'], { element: 'teava_pe_dn160', natura: 'proba', clasa: 'proba', cunoscut: true }],
+    [['Tub de protectie OL DN 250', 'm', 'protectie', [250], null, 'lungime', 'atr'], { element: 'tub_protectie_dn250', natura: 'total_lucrare', cunoscut: true }],
+    [['Bransament PE DN32', 'buc', 'bransament', [32], 'PE', 'material', 'f3'], { element: 'bransament', natura: 'furnizare', um_canonica: 'buc', cunoscut: true }],
+    [['teava PE100 DN999', 'm', 'conducta', [999], 'PE100', 'material', 'f3'], { element: null, cunoscut: false }],
+  ]
+  for (const [arg, astept] of CL) {
+    const r = await J(`SELECT public.fn_ofertare_masura_clasifica($1, $2, $3, $4::numeric[], $5, $6, $7) x`, arg)
+    const dif = Object.entries(astept).filter(([k, v]) => k === 'motiv' ? !String(r.motiv || '').includes(v) : r[k] !== v)
+    if (dif.length) ab.push(`t2_clasifica ${arg[0]}: ${JSON.stringify(r)} (aștepta ${JSON.stringify(astept)})`)
+  }
+  const dn = await J(`SELECT jsonb_build_array(public.fn_ofertare_masura_dn('D= 90 MM'), public.fn_ofertare_masura_dn('teava DN160 si DN110'), public.fn_ofertare_masura_dn('conducta Ø 63 PE100 SDR11'), public.fn_ofertare_masura_dn('lungime 250 m')) x`)
+  if (JSON.stringify(dn) !== JSON.stringify([[90], [110, 160], [63], []])) ab.push('t2_clasifica fn_ofertare_masura_dn: ' + JSON.stringify(dn))
+  // t2_lot
+  for (const [arg, astept] of [[['lista', [2], 'are_loturi'], { lot: 2, cunoscut: true }], [['lista', [1, 2], 'are_loturi'], { lot: null, cunoscut: false }],
+    [['toate', [], 'fara_loturi'], { lot: null, cunoscut: true }], [['toate', [], 'are_loturi'], { lot: null, cunoscut: false }], [['toate', [], 'neinitializat'], { lot: null, cunoscut: false }],
+    [[null, null, 'fara_loturi'], { lot: null, cunoscut: true }], [['necunoscut', [], 'fara_loturi'], { lot: null, cunoscut: false }]]) {
+    const r = await J(`SELECT public.fn_ofertare_masura_lot($1, $2::int[], $3) x`, arg)
+    if (JSON.stringify(r) !== JSON.stringify(astept)) ab.push(`t2_lot ${JSON.stringify(arg)}: ${JSON.stringify(r)}`)
+  }
+  // t2_um
+  for (const [arg, astept] of [[['km', 'teava_pe_dn160'], { um: 'm', factor: 1000, motiv: null }], [['t', 'teava_pe_dn160'], { um: 'kg', factor: 1000, motiv: 'unitate_incompatibila' }],
+    [['t', null], { um: 'kg', factor: 1000, motiv: null }], [['buc', 'teava_pe_dn160'], { um: 'buc', factor: 1, motiv: 'unitate_incompatibila' }], [['mm', null], { um: null, factor: null, motiv: 'diametru_nu_cantitate' }],
+    [['ml', 'teava_pe_dn160'], { um: 'm', factor: 1, motiv: null }], [['bucati', 'robinet_dn100'], { um: 'buc', factor: 1, motiv: null }], [['ore', null], { um: null, factor: null, motiv: 'um_necunoscuta' }]]) {
+    const r = await J(`SELECT public.fn_ofertare_um_canonica($1, $2) x`, arg)
+    const bun = r.um === astept.um && r.motiv === astept.motiv && (astept.factor === null ? r.factor === null : Number(r.factor) === astept.factor)
+    if (!bun) ab.push(`t2_um ${JSON.stringify(arg)}: ${JSON.stringify(r)}`)
+  }
+  // t2_pagini_permise — tabelul comun
+  const TP = JSON.parse(citeste('supabase/tests/20270112a_cazuri_plafon.json'))
+  for (const c of TP.cazuri) {
+    const r = await J(`SELECT public.fn_ofertare_masura_pagini_permise($1::jsonb, $2) x`, [JSON.stringify(c.documente), c.plafon])
+    if (JSON.stringify(r.limita) !== JSON.stringify(c.limita) || r.plafon_atins !== c.plafon_atins) ab.push(`t2_pagini_permise ${c.nume}: ${JSON.stringify(r)}`)
+    for (const f of c.felii) {
+      const lim = r.limita.find(x => x.document_id === f.document_id)?.ultima_pagina_permisa ?? 0
+      if ((f.pagina_pana_la <= lim) !== f.permisa) ab.push(`t2_pagini_permise ${c.nume}: felia ${JSON.stringify(f)} → limita ${lim}`)
+    }
+  }
+  // dovezi: pagini sintetice
+  const F3 = PAG(1, 'Formularul F3', 'Nr. Cod Denumire UM Cantitate', '001 SA11G0 SAPATURA MANUALA MC 120', '003 SA11G1 TEAVA PE100 DN160 M 6.400', '004 SA11G2 TEAVA PE100 DN110 M 3.995,50')
+    + PAG(2, 'Nr. Cod Denumire UM Cantitate Pret Valoare', '005 SA11G3 TEAVA PE100 DN90 M 6.400 12,5 80000')
+    + PAG(3, 'Nr. Denumire UM DN Cantitate', '006 TEAVA PE100 DN160 M 160 6.400', '', '', 'Nr. Denumire Cantitate', '007 TEAVA PE100 DN160 6.400', 'Nr. Denumire L (m)', '008 TEAVA PE100 DN160 1.200')
+    + PAG(4, 'Nr. Cod Denumire UM Cantitate', '009 X TEAVA DN160 M 6.400', '009 X TEAVA DN160 M 6.400', 'Nr. Cod Denumire UM Cantitate', '010 Y TEAVA DN160 M 1.23', '011 Z TEAVA DN160 MM 160', '012 W TEAVA DN160 BUC 5')
+  const V = async (pag, dov) => J(`SELECT public.fn_ofertare_masura_verifica($1, $2::jsonb) x`, [pag, JSON.stringify(dov)])
+  const T = (rand, celula, pagina = 1, element = 'teava_pe_dn160') => ({ pagina, fel_dovada: 'tabel', rand, celula, element })
+  const cazT = [
+    ['t2_tabel_ok', T('003 SA11G1 TEAVA PE100 DN160 M 6.400', '6.400'), { verificare: 'ok', valoare: 6400, um_canonica: 'm', antet_coloana: 'cantitate', antet_um: 'um', valoare_text: '6.400', um_text: 'M' }],
+    ['t2_tabel_ok preturi (index de la dreapta 2)', T('005 SA11G3 TEAVA PE100 DN90 M 6.400 12,5 80000', '6.400', 2, 'teava_pe_dn90'), { verificare: 'ok', valoare: 6400 }],
+    ['t2_tabel_ok 3.995,50', T('004 SA11G2 TEAVA PE100 DN110 M 3.995,50', '3.995,50', 1, 'teava_pe_dn110'), { verificare: 'ok', valoare: 3995.5 }],
+    ['t2_tabel_ok sapatura mc', T('001 SA11G0 SAPATURA MANUALA MC 120', '120', 1, 'sapatura'), { verificare: 'ok', valoare: 120, um_canonica: 'mc' }],
+    ['t2_tabel_coloana_vecina celula 160', T('006 TEAVA PE100 DN160 M 160 6.400', '160', 3), { verificare: 'coloana_necunoscuta' }],
+    ['t2_tabel_coloana_vecina celula 6.400', T('006 TEAVA PE100 DN160 M 160 6.400', '6.400', 3), { verificare: 'ok', valoare: 6400 }],
+    ['t2_tabel um_lipsa', T('007 TEAVA PE100 DN160 6.400', '6.400', 3), { verificare: 'um_lipsa' }],
+    ['t2_tabel L (m) dă UM-ul', T('008 TEAVA PE100 DN160 1.200', '1.200', 3), { verificare: 'ok', valoare: 1200, antet_coloana: 'l (m)', um_text: 'm' }],
+    ['t2_tabel_alt_rand rand_lipsa', T('999 INEXISTENT M 1', '1', 1), { verificare: 'rand_lipsa' }],
+    ['t2_tabel_alt_rand rand_ambiguu', T('009 X TEAVA DN160 M 6.400', '6.400', 4), { verificare: 'rand_ambiguu' }],
+    ['t2_tabel numar_ambiguu', T('010 Y TEAVA DN160 M 1.23', '1.23', 4), { verificare: 'numar_ambiguu' }],
+    ['t2_tabel diametru (UM mm)', T('011 Z TEAVA DN160 MM 160', '160', 4), { verificare: 'diametru_nu_cantitate' }],
+    ['t2_tabel unitate_incompatibila (buc pe țeavă)', T('012 W TEAVA DN160 BUC 5', '5', 4), { verificare: 'unitate_incompatibila' }],
+    ['t2_pagina_lipsa (tabel pe pagina 9)', T('003 SA11G1 TEAVA PE100 DN160 M 6.400', '6.400', 9), { verificare: 'rand_lipsa' }],
+  ]
+  for (const [nume, dov, astept] of cazT) {
+    const r = await V(F3, dov)
+    const dif = Object.entries(astept).filter(([k, v]) => (k === 'valoare' ? Number(r.valoare) !== v : r[k] !== v))
+    if (dif.length) ab.push(`${nume}: ${JSON.stringify(r)} (aștepta ${JSON.stringify(astept)})`)
+  }
+  const ATR = PAG(1, 'AVIZ TEHNIC DE RACORDARE', 'Se va executa o conductă DN 160, lungime 250 m, din PE100.', 'Rețeaua este în lungime totală de 3.995 m.', 'L = 1.200 m pe strada A.',
+    'număr de bucăți 12 buc robineți.', 'Tub DN160 montat.', 'Tubul are lungime 160 mm grosime.', 'lungime DN160 m', 'lungime Dn 160 m', 'conductă Dn 160, lungime 250 m',
+    'aproximativ 250 de metri', '250 m de conductă', 'lungime 3.995,50 m', 'lungime 1.23 m', 'lungime 250 t', 'lungime 6' + String.fromCharCode(160) + '400 m', 'lungime 2 km')
+    + PAG(3, 'fragment prezent pe pagina 3')
+  const X = (fragment, pagina = 1, element = 'teava_pe_dn160') => ({ pagina, fel_dovada: 'text', fragment, element })
+  const cazX = [
+    ['t2_text_ok lungime 250 m', X('conductă DN 160, lungime 250 m'), { verificare: 'ok', valoare: 250, um_canonica: 'm', valoare_text: '250', um_text: 'm' }],
+    ['t2_text_ok în lungime totală de', X('în lungime totală de 3.995 m'), { verificare: 'ok', valoare: 3995 }],
+    ['t2_text_ok L =', X('L = 1.200 m'), { verificare: 'ok', valoare: 1200 }],
+    ['t2_text_ok număr de bucăți', X('număr de bucăți 12 buc', 1, 'robinet_dn100'), { verificare: 'ok', valoare: 12, um_canonica: 'buc' }],
+    ['t2_text_ok km', X('lungime 2 km'), { verificare: 'ok', valoare: 2000 }],
+    ['t2_text_ok NBSP', X('lungime 6' + String.fromCharCode(160) + '400 m'), { verificare: 'ok', valoare: 6400 }],
+    ['t2_text_diametru DN160 fără cuvânt-cheie → tipar', X('Tub DN160 montat.'), { verificare: 'tipar_necunoscut' }],
+    ['t2_text_diametru lungime 160 mm', X('lungime 160 mm'), { verificare: 'diametru_nu_cantitate' }],
+    ['t2_text_diametru lungime DN160 m', X('lungime DN160 m'), { verificare: 'diametru_nu_cantitate' }],
+    ['t2_text_diametru lungime Dn 160 m', X('lungime Dn 160 m'), { verificare: 'diametru_nu_cantitate' }],
+    ['t2_text_diametru conductă Dn 160, lungime 250 m', X('conductă Dn 160, lungime 250 m'), { verificare: 'ok', valoare: 250 }],
+    ['t2_text_nelegat aproximativ', X('aproximativ 250 de metri'), { verificare: 'tipar_necunoscut' }],
+    ['t2_text_nelegat fără cuvânt-cheie înainte', X('250 m de conductă'), { verificare: 'tipar_necunoscut' }],
+    ['t2_text_nelegat neîntreg', X('lungime 3.995,50 m'), { verificare: 'numar_neintreg' }],
+    ['t2_text_nelegat ambiguu', X('lungime 1.23 m'), { verificare: 'numar_ambiguu' }],
+    ['t2_text_nelegat unitate_incompatibila', X('lungime 250 t'), { verificare: 'unitate_incompatibila' }],
+    ['t2_text fragment_lipsa (altă pagină)', X('fragment prezent pe pagina 3', 4), { verificare: 'fragment_lipsa' }],
+    ['t2_text fragment prezent pe pagina 3 → tipar', X('fragment prezent pe pagina 3', 3), { verificare: 'tipar_necunoscut' }],
+    ['t2_text fragment inexistent', X('text care nu e in document'), { verificare: 'fragment_lipsa' }],
+  ]
+  for (const [nume, dov, astept] of cazX) {
+    const r = await V(ATR, dov)
+    const dif = Object.entries(astept).filter(([k, v]) => (k === 'valoare' ? Number(r.valoare) !== v : r[k] !== v))
+    if (dif.length) ab.push(`${nume}: ${JSON.stringify(r)} (aștepta ${JSON.stringify(astept)})`)
+  }
+  // paginile unui text
+  const pg = await J(`SELECT jsonb_build_array(public.fn_ofertare_masura_pagini($1), public.fn_ofertare_masura_pagini(''), public.fn_ofertare_masura_pagini('fara marcaje'), public.fn_ofertare_masura_pagina('fara marcaje', 1), public.fn_ofertare_masura_pagina($1, 3) IS NOT NULL, public.fn_ofertare_masura_pagina($1, 2)) x`, [ATR])
+  if (JSON.stringify(pg) !== JSON.stringify([3, 0, 1, 'fara marcaje', true, null])) ab.push('t2 pagini: ' + JSON.stringify(pg))
+  // fără EXECUTE pentru clienți pe funcțiile interne
+  for (const fn of [`fn_ofertare_numar_ro('6')`, `fn_ofertare_masura_clasifica('x', 'm', 'alt', '{}', NULL, 'alt', 'f3')`, `fn_ofertare_masura_verifica('x', '{}')`, `fn_ofertare_masura_pagini_permise('[]', 1)`]) {
+    for (const rol of ['authenticated', 'service_role']) asteptCod(await ca(db, 'OF', `SELECT public.${fn}`, [], { rol }), '42501', `t2 EXECUTE ${rol} pe ${fn.split('(')[0]}`, ab)
+  }
+  ab.forEach(x => console.log('     ' + x))
+  ok(ab.length === 0, `t2: ${TN.cazuri.length} cazuri numerice, ${CL.length} clasificări, ${TP.cazuri.length} cazuri de plafon, ${cazT.length} dovezi tabel, ${cazX.length} dovezi text (${ab.length} abateri)`)
+  await db.close()
+}
+
 console.log(esec ? `\nEȘEC: ${esec} verificări picate` : '\nTOATE VERIFICĂRILE AU TRECUT')
 process.exit(esec ? 1 : 0)

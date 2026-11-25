@@ -248,17 +248,19 @@ CREATE TABLE public.ofertare_tipare_cantitate (
   fel   text NOT NULL CHECK (fel IN ('antet_cantitate', 'antet_um', 'cuvant_cheie')),
   tipar text NOT NULL CHECK (length(tipar) BETWEEN 1 AND 80),
   activ boolean NOT NULL DEFAULT true,
-  UNIQUE (fel, tipar)
+  UNIQUE (fel, tipar),
+  CHECK (fel <> 'cuvant_cheie' OR tipar !~ '\((?!\?)')
 );
 -- antetele: forme normalizate (minuscule, fara diacritice; tokenii multi-cuvant se lipesc cu „_” inaintea impartirii); cuvintele-cheie: regex
--- POSIX pe textul normalizat, cuvantul INAINTEA numarului (spec §3.2); verificarea textului liber e in trepte (fn_ofertare_masura_verifica)
+-- POSIX pe textul normalizat, DOAR cu grupuri necapturante (?:…) — grupurile capturante ar deplasa capturile verificarii —, cuvantul INAINTEA
+-- numarului (spec §3.2); verificarea textului liber e in trepte (fn_ofertare_masura_verifica)
 INSERT INTO public.ofertare_tipare_cantitate (id, fel, tipar) VALUES
   (1, 'antet_cantitate', 'cantitate'), (2, 'antet_cantitate', 'cant.'), (3, 'antet_cantitate', 'cant'), (4, 'antet_cantitate', 'cantit.'),
   (5, 'antet_cantitate', 'lungime'), (6, 'antet_cantitate', 'l (m)'), (7, 'antet_cantitate', 'nr. buc'), (8, 'antet_cantitate', 'volum'),
   (9, 'antet_cantitate', 'suprafata'),
   (11, 'antet_um', 'um'), (12, 'antet_um', 'u.m.'), (13, 'antet_um', 'u/m'), (14, 'antet_um', 'unitate'), (15, 'antet_um', 'unit.'),
-  (21, 'cuvant_cheie', 'lungime( totala)?'), (22, 'cuvant_cheie', 'l'), (23, 'cuvant_cheie', 'in lungime( totala)? de'),
-  (24, 'cuvant_cheie', 'cantitate'), (25, 'cuvant_cheie', 'numar( de bucati)?|nr\.?( buc\.?)?');
+  (21, 'cuvant_cheie', 'lungime(?: totala)?'), (22, 'cuvant_cheie', 'l'), (23, 'cuvant_cheie', 'in lungime(?: totala)? de'),
+  (24, 'cuvant_cheie', 'cantitate'), (25, 'cuvant_cheie', 'numar(?: de bucati)?|nr\.?(?: buc\.?)?');
 ALTER TABLE public.ofertare_elemente_masura ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.ofertare_tipare_cantitate ENABLE ROW LEVEL SECURITY;
 CREATE POLICY ofertare_elemente_masura_select ON public.ofertare_elemente_masura FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL);
@@ -433,7 +435,220 @@ CREATE TRIGGER trg_ofertare_masuratori_imuabil BEFORE UPDATE OR DELETE ON public
 CREATE TRIGGER trg_ofertare_evaluari_imuabil BEFORE UPDATE OR DELETE ON public.ofertare_cantitati_evaluari
   FOR EACH ROW EXECUTE FUNCTION public.fn_trg_ofertare_masuratori_imuabil();
 
--- @@SECTIUNE_7@@
+-- ─── 7. Clasificarea, regula numerică, UM canonică, lotul, paginile permise, verificarea dovezilor (spec §3.1–3.3; o singură definiție, L19;
+--     fără EXECUTE pentru clienți — chemate doar din RPC-urile DEFINER ale lui postgres) ─────────────────────────────────────────────────
+-- normalizarea textului: minuscule, fără diacritice, spațiile / tab-urile strânse (spațiile neîntrerupte rămân: sunt separatori de mii)
+CREATE FUNCTION public.fn_ofertare_masura_norm(p text) RETURNS text
+LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp
+AS $f$ SELECT btrim(regexp_replace(translate(lower(coalesce(p, '')), 'ăâîșşțţ', 'aaisstt'), '[ ' || chr(9) || ']+', ' ', 'g')) $f$;
+REVOKE ALL ON FUNCTION public.fn_ofertare_masura_norm(text) FROM PUBLIC, anon, authenticated, service_role;
+-- regula numerică (spec §3.3): punct SAU spațiu neîntrerupt (U+00A0, U+202F, U+2009) = mii, DOAR în grupuri exacte de 3; virgulă = zecimale;
+-- grupuri de altă lungime după punct = format_numeric_ambiguu; orice altceva = nu_e_numar. Niciodată ::numeric pe textul brut.
+CREATE FUNCTION public.fn_ofertare_numar_ro(p_text text) RETURNS jsonb
+LANGUAGE plpgsql IMMUTABLE SET search_path = public, pg_temp
+AS $f$
+DECLARE s text := replace(replace(replace(btrim(coalesce(p_text, '')), chr(160), '.'), chr(8239), '.'), chr(8201), '.'); v_int text; v_dec text;
+BEGIN
+  IF s ~ '^[0-9]{1,3}([.][0-9]{3})*(,[0-9]+)?$' OR s ~ '^[0-9]+(,[0-9]+)?$' THEN
+    v_int := replace(split_part(s, ',', 1), '.', ''); v_dec := split_part(s, ',', 2);
+    RETURN jsonb_build_object('valoare', (v_int || CASE WHEN v_dec <> '' THEN '.' || v_dec ELSE '' END)::numeric, 'motiv', NULL, 'intreg', v_dec = '');
+  ELSIF s ~ '^[0-9]+([.][0-9]+)+(,[0-9]+)?$' THEN
+    RETURN jsonb_build_object('valoare', NULL, 'motiv', 'format_numeric_ambiguu', 'intreg', false);
+  END IF;
+  RETURN jsonb_build_object('valoare', NULL, 'motiv', 'nu_e_numar', 'intreg', false);
+END $f$;
+REVOKE ALL ON FUNCTION public.fn_ofertare_numar_ro(text) FROM PUBLIC, anon, authenticated, service_role;
+-- UM canonică pe listă: m / buc / mc / mp / kg; conversii DOAR km→m ×1000, ml→m ×1, bucati→buc, t→kg ×1000 (doar elemente cu masă);
+-- mm = diametru_nu_cantitate; UM diferită de cea a elementului = unitate_incompatibila
+CREATE FUNCTION public.fn_ofertare_um_canonica(p_um text, p_element text) RETURNS jsonb
+LANGUAGE plpgsql STABLE SET search_path = public, pg_temp
+AS $f$
+DECLARE u text := replace(replace(public.fn_ofertare_masura_norm(p_um), '.', ''), ' ', ''); v_um text; v_f numeric := 1; v_masa boolean := false; e record;
+BEGIN
+  IF u IN ('m', 'ml', 'metri', 'metru', 'metriliniari', 'metruliniar', 'mliniar') THEN v_um := 'm';
+  ELSIF u = 'km' THEN v_um := 'm'; v_f := 1000;
+  ELSIF u IN ('buc', 'bucati', 'bucata', 'bc') THEN v_um := 'buc';
+  ELSIF u IN ('mc', 'm3', 'm' || chr(179)) THEN v_um := 'mc';
+  ELSIF u IN ('mp', 'm2', 'm' || chr(178)) THEN v_um := 'mp';
+  ELSIF u = 'kg' THEN v_um := 'kg';
+  ELSIF u IN ('t', 'to', 'tone', 'tona') THEN v_um := 'kg'; v_f := 1000; v_masa := true;
+  ELSIF u = 'mm' THEN RETURN jsonb_build_object('um', NULL, 'factor', NULL, 'motiv', 'diametru_nu_cantitate');
+  ELSE RETURN jsonb_build_object('um', NULL, 'factor', NULL, 'motiv', 'um_necunoscuta');
+  END IF;
+  IF p_element IS NOT NULL THEN
+    SELECT * INTO e FROM public.ofertare_elemente_masura x WHERE x.cod = p_element;
+    IF NOT FOUND THEN RETURN jsonb_build_object('um', v_um, 'factor', v_f, 'motiv', 'element_necunoscut'); END IF;
+    IF e.um_canonica IS DISTINCT FROM v_um OR (v_masa AND NOT e.are_masa) THEN
+      RETURN jsonb_build_object('um', v_um, 'factor', v_f, 'motiv', 'unitate_incompatibila');
+    END IF;
+  END IF;
+  RETURN jsonb_build_object('um', v_um, 'factor', v_f, 'motiv', NULL);
+END $f$;
+REVOKE ALL ON FUNCTION public.fn_ofertare_um_canonica(text, text) FROM PUBLIC, anon, authenticated, service_role;
+-- DN-urile dintr-un text: DN / Dn / dn / De / D / Ø + număr (2–4 cifre), și forma „D= 90 MM”; distincte, ordonate
+CREATE FUNCTION public.fn_ofertare_masura_dn(p_text text) RETURNS numeric[]
+LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp
+AS $f$ SELECT coalesce(array_agg(DISTINCT m[1]::numeric ORDER BY m[1]::numeric), '{}'::numeric[])
+          FROM regexp_matches(coalesce(p_text, ''), '(?:\m(?:DN|Dn|dn|De|D)|' || chr(216) || ')[ ]*=?[ ]*([0-9]{2,4})(?:[ ]*(?:MM|mm))?\M', 'g') m $f$;
+REVOKE ALL ON FUNCTION public.fn_ofertare_masura_dn(text) FROM PUBLIC, anon, authenticated, service_role;
+-- clasificarea (decizia 5 a planului): element din lista închisă + natura + clasa + UM canonică a textului; element / natura necunoscute
+-- NU dispar: cunoscut = false, cu motivul (semnalul „necunoscut” se formează în RPC)
+CREATE FUNCTION public.fn_ofertare_masura_clasifica(p_denumire text, p_um text, p_tip_lucrare text, p_dn numeric[], p_material text, p_masura text, p_rol text) RETURNS jsonb
+LANGUAGE plpgsql STABLE SET search_path = public, pg_temp
+AS $f$
+DECLARE d text := public.fn_ofertare_masura_norm(p_denumire); dn numeric[] := coalesce(p_dn, '{}'); n int := cardinality(coalesce(p_dn, '{}'));
+        dnt text; mat text; el text; nat text; cls text; um jsonb; motiv text;
+BEGIN
+  IF n = 1 THEN dnt := trim_scale(dn[1])::text; END IF;
+  mat := CASE WHEN p_material ~* '^PE' THEN 'pe' WHEN p_material ~* '^(OL|OTEL)' THEN 'ol'
+              WHEN d ~ '\m(pe|pehd|pe100|pe80|polietilena)\M' THEN 'pe' WHEN d ~ '\m(ol|otel)\M' THEN 'ol' END;
+  el := CASE p_tip_lucrare
+          WHEN 'conducta' THEN CASE WHEN n = 1 THEN 'teava_' || coalesce(mat || '_', '') || 'dn' || dnt END
+          WHEN 'bransament' THEN 'bransament'
+          WHEN 'protectie' THEN CASE WHEN n = 1 THEN 'tub_protectie_dn' || dnt END
+          ELSE CASE WHEN d ~ '\m(robinet|robineti|vana|vane)\M' AND n = 1 THEN 'robinet_dn' || dnt
+                    WHEN d ~ '(sapatur|excava)' THEN 'sapatura' WHEN d ~ 'refacer' THEN 'refacere' END
+        END;
+  IF el IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.ofertare_elemente_masura x WHERE x.cod = el AND x.activ AND x.familie <> 'necunoscut') THEN el := NULL; END IF;
+  IF el IS NULL THEN motiv := 'element necunoscut'; END IF;
+  nat := CASE WHEN d ~ '(furnizare|procurare)' THEN 'furnizare' WHEN d ~ '(montaj|montare|pozare)' THEN 'montaj'
+              WHEN d ~ '\m(proba|probe|incercare|incercari)\M' THEN 'proba'
+              WHEN p_masura = 'material' THEN 'furnizare' WHEN p_masura = 'montaj' THEN 'montaj' WHEN p_masura = 'proba' THEN 'proba'
+              WHEN p_rol IN ('atr', 'cs', 'memoriu', 'plansa', 'raspuns') THEN 'total_lucrare' END;
+  IF nat IS NULL THEN motiv := concat_ws('; ', motiv, 'natura necunoscuta'); END IF;
+  cls := CASE nat WHEN 'furnizare' THEN 'fizica' WHEN 'total_lucrare' THEN 'fizica' WHEN 'montaj' THEN 'montaj' WHEN 'proba' THEN 'proba' ELSE 'necunoscuta' END;
+  um := public.fn_ofertare_um_canonica(p_um, NULL);
+  RETURN jsonb_build_object('element', el, 'natura', nat, 'clasa', cls, 'um_canonica', um ->> 'um', 'cunoscut', el IS NOT NULL AND nat IS NOT NULL,
+                            'motiv', concat_ws('; ', motiv, CASE WHEN um ->> 'motiv' = 'um_necunoscuta' THEN 'um necunoscuta' END));
+END $f$;
+REVOKE ALL ON FUNCTION public.fn_ofertare_masura_clasifica(text, text, text, numeric[], text, text, text) FROM PUBLIC, anon, authenticated, service_role;
+-- lotul (decizia 6): lista cu un lot → acel lot; lista cu ≥ 2 / necunoscut → necunoscut; toate (sau fără lot) → NULL doar pe fara_loturi
+CREATE FUNCTION public.fn_ofertare_masura_lot(p_lot_domeniu text, p_lot_nr integer[], p_stare_loturi text) RETURNS jsonb
+LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp
+AS $f$ SELECT CASE WHEN p_lot_domeniu = 'lista' AND cardinality(coalesce(p_lot_nr, '{}')) = 1 THEN jsonb_build_object('lot', p_lot_nr[1], 'cunoscut', true)
+                   WHEN p_lot_domeniu IN ('lista', 'necunoscut') THEN jsonb_build_object('lot', NULL, 'cunoscut', false)
+                   WHEN coalesce(p_lot_domeniu, 'toate') = 'toate' AND p_stare_loturi = 'fara_loturi' THEN jsonb_build_object('lot', NULL, 'cunoscut', true)
+                   ELSE jsonb_build_object('lot', NULL, 'cunoscut', false) END $f$;
+REVOKE ALL ON FUNCTION public.fn_ofertare_masura_lot(text, integer[], text) FROM PUBLIC, anon, authenticated, service_role;
+-- plafonul de pagini (decizia 18): UN numărător cumulat peste documentele ordonate după id (inclusiv cele din cache); o felie e permisă ⇔
+-- pagina_pana_la ≤ ultima_pagina_permisa a documentului (o felie care traversează limita e exclusă întreagă)
+CREATE FUNCTION public.fn_ofertare_masura_pagini_permise(p_documente jsonb, p_plafon integer) RETURNS jsonb
+LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp
+AS $f$ WITH d AS (SELECT (x ->> 'id')::bigint AS id, greatest(coalesce((x ->> 'pagini')::int, 0), 0) AS pagini
+                    FROM jsonb_array_elements(CASE WHEN jsonb_typeof(p_documente) = 'array' THEN p_documente ELSE '[]'::jsonb END) x),
+            c AS (SELECT id, pagini, sum(pagini) OVER (ORDER BY id) AS cumul FROM d)
+       SELECT jsonb_build_object('limita', coalesce(jsonb_agg(jsonb_build_object('document_id', id, 'ultima_pagina_permisa',
+                                                      greatest(0, least(pagini, coalesce(p_plafon, 0) - (cumul - pagini)))) ORDER BY id), '[]'::jsonb),
+                                 'plafon_atins', coalesce(max(cumul), 0) > coalesce(p_plafon, 0)) FROM c $f$;
+REVOKE ALL ON FUNCTION public.fn_ofertare_masura_pagini_permise(jsonb, integer) FROM PUBLIC, anon, authenticated, service_role;
+-- paginile unui text: numărul marcajelor ⟦PAGINA n⟧ (maximul); textul paginii n = de la marcaj până la următorul; fără marcaje = o singură pagină
+CREATE FUNCTION public.fn_ofertare_masura_pagini(p_text text) RETURNS integer
+LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp
+AS $f$ SELECT coalesce(max(m[1]::int), CASE WHEN coalesce(p_text, '') <> '' THEN 1 ELSE 0 END)
+          FROM regexp_matches(coalesce(p_text, ''), chr(10214) || 'PAGINA[ ]*([0-9]{1,5})' || chr(10215), 'g') m $f$;
+REVOKE ALL ON FUNCTION public.fn_ofertare_masura_pagini(text) FROM PUBLIC, anon, authenticated, service_role;
+CREATE FUNCTION public.fn_ofertare_masura_pagina(p_text text, p_pagina integer) RETURNS text
+LANGUAGE plpgsql IMMUTABLE SET search_path = public, pg_temp
+AS $f$
+DECLARE s int; e int;
+BEGIN
+  IF p_text IS NULL OR p_pagina IS NULL THEN RETURN NULL; END IF;
+  IF strpos(p_text, chr(10214) || 'PAGINA') = 0 THEN RETURN CASE WHEN p_pagina = 1 THEN p_text END; END IF;
+  s := regexp_instr(p_text, chr(10214) || 'PAGINA[ ]*' || p_pagina || chr(10215), 1, 1, 1);
+  IF s = 0 THEN RETURN NULL; END IF;
+  e := strpos(substr(p_text, s), chr(10214) || 'PAGINA');
+  RETURN CASE WHEN e = 0 THEN substr(p_text, s) ELSE substr(p_text, s, e - 1) END;
+END $f$;
+REVOKE ALL ON FUNCTION public.fn_ofertare_masura_pagina(text, integer) FROM PUBLIC, anon, authenticated, service_role;
+-- verificarea deterministă a dovezii (spec §3.2, L11): tabel = rândul literal o singură dată pe pagină, antetul de cantitate deasupra, coloana la
+-- același index DE LA DREAPTA, UM din coloana / antetul UM; text = fragmentul literal pe pagină, apoi treptele 3b (tipar) → 3c (diametru) →
+-- 3d (UM) → 3e (număr întreg). Primul eșec oprește.
+CREATE FUNCTION public.fn_ofertare_masura_verifica(p_text_extras text, p_dovada jsonb) RETURNS jsonb
+LANGUAGE plpgsql STABLE SET search_path = public, pg_temp
+AS $f$
+DECLARE v_pag int := (p_dovada ->> 'pagina')::int; v_fel text := p_dovada ->> 'fel_dovada'; v_el text := p_dovada ->> 'element'; v_text text;
+        v_rand text; v_cel text; v_frag text; lines text[]; i int; j int; k int; v_nn int; toks text[]; htoks text[]; hgasit boolean := false;
+        v_pos int; v_posum int; v_um text; v_ant text; v_antum text; v_num jsonb; v_umj jsonb; v_kw text; m text[]; v_goale int; r record; s text;
+        c_nbsp constant text := chr(160) || chr(8239) || chr(8201);
+BEGIN
+  v_text := public.fn_ofertare_masura_pagina(p_text_extras, v_pag);
+  IF v_text IS NULL THEN RETURN jsonb_build_object('verificare', CASE WHEN v_fel = 'tabel' THEN 'rand_lipsa' ELSE 'fragment_lipsa' END); END IF;
+  IF v_fel = 'tabel' THEN
+    v_rand := p_dovada ->> 'rand'; v_cel := p_dovada ->> 'celula';
+    IF coalesce(v_rand, '') = '' OR coalesce(v_cel, '') = '' THEN RETURN jsonb_build_object('verificare', 'rand_lipsa'); END IF;
+    v_nn := (length(v_text) - length(replace(v_text, v_rand, ''))) / length(v_rand);
+    IF v_nn = 0 THEN RETURN jsonb_build_object('verificare', 'rand_lipsa'); END IF;
+    IF v_nn > 1 THEN RETURN jsonb_build_object('verificare', 'rand_ambiguu'); END IF;
+    lines := string_to_array(v_text, chr(10));
+    i := NULL;
+    FOR k IN 1..cardinality(lines) LOOP IF strpos(lines[k], v_rand) > 0 THEN i := k; EXIT; END IF; END LOOP;
+    IF i IS NULL THEN RETURN jsonb_build_object('verificare', 'rand_lipsa'); END IF;
+    -- linia de antet: cea mai apropiată de deasupra care conține un antet de cantitate ca token întreg; oprire la două linii goale consecutive
+    j := i - 1; v_goale := 0;
+    WHILE j >= 1 AND NOT hgasit LOOP
+      s := public.fn_ofertare_masura_norm(lines[j]);
+      IF s = '' THEN v_goale := v_goale + 1; IF v_goale >= 2 THEN EXIT; END IF;
+      ELSE
+        v_goale := 0;
+        FOR r IN SELECT tipar FROM public.ofertare_tipare_cantitate WHERE fel IN ('antet_cantitate', 'antet_um') AND activ AND tipar LIKE '% %' LOOP
+          s := replace(s, r.tipar, replace(r.tipar, ' ', '_'));
+        END LOOP;
+        htoks := regexp_split_to_array(s, ' ');
+        FOR k IN 1..cardinality(htoks) LOOP
+          IF EXISTS (SELECT 1 FROM public.ofertare_tipare_cantitate t WHERE t.fel = 'antet_cantitate' AND t.activ AND replace(t.tipar, ' ', '_') = htoks[k]) THEN
+            hgasit := true; v_pos := cardinality(htoks) - k; v_ant := replace(htoks[k], '_', ' ');
+          END IF;
+        END LOOP;
+      END IF;
+      j := j - 1;
+    END LOOP;
+    IF NOT hgasit THEN RETURN jsonb_build_object('verificare', 'antet_lipsa'); END IF;
+    toks := regexp_split_to_array(btrim(regexp_replace(lines[i], '[ ' || chr(9) || ']+', ' ', 'g')), ' ');
+    IF cardinality(toks) - v_pos < 1 OR toks[cardinality(toks) - v_pos] IS DISTINCT FROM v_cel THEN RETURN jsonb_build_object('verificare', 'coloana_necunoscuta'); END IF;
+    v_posum := NULL;
+    FOR k IN 1..cardinality(htoks) LOOP
+      IF EXISTS (SELECT 1 FROM public.ofertare_tipare_cantitate t WHERE t.fel = 'antet_um' AND t.activ AND replace(t.tipar, ' ', '_') = htoks[k]) THEN
+        v_posum := cardinality(htoks) - k; v_antum := replace(htoks[k], '_', ' ');
+      END IF;
+    END LOOP;
+    IF v_posum IS NOT NULL AND cardinality(toks) - v_posum >= 1 THEN v_um := toks[cardinality(toks) - v_posum];
+    ELSIF v_ant ~ '\(([a-z0-9]+)\)' THEN v_um := (regexp_match(v_ant, '\(([a-z0-9]+)\)'))[1]; v_antum := v_ant;
+    END IF;
+    IF coalesce(v_um, '') = '' THEN RETURN jsonb_build_object('verificare', 'um_lipsa'); END IF;
+    v_umj := public.fn_ofertare_um_canonica(v_um, v_el);
+    IF v_umj ->> 'motiv' IS NOT NULL THEN
+      RETURN jsonb_build_object('verificare', CASE WHEN v_umj ->> 'motiv' = 'diametru_nu_cantitate' THEN 'diametru_nu_cantitate' ELSE 'unitate_incompatibila' END,
+                                'antet_coloana', v_ant, 'antet_um', v_antum, 'valoare_text', v_cel, 'um_text', v_um);
+    END IF;
+    v_num := public.fn_ofertare_numar_ro(v_cel);
+    IF v_num ->> 'motiv' IS NOT NULL THEN
+      RETURN jsonb_build_object('verificare', CASE WHEN v_num ->> 'motiv' = 'format_numeric_ambiguu' THEN 'numar_ambiguu' ELSE 'tipar_necunoscut' END,
+                                'antet_coloana', v_ant, 'antet_um', v_antum, 'valoare_text', v_cel, 'um_text', v_um);
+    END IF;
+    RETURN jsonb_build_object('verificare', 'ok', 'valoare', (v_num ->> 'valoare')::numeric * (v_umj ->> 'factor')::numeric, 'um_canonica', v_umj ->> 'um',
+                              'antet_coloana', v_ant, 'antet_um', v_antum, 'valoare_text', v_cel, 'um_text', v_um);
+  END IF;
+  -- text liber, în trepte
+  v_frag := p_dovada ->> 'fragment';
+  IF coalesce(v_frag, '') = '' OR strpos(v_text, v_frag) = 0 THEN RETURN jsonb_build_object('verificare', 'fragment_lipsa'); END IF;
+  SELECT string_agg('(?:' || tipar || ')', '|' ORDER BY length(tipar) DESC, tipar) INTO v_kw FROM public.ofertare_tipare_cantitate WHERE fel = 'cuvant_cheie' AND activ;
+  m := regexp_match(public.fn_ofertare_masura_norm(v_frag),
+         '\m(?:' || v_kw || ')[ ]?[:=]?[ ]?(?:(dn|' || chr(248) || '|pn|sdr|de)[ ]?)?([0-9][0-9.,' || c_nbsp || ']*)[ ' || c_nbsp || ']?([a-z.]+)\M');
+  IF m IS NULL THEN RETURN jsonb_build_object('verificare', 'tipar_necunoscut'); END IF;
+  m[2] := rtrim(m[2], '., ' || c_nbsp);
+  IF m[1] IS NOT NULL OR m[3] = 'mm' THEN RETURN jsonb_build_object('verificare', 'diametru_nu_cantitate', 'valoare_text', m[2], 'um_text', m[3]); END IF;
+  v_umj := public.fn_ofertare_um_canonica(m[3], v_el);
+  IF v_umj ->> 'motiv' IS NOT NULL THEN RETURN jsonb_build_object('verificare', 'unitate_incompatibila', 'valoare_text', m[2], 'um_text', m[3]); END IF;
+  v_num := public.fn_ofertare_numar_ro(m[2]);
+  IF v_num ->> 'motiv' = 'format_numeric_ambiguu' THEN RETURN jsonb_build_object('verificare', 'numar_ambiguu', 'valoare_text', m[2], 'um_text', m[3]); END IF;
+  IF v_num ->> 'motiv' IS NOT NULL THEN RETURN jsonb_build_object('verificare', 'tipar_necunoscut', 'valoare_text', m[2], 'um_text', m[3]); END IF;
+  IF NOT (v_num ->> 'intreg')::boolean THEN RETURN jsonb_build_object('verificare', 'numar_neintreg', 'valoare_text', m[2], 'um_text', m[3]); END IF;
+  RETURN jsonb_build_object('verificare', 'ok', 'valoare', (v_num ->> 'valoare')::numeric * (v_umj ->> 'factor')::numeric, 'um_canonica', v_umj ->> 'um',
+                            'antet_coloana', NULL, 'antet_um', NULL, 'valoare_text', m[2], 'um_text', m[3]);
+END $f$;
+REVOKE ALL ON FUNCTION public.fn_ofertare_masura_verifica(text, jsonb) FROM PUBLIC, anon, authenticated, service_role;
+
+-- @@SECTIUNE_8@@
 
 -- ─── 99. Postcondiții ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 DO $post$

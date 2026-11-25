@@ -1,0 +1,28 @@
+{
+  "_descriere": "Tabelul COMUN de cazuri al regulii numerice (spec §3.3, planul TKT-2026-0329 Task 2 / Task 7): text -> valoare (ca text numeric) + intreg, sau motiv. Folosit de proba PGlite (fn_ofertare_numar_ro) si de testul de paritate Deno (cantNumar.valoareInDocument). Marcajele din text se decodeaza din coduri (L19).",
+  "_marcaje": { "{NBSP}": [160, 1], "{NNBSP}": [8239, 1], "{THSP}": [8201, 1] },
+  "cazuri": [
+    { "text": "6.400", "valoare": "6400", "intreg": true },
+    { "text": "3.995", "valoare": "3995", "intreg": true },
+    { "text": "1.234", "valoare": "1234", "intreg": true },
+    { "text": "1.234.567", "valoare": "1234567", "intreg": true },
+    { "text": "250", "valoare": "250", "intreg": true },
+    { "text": "1,234", "valoare": "1.234", "intreg": false },
+    { "text": "0,5", "valoare": "0.5", "intreg": false },
+    { "text": "6400,0", "valoare": "6400.0", "intreg": false },
+    { "text": "3.995,50", "valoare": "3995.50", "intreg": false },
+    { "text": "6{NBSP}400", "valoare": "6400", "intreg": true },
+    { "text": "6{NNBSP}400", "valoare": "6400", "intreg": true },
+    { "text": "1{THSP}234{THSP}567", "valoare": "1234567", "intreg": true },
+    { "text": "1.23", "motiv": "format_numeric_ambiguu" },
+    { "text": "1.2345", "motiv": "format_numeric_ambiguu" },
+    { "text": "12.34.5", "motiv": "format_numeric_ambiguu" },
+    { "text": "1.234.56", "motiv": "format_numeric_ambiguu" },
+    { "text": "DN160", "motiv": "nu_e_numar" },
+    { "text": "6 400", "motiv": "nu_e_numar" },
+    { "text": "abc", "motiv": "nu_e_numar" },
+    { "text": "", "motiv": "nu_e_numar" },
+    { "text": "6.400,", "motiv": "nu_e_numar" },
+    { "text": "-5", "motiv": "nu_e_numar" }
+  ]
+}
