@@ -675,8 +675,8 @@ const ast = (ab, cond, msg) => { if (!cond) ab.push(msg) }
     // r3 P1: același rând revendicat de DOUĂ poziții (același cod pe obiecte diferite, un singur rând în F3) → niciuna nu-l primește (rand_ambiguu la ambele), nu A = 12800 dintr-un rând de 6.400
     const p2 = await cantitate(db, { lic: LIC2, denumire: 'Furnizare teava PE100 DN160', um: 'M', cantitate: 6400, cod: 'SA11G1', obiect: 'Y', surse: [f2.dF3] })
     m = await reeval(PAG(1, 'Formularul F3', 'Nr. Cod Denumire UM Cantitate', '003 SA11G1 TEAVA PE100 DN160 M 6.400'))
-    ast(ab, m.length === 2 && m.every(x => x.verificare === 'rand_ambiguu' && x.valoare === null && x.rand === '003 SA11G1 TEAVA PE100 DN160 M 6.400') && s.verdict === 'neverificat' && s.valoare_a === null,
-      'un rând revendicat de două poziții → rand_ambiguu la ambele, A nedefinit: ' + JSON.stringify(m.map(x => [x.cantitate_id, x.verificare, x.valoare])))
+    ast(ab, m.length === 2 && m.every(x => x.verificare === 'rand_ambiguu' && x.valoare === null && x.rand === '003 SA11G1 TEAVA PE100 DN160 M 6.400') && s.verdict === 'neverificat' && Number(s.valoare_a) === 0 && s.inventar.a.componente === 2,
+      'un rând revendicat de două poziții → rand_ambiguu la ambele, nicio componentă dovedită (A = suma celor ok = 0, neverificat), nu 12800: ' + JSON.stringify([s.verdict, s.valoare_a, m.map(x => [x.cantitate_id, x.verificare, x.valoare, x.rand])]))
     await db.query(`DELETE FROM public.ofertare_cantitati WHERE id = $1`, [p2])   // pozițiile F3 nu au stare „retrasa” în CHECK (extras / validat / diferenta / revizuit_clarificare): se șterg
     // r3 P1: fără cod, denumiri incluse una în alta: ancora = denumirea URMATĂ de UM-ul poziției; rândul „… DN160 SDR17 M 100” e al poziției SDR17, nu și al celei scurte
     const p3 = await cantitate(db, { lic: LIC2, denumire: 'Furnizare teava PE100 DN160', um: 'M', cantitate: 100, cod: null, surse: [f2.dF3] })
