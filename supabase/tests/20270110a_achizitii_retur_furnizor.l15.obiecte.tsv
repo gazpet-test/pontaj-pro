@@ -1,0 +1,203 @@
+# 20270110a: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase)
+coloana	coloana public.comenzi_furnizor_intentii.autor	creat
+coloana	coloana public.comenzi_furnizor_intentii.cheie	creat
+coloana	coloana public.comenzi_furnizor_intentii.creat_la	creat
+coloana	coloana public.comenzi_furnizor_intentii.payload_hash	creat
+coloana	coloana public.comenzi_furnizor_intentii.rezultat	creat
+coloana	coloana public.comenzi_furnizor_intentii.rpc	creat
+coloana	coloana public.comenzi_furnizor_linii.cantitate	schimbat
+coloana	coloana public.comenzi_furnizor_linii.comanda_furnizor_id	schimbat
+coloana	coloana public.comenzi_furnizor_linii.comanda_linie_id	schimbat
+coloana	coloana public.comenzi_furnizor_linii.denumire	schimbat
+coloana	coloana public.comenzi_furnizor_linii.display_order	schimbat
+coloana	coloana public.comenzi_furnizor_linii.intrare_reconciliata	creat
+coloana	coloana public.comenzi_furnizor_linii.observatii	schimbat
+coloana	coloana public.comenzi_furnizor_linii.pret_unitar	schimbat
+coloana	coloana public.comenzi_furnizor_linii.termen_livrare	schimbat
+coloana	coloana public.comenzi_furnizor_linii.um	schimbat
+coloana	coloana public.comenzi_furnizor_receptii.cantitate	creat
+coloana	coloana public.comenzi_furnizor_receptii.cheie	creat
+coloana	coloana public.comenzi_furnizor_receptii.creat_de	creat
+coloana	coloana public.comenzi_furnizor_receptii.creat_la	creat
+coloana	coloana public.comenzi_furnizor_receptii.id	creat
+coloana	coloana public.comenzi_furnizor_receptii.linie_id	creat
+coloana	coloana public.comenzi_furnizor_receptii.moment	creat
+coloana	coloana public.comenzi_furnizor_receptii.receptie_id	creat
+coloana	coloana public.comenzi_furnizor_receptii.tip	creat
+coloana	coloana public.comenzi_furnizor_retur_alocari.cantitate	creat
+coloana	coloana public.comenzi_furnizor_retur_alocari.creat_la	creat
+coloana	coloana public.comenzi_furnizor_retur_alocari.id	creat
+coloana	coloana public.comenzi_furnizor_retur_alocari.inversata_de_receptie_id	creat
+coloana	coloana public.comenzi_furnizor_retur_alocari.receptie_id	creat
+coloana	coloana public.comenzi_furnizor_retur_alocari.retur_id	creat
+coloana	coloana public.comenzi_furnizor_retururi.asteapta_inlocuire	creat
+coloana	coloana public.comenzi_furnizor_retururi.cantitate	creat
+coloana	coloana public.comenzi_furnizor_retururi.cantitate_inlocuita	creat
+coloana	coloana public.comenzi_furnizor_retururi.cantitate_renuntata	creat
+coloana	coloana public.comenzi_furnizor_retururi.cheie	creat
+coloana	coloana public.comenzi_furnizor_retururi.comanda_furnizor_id	creat
+coloana	coloana public.comenzi_furnizor_retururi.creat_de	creat
+coloana	coloana public.comenzi_furnizor_retururi.creat_la	creat
+coloana	coloana public.comenzi_furnizor_retururi.denumire	creat
+coloana	coloana public.comenzi_furnizor_retururi.din_stoc	creat
+coloana	coloana public.comenzi_furnizor_retururi.id	creat
+coloana	coloana public.comenzi_furnizor_retururi.inchis_fel	creat
+coloana	coloana public.comenzi_furnizor_retururi.inchis_la	creat
+coloana	coloana public.comenzi_furnizor_retururi.inchis_motiv	creat
+coloana	coloana public.comenzi_furnizor_retururi.linie_id	creat
+coloana	coloana public.comenzi_furnizor_retururi.locatie_id	creat
+coloana	coloana public.comenzi_furnizor_retururi.locatie_tip	creat
+coloana	coloana public.comenzi_furnizor_retururi.motiv	creat
+coloana	coloana public.comenzi_furnizor_retururi.payload_hash	creat
+coloana	coloana public.comenzi_furnizor_retururi.pv_retur_path	creat
+coloana	coloana public.comenzi_furnizor_retururi.retur_id	creat
+coloana	coloana public.comenzi_furnizor_retururi.stoc_miscare_id	creat
+coloana	coloana public.comenzi_furnizor_retururi.tip	creat
+coloana	coloana public.comenzi_furnizor_retururi.um	creat
+constrangere	constrangere tabel public.comenzi_furnizor_intentii.comenzi_furnizor_intentii_hash_check	creat
+constrangere	constrangere tabel public.comenzi_furnizor_intentii.comenzi_furnizor_intentii_pkey	creat
+constrangere	constrangere tabel public.comenzi_furnizor_intentii.comenzi_furnizor_intentii_rpc_check	creat
+constrangere	constrangere tabel public.comenzi_furnizor_linii.comenzi_furnizor_linii_intrata_sub_primita_check	creat
+constrangere	constrangere tabel public.comenzi_furnizor_receptii.comenzi_furnizor_receptii_cantitate_ck	creat
+constrangere	constrangere tabel public.comenzi_furnizor_receptii.comenzi_furnizor_receptii_cheie_ck	creat
+constrangere	constrangere tabel public.comenzi_furnizor_receptii.comenzi_furnizor_receptii_legatura_ck	creat
+constrangere	constrangere tabel public.comenzi_furnizor_receptii.comenzi_furnizor_receptii_linie_fkey	creat
+constrangere	constrangere tabel public.comenzi_furnizor_receptii.comenzi_furnizor_receptii_pkey	creat
+constrangere	constrangere tabel public.comenzi_furnizor_receptii.comenzi_furnizor_receptii_receptie_fkey	creat
+constrangere	constrangere tabel public.comenzi_furnizor_receptii.comenzi_furnizor_receptii_tip_ck	creat
+constrangere	constrangere tabel public.comenzi_furnizor_retur_alocari.comenzi_furnizor_retur_alocari_cantitate_ck	creat
+constrangere	constrangere tabel public.comenzi_furnizor_retur_alocari.comenzi_furnizor_retur_alocari_inversata_fkey	creat
+constrangere	constrangere tabel public.comenzi_furnizor_retur_alocari.comenzi_furnizor_retur_alocari_pkey	creat
+constrangere	constrangere tabel public.comenzi_furnizor_retur_alocari.comenzi_furnizor_retur_alocari_receptie_fkey	creat
+constrangere	constrangere tabel public.comenzi_furnizor_retur_alocari.comenzi_furnizor_retur_alocari_retur_fkey	creat
+constrangere	constrangere tabel public.comenzi_furnizor_retururi.comenzi_furnizor_retururi_acoperit_ck	creat
+constrangere	constrangere tabel public.comenzi_furnizor_retururi.comenzi_furnizor_retururi_anulare_ck	creat
+constrangere	constrangere tabel public.comenzi_furnizor_retururi.comenzi_furnizor_retururi_cantitate_ck	creat
+constrangere	constrangere tabel public.comenzi_furnizor_retururi.comenzi_furnizor_retururi_cheie_key	creat
+constrangere	constrangere tabel public.comenzi_furnizor_retururi.comenzi_furnizor_retururi_comanda_fkey	creat
+constrangere	constrangere tabel public.comenzi_furnizor_retururi.comenzi_furnizor_retururi_din_stoc_ck	creat
+constrangere	constrangere tabel public.comenzi_furnizor_retururi.comenzi_furnizor_retururi_hash_ck	creat
+constrangere	constrangere tabel public.comenzi_furnizor_retururi.comenzi_furnizor_retururi_inchis_ck	creat
+constrangere	constrangere tabel public.comenzi_furnizor_retururi.comenzi_furnizor_retururi_inchis_fel_ck	creat
+constrangere	constrangere tabel public.comenzi_furnizor_retururi.comenzi_furnizor_retururi_inlocuire_ck	creat
+constrangere	constrangere tabel public.comenzi_furnizor_retururi.comenzi_furnizor_retururi_legatura_ck	creat
+constrangere	constrangere tabel public.comenzi_furnizor_retururi.comenzi_furnizor_retururi_linie_fkey	creat
+constrangere	constrangere tabel public.comenzi_furnizor_retururi.comenzi_furnizor_retururi_locatie_ck	creat
+constrangere	constrangere tabel public.comenzi_furnizor_retururi.comenzi_furnizor_retururi_miscare_fkey	creat
+constrangere	constrangere tabel public.comenzi_furnizor_retururi.comenzi_furnizor_retururi_motiv_ck	creat
+constrangere	constrangere tabel public.comenzi_furnizor_retururi.comenzi_furnizor_retururi_pkey	creat
+constrangere	constrangere tabel public.comenzi_furnizor_retururi.comenzi_furnizor_retururi_retur_fkey	creat
+constrangere	constrangere tabel public.comenzi_furnizor_retururi.comenzi_furnizor_retururi_retur_id_key	creat
+constrangere	constrangere tabel public.comenzi_furnizor_retururi.comenzi_furnizor_retururi_stoc_ck	creat
+constrangere	constrangere tabel public.comenzi_furnizor_retururi.comenzi_furnizor_retururi_tip_ck	creat
+constrangere	constrangere tabel public.stocuri_miscari.stocuri_miscari_retur_furnizor_check	creat
+constrangere	constrangere tabel public.stocuri_miscari.stocuri_miscari_tip_check	schimbat
+functie	functie public.fn_cf_alocari_garda()	creat
+functie	functie public.fn_cf_cantitate_valida_intern(numeric)	creat
+functie	functie public.fn_cf_de_inlocuit_intern(bigint)	creat
+functie	functie public.fn_cf_dovada_receptie_intern(public.comenzi_furnizor_linii,public.comenzi_furnizor)	creat
+functie	functie public.fn_cf_drept_achizitii_intern(uuid)	creat
+functie	functie public.fn_cf_este_owner_intern(uuid)	creat
+functie	functie public.fn_cf_intentie_inchide_intern(uuid,text,jsonb,jsonb)	creat
+functie	functie public.fn_cf_intentie_reia_intern(uuid,text,jsonb)	creat
+functie	functie public.fn_cf_intra_stoc(uuid,bigint,numeric,boolean)	creat
+functie	functie public.fn_cf_jurnal_garda()	creat
+functie	functie public.fn_cf_linie_pregateste_intern(bigint,boolean)	creat
+functie	functie public.fn_cf_linie_verifica_intern(bigint)	creat
+functie	functie public.fn_cf_receptie_adauga(uuid,bigint,numeric,numeric)	creat
+functie	functie public.fn_cf_reconciliaza_linie(uuid,bigint,numeric,text)	creat
+functie	functie public.fn_cf_retur_anuleaza(uuid,bigint,text)	creat
+functie	functie public.fn_cf_retur_inchide_fara_inlocuire(uuid,bigint,text)	creat
+functie	functie public.fn_cf_retur_inregistreaza(uuid,bigint,numeric,numeric,text,bigint,text,text,boolean)	creat
+functie	functie public.fn_cf_retururi_garda()	creat
+functie	functie public.fn_cfl_protectie()	creat
+functie	functie public.fn_stoc_blocheaza(text,bigint,text)	creat
+functie	functie public.fn_stoc_cheie(text,bigint,text)	creat
+functie	functie public.fn_stoc_cheie_lock(text,bigint,text)	creat
+functie	functie public.fn_stoc_miscare_protejata(text,text)	creat
+functie	functie public.fn_stoc_miscari_garda_istoric()	creat
+functie	functie public.fn_stoc_miscari_lock_iesire()	creat
+functie	functie public.fn_stoc_miscari_provenienta()	creat
+functie	functie public.fn_stoc_sterge_pozitie(bigint)	creat
+functie	functie public.fn_stocuri_lock_stergere()	creat
+politica	politica public.comenzi_furnizor_receptii.cf_receptii_citire	creat
+politica	politica public.comenzi_furnizor_retur_alocari.cf_retur_alocari_citire	creat
+politica	politica public.comenzi_furnizor_retururi.cf_retururi_citire	creat
+relatie	relatie public.comenzi_furnizor_intentii	creat
+relatie	relatie public.comenzi_furnizor_intentii_pkey	creat
+relatie	relatie public.comenzi_furnizor_linii	schimbat
+relatie	relatie public.comenzi_furnizor_receptii	creat
+relatie	relatie public.comenzi_furnizor_receptii_id_seq	creat
+relatie	relatie public.comenzi_furnizor_receptii_linie_idx	creat
+relatie	relatie public.comenzi_furnizor_receptii_pkey	creat
+relatie	relatie public.comenzi_furnizor_receptii_receptie_idx	creat
+relatie	relatie public.comenzi_furnizor_retur_alocari	creat
+relatie	relatie public.comenzi_furnizor_retur_alocari_id_seq	creat
+relatie	relatie public.comenzi_furnizor_retur_alocari_pkey	creat
+relatie	relatie public.comenzi_furnizor_retur_alocari_receptie_idx	creat
+relatie	relatie public.comenzi_furnizor_retur_alocari_retur_idx	creat
+relatie	relatie public.comenzi_furnizor_retururi	creat
+relatie	relatie public.comenzi_furnizor_retururi_cheie_key	creat
+relatie	relatie public.comenzi_furnizor_retururi_comanda_idx	creat
+relatie	relatie public.comenzi_furnizor_retururi_id_seq	creat
+relatie	relatie public.comenzi_furnizor_retururi_linie_idx	creat
+relatie	relatie public.comenzi_furnizor_retururi_pkey	creat
+relatie	relatie public.comenzi_furnizor_retururi_retur_id_key	creat
+tip	tip public.comenzi_furnizor_intentii	creat
+tip	tip public.comenzi_furnizor_intentii[]	creat
+tip	tip public.comenzi_furnizor_receptii	creat
+tip	tip public.comenzi_furnizor_receptii[]	creat
+tip	tip public.comenzi_furnizor_retur_alocari	creat
+tip	tip public.comenzi_furnizor_retur_alocari[]	creat
+tip	tip public.comenzi_furnizor_retururi	creat
+tip	tip public.comenzi_furnizor_retururi[]	creat
+trigger	trigger public.comenzi_furnizor intern comenzi_furnizor_retururi_comanda_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.comenzi_furnizor intern comenzi_furnizor_retururi_comanda_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.comenzi_furnizor_intentii.trg_cf_intentii_garda	creat
+trigger	trigger public.comenzi_furnizor_intentii.trg_cf_intentii_golire	creat
+trigger	trigger public.comenzi_furnizor_linii intern comenzi_furnizor_receptii_linie_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.comenzi_furnizor_linii intern comenzi_furnizor_receptii_linie_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.comenzi_furnizor_linii intern comenzi_furnizor_retururi_linie_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.comenzi_furnizor_linii intern comenzi_furnizor_retururi_linie_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.comenzi_furnizor_linii.trg_cfl_protectie	creat
+trigger	trigger public.comenzi_furnizor_receptii intern comenzi_furnizor_receptii_linie_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.comenzi_furnizor_receptii intern comenzi_furnizor_receptii_linie_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.comenzi_furnizor_receptii intern comenzi_furnizor_receptii_receptie_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.comenzi_furnizor_receptii intern comenzi_furnizor_receptii_receptie_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.comenzi_furnizor_receptii intern comenzi_furnizor_receptii_receptie_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.comenzi_furnizor_receptii intern comenzi_furnizor_receptii_receptie_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.comenzi_furnizor_receptii intern comenzi_furnizor_retur_alocari_inversata_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.comenzi_furnizor_receptii intern comenzi_furnizor_retur_alocari_inversata_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.comenzi_furnizor_receptii intern comenzi_furnizor_retur_alocari_receptie_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.comenzi_furnizor_receptii intern comenzi_furnizor_retur_alocari_receptie_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.comenzi_furnizor_receptii.trg_cf_receptii_garda	creat
+trigger	trigger public.comenzi_furnizor_receptii.trg_cf_receptii_golire	creat
+trigger	trigger public.comenzi_furnizor_retur_alocari intern comenzi_furnizor_retur_alocari_inversata_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.comenzi_furnizor_retur_alocari intern comenzi_furnizor_retur_alocari_inversata_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.comenzi_furnizor_retur_alocari intern comenzi_furnizor_retur_alocari_receptie_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.comenzi_furnizor_retur_alocari intern comenzi_furnizor_retur_alocari_receptie_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.comenzi_furnizor_retur_alocari intern comenzi_furnizor_retur_alocari_retur_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.comenzi_furnizor_retur_alocari intern comenzi_furnizor_retur_alocari_retur_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.comenzi_furnizor_retur_alocari.trg_cf_retur_alocari_garda	creat
+trigger	trigger public.comenzi_furnizor_retur_alocari.trg_cf_retur_alocari_golire	creat
+trigger	trigger public.comenzi_furnizor_retururi intern comenzi_furnizor_retur_alocari_retur_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.comenzi_furnizor_retururi intern comenzi_furnizor_retur_alocari_retur_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.comenzi_furnizor_retururi intern comenzi_furnizor_retururi_comanda_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.comenzi_furnizor_retururi intern comenzi_furnizor_retururi_comanda_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.comenzi_furnizor_retururi intern comenzi_furnizor_retururi_linie_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.comenzi_furnizor_retururi intern comenzi_furnizor_retururi_linie_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.comenzi_furnizor_retururi intern comenzi_furnizor_retururi_miscare_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.comenzi_furnizor_retururi intern comenzi_furnizor_retururi_miscare_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.comenzi_furnizor_retururi intern comenzi_furnizor_retururi_retur_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.comenzi_furnizor_retururi intern comenzi_furnizor_retururi_retur_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.comenzi_furnizor_retururi intern comenzi_furnizor_retururi_retur_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.comenzi_furnizor_retururi intern comenzi_furnizor_retururi_retur_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.comenzi_furnizor_retururi.trg_cf_retururi_garda	creat
+trigger	trigger public.comenzi_furnizor_retururi.trg_cf_retururi_golire	creat
+trigger	trigger public.stocuri.trg_stocuri_lock_stergere	creat
+trigger	trigger public.stocuri_miscari intern comenzi_furnizor_retururi_miscare_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.stocuri_miscari intern comenzi_furnizor_retururi_miscare_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.stocuri_miscari.trg_stoc_miscari_istoric_update	creat
+trigger	trigger public.stocuri_miscari.trg_stoc_miscari_lock_iesire	creat
+trigger	trigger public.stocuri_miscari.trg_stoc_miscari_lock_stergere	creat
+trigger	trigger public.stocuri_miscari.trg_stoc_miscari_provenienta	creat
