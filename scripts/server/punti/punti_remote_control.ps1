@@ -1,11 +1,15 @@
-# punti_remote_control.ps1 - supervizorul puntilor "claude remote-control" de pe serverul Gazpet-Claude (v2, 08.11.2026, Rocky/redari@).
+# punti_remote_control.ps1 - supervizorul puntilor "claude remote-control" de pe serverul Gazpet-Claude (v3, 25.11.2026, Rocky/redari@).
 # Rulat de sarcina Windows "Punti Remote Control (Gazpet)" la logare + la fiecare 5 minute (vezi instaleaza.ps1). Idempotent.
 # La fiecare rulare:
 #   1. verifica internetul (TCP 443 catre api.anthropic.com / claude.ai); fara internet nu porneste si nu reporneste nimic;
 #   2. citeste "claude auth status" pentru fiecare cont (cel mult o data pe ora); login expirat -> nu porneste degeaba, scrie alarma;
 #      cu 5 zile inainte de loginExpiresAt scrie C:\Users\Public\paw-data\out\alarma_login.txt + rand in punti.log;
 #   3. porneste puntile lipsa (prin punte_releu.ps1) si le reporneste pe cele vii dar picate >= 10 min (semnale in punti_lib.ps1);
-#      maxim 3 porniri/ora pe punte, apoi doar avertisment; nu dubleaza o punte pornita pe calea veche (v1 / bucla cmd).
+#      maxim 3 porniri/ora pe punte, apoi doar avertisment; nu dubleaza o punte pornita pe calea veche (v1 / bucla cmd) si nici
+#      una straina care serveste deja folderul (indicatorul CLI-ului bridge-pointer.json are un scriitor viu);
+#   4. v3: retine mediul + sesiunile fiecarei punti (din indicatorul CLI-ului); daca o punte noua primeste alt mediu (sesiunile
+#      vechi "Environment deleted"), porneste o punte de reatasare (--session-id) si apoi revine la puntea normala, care
+#      refoloseste mediul reinviat. Dupa "folderul e deja servit" nu mai reporneste la fiecare 5 min.
 # Jurnal: C:\Users\Public\paw-data\punti\punti.log (fara secrete). Stare: %LOCALAPPDATA%\Gazpet\punti (privat).
 # -DoarVerifica: arata ce ar face, fara sa porneasca/opreasca nimic si fara sa scrie stare/alarma.
 # Nu citeste continut extern, nu scrie in ERP, nu trimite mailuri/mesaje. Fisier ASCII (Windows PowerShell 5.1).
@@ -96,6 +100,13 @@ try {
       if ($st -and [int]$st.pidClaude -gt 0 -and (Get-ProcesVerificat -Id ([int]$st.pidClaude) -Nume 'claude' -StartIso $st.startClaude)) { $ex += [int]$st.pidClaude }
       return Get-PunteVeche -Punte $p -Instantaneu $SvInst -DirV1 $SvDirV1 -PidExclus $ex
     }
+    CitesteIndicator = { param($p) Read-Indicator (Get-CaleIndicator $p) }
+    Strain = {
+      param($p, $st, $ind)
+      $ex = @()
+      if ($st -and [int]$st.pidClaude -gt 0 -and (Get-ProcesVerificat -Id ([int]$st.pidClaude) -Nume 'claude' -StartIso $st.startClaude)) { $ex += [int]$st.pidClaude }
+      return Get-ScriitorIndicatorStrain -Indicator $ind -PidExclus $ex
+    }
     Opreste = {
       param($p, $st)
       if ($null -eq $st) { return $false }
@@ -108,12 +119,16 @@ try {
       return (-not $ramas)
     }
     Porneste = {
-      param($p)
+      param($p, $mod, $sesiune)
       $releu = Join-Path $SvDirScript 'punte_releu.ps1'
       $a = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" -Nume {1} -Folder "{2}" -Afisat "{3}" -DirStare "{4}" -DirJurnal "{5}" -Claude "{6}"' -f `
            $releu, $p.Nume, $p.Folder, $p.Afisat, $SvDirStare, $SvDirJurnal, $SvClaude
       if ($p.ConfigDir) { $a += ' -ConfigDir "' + $p.ConfigDir + '"' }
-      if ($p.Spawn) { $a += ' -Spawn ' + $p.Spawn }
+      if ($mod -eq 'reatasare') {
+        # punte de reatasare: --session-id <id>, fara --spawn (CLI-ul le refuza impreuna); id-ul a trecut prin Test-IdSigur
+        if (-not (Test-IdSigur ([string]$sesiune))) { return @{ Ok = $false; Mesaj = 'id de sesiune nesigur pentru reatasare; nu pornesc' } }
+        $a += ' -SesiuneId ' + [string]$sesiune
+      } elseif ($p.Spawn) { $a += ' -Spawn ' + $p.Spawn }
       $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
       $pr = Start-Process -FilePath $ps -ArgumentList $a -WorkingDirectory $p.Folder -WindowStyle Hidden -PassThru
       $caleSt = Join-Path $SvDirStare ($p.Nume + '.stare.json')

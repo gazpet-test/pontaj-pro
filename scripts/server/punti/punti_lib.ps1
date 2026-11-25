@@ -1,10 +1,12 @@
-# punti_lib.ps1 - functii comune pentru puntile "claude remote-control" de pe serverul AI (v2, 08.11.2026, Rocky/redari@).
+# punti_lib.ps1 - functii comune pentru puntile "claude remote-control" de pe serverul AI (v3, 25.11.2026, Rocky/redari@).
 # Folosit de: punti_remote_control.ps1 (supervizor), punte_releu.ps1 (releu per punte), instaleaza.ps1, autotest_punti.ps1.
 # Se incarca prin dot-source. Functiile "pure" (fara procese, fara retea) sunt testate in autotest_punti.ps1.
 # Fara secrete: nicio functie nu citeste fisiere cu tokenuri; textele scrise in jurnale trec prin Format-Sigur.
 # Fisier ASCII intentionat (Windows PowerShell 5.1 citeste .ps1 fara BOM ca ANSI).
+# v3 (25.11.2026): reatasarea sesiunilor existente dupa pierderea mediului (indicatorul CLI-ului + `--session-id`),
+#   recunoasterea "folderul e deja servit de alta punte" (fara bucla de reporniri), stderr-ul puntii citit linie cu linie.
 
-$script:PuntiVersiune = 'v2'
+$script:PuntiVersiune = 'v3'
 $script:NumeSarcina = 'Punti Remote Control (Gazpet)'
 $script:SarciniVechi = @(
   'Claude Remote Control (Gazpet)',
@@ -18,6 +20,11 @@ $script:InternetStabilMin = 5       # dupa o pana de internet, asteptam 5 min (p
 $script:ZileAlarmaLogin = 5         # alarma cu 5 zile inainte de loginExpiresAt
 $script:VerificareLoginMin = 60     # "claude auth status" cel mult o data pe ora (mai des doar cand trebuie pornita o punte)
 $script:ObservatieTacereMin = 30    # puntea vie care nu scrie nimic de 30 min -> doar observatie in jurnal, fara actiune
+$script:PragReatasareMin = 10       # puntea de reatasare (--session-id) neconectata dupa 10 min = incercare esuata
+$script:MaxIncercariReatasare = 2   # dupa 2 incercari esuate pe aceeasi sesiune renunt la ea (fara bucla)
+$script:MaxCandidatiReatasare = 3   # cel mult 3 sesiuni incercate la o singura pierdere de mediu
+$script:PragDejaServitMin = 60      # "folderul e deja servit" fara proces vizibil: reincerc abia dupa 60 min
+$script:MaxSesiuniRetinute = 20     # sesiuni cunoscute pastrate per punte
 # Test izolat 08.11.2026 (CLI 2.1.319, folder si config separate): cu CLAUDE_CODE_OAUTH_TOKEN (setup-token) puntea iese imediat cu
 # "Remote Control requires a full-scope login token. Long-lived tokens (...) are limited to inference-only". Deci NU folosim tokenul.
 $script:TokenTineRemoteControl = $false
@@ -54,6 +61,114 @@ function Test-ConfigPunte($Punte) {
     if ($c -and ($c -match '["%]' -or $c -notmatch '^[A-Za-z]:\\')) { return "cale invalida pentru $($Punte.Nume): $c" }
   }
   return $null
+}
+
+# ---------------------------------------------------------------------------------------------------------------------------
+# Indicatorul CLI-ului ("bridge pointer"; CLI 2.1.319, verificat in binar): <config>\projects\<cheie folder>\bridge-pointer.json
+#   {"sessionId":"session_...","environmentId":"env_...","source":"standalone","pid":N,"procStart":"<FILETIME UTC>",
+#    "activeSessionIds":[...] (optional)}. Il scrie puntea dupa inregistrare si il reimprospateaza cat ruleaza.
+#   La o pornire noua fara --session-id, CLI-ul: (1) daca pid-ul din indicator e inca viu -> inregistreaza un mediu NOU, iar
+#   serverul raspunde 409 "This folder is already served by another Claude Code on this device" -> puntea scrie eroarea pe
+#   stderr, apoi "Exiting in about N seconds." si iese cu cod 1 (bucla de pe 25.11.2026: releul v2 retinea doar ultima linie);
+#   (2) altfel cere refolosirea mediului din indicator -> sesiunile existente se reconecteaza singure; daca serverul da alt
+#   mediu: "Warning: Could not reuse the previous environment. Existing claude.ai/code sessions from the previous run will
+#   not reconnect." si indicatorul e sters -> sesiunile vechi raman fara mediu ("Environment deleted" in aplicatie).
+#   Singura cale de reatasare e `claude remote-control --session-id <id>` (CLI-ul cere serverului mediul sesiunii si il
+#   reinvie; mod cu O singura sesiune: capacitate 1, fara spawn, iese cand sesiunea se termina). Dupa ce acea punte s-a
+#   conectat, o punte normala pornita in acelasi folder refoloseste mediul din indicatorul ei -> toate sesiunile, capacitate
+#   normala. Supervizorul v3 face exact acesti doi pasi (vezi Update-Reatasare).
+#   Indicatorul e scris de CLI (componenta de sistem), nu e continut extern; id-urile trec totusi prin Test-IdSigur inainte
+#   sa ajunga pe linia de comanda, iar in jurnal sunt mascate (Format-Sigur -> <session-id>, <env-id>).
+function Get-CheieProiect([string]$Folder) { return [regex]::Replace($Folder, '[^A-Za-z0-9]', '-') }
+
+function Get-CaleIndicator($Punte, [string]$DirConfigImplicit = (Join-Path $env:USERPROFILE '.claude')) {
+  $cfg = $DirConfigImplicit
+  if (-not [string]::IsNullOrWhiteSpace($Punte.ConfigDir)) { $cfg = $Punte.ConfigDir }
+  return Join-Path (Join-Path $cfg 'projects') (Join-Path (Get-CheieProiect $Punte.Folder) 'bridge-pointer.json')
+}
+
+# id de sesiune / mediu acceptat pe linia de comanda a CLI-ului (CLI-ul insusi refuza "unsafe characters")
+function Test-IdSigur([string]$Id) {
+  if ([string]::IsNullOrWhiteSpace($Id)) { return $false }
+  return [bool]($Id -match '^[A-Za-z0-9][A-Za-z0-9_-]{3,79}$')
+}
+
+# procStart din indicator = FILETIME UTC (tick-uri de 100 ns de la 1601) ca text; necitibil -> $null (L18: necunoscut, nu 0)
+function ConvertFrom-ProcStart($Valoare) {
+  if ($null -eq $Valoare) { return $null }
+  $s = ([string]$Valoare).Trim()
+  if ($s -notmatch '^\d{15,19}$') { return $null }
+  $t = 0L
+  if (-not [long]::TryParse($s, [ref]$t)) { return $null }
+  try { $d = [datetime]::FromFileTimeUtc($t) } catch { return $null }
+  if ($d.Year -lt 2020 -or $d.Year -gt 2100) { return $null }
+  return $d
+}
+
+# Indicator normalizat: @{ mediu; sesiune; sesiuniActive; pid; startIso; scrisLa } sau $null (mediu lipsa/nesigur = indicator inutil).
+function ConvertFrom-Indicator($Obiect, $ScrisLa) {
+  if ($null -eq $Obiect) { return $null }
+  $o = ConvertTo-Hashtable $Obiect
+  if ($o -isnot [hashtable]) { return $null }
+  if (-not (Test-IdSigur ([string]$o['environmentId']))) { return $null }
+  $r = @{ mediu = [string]$o['environmentId']; sesiune = $null; sesiuniActive = @(); pid = 0; startIso = $null; scrisLa = $null }
+  if (Test-IdSigur ([string]$o['sessionId'])) { $r.sesiune = [string]$o['sessionId'] }
+  $r.sesiuniActive = @(@($o['activeSessionIds']) | ForEach-Object { [string]$_ } | Where-Object { Test-IdSigur $_ } | Select-Object -Unique)
+  $idp = 0
+  if ($null -ne $o['pid'] -and [int]::TryParse(([string]$o['pid']), [ref]$idp) -and $idp -gt 0) { $r.pid = $idp }
+  $st = ConvertFrom-ProcStart $o['procStart']
+  if ($st) { $r.startIso = Get-DataIso $st }
+  $sc = ConvertFrom-DataIso $ScrisLa
+  if ($sc) { $r.scrisLa = Get-DataIso $sc }
+  return $r
+}
+
+function Read-Indicator([string]$Cale) {
+  if (-not $Cale -or -not (Test-Path -LiteralPath $Cale -PathType Leaf)) { return $null }
+  $o = Read-JsonSigur $Cale
+  if ($null -eq $o) { return $null }
+  $scris = $null
+  try { $scris = (Get-Item -LiteralPath $Cale).LastWriteTimeUtc } catch { }
+  return ConvertFrom-Indicator -Obiect $o -ScrisLa $scris
+}
+
+# Scriitorul indicatorului e un claude.exe viu (pornit la ora din indicator) si nu e puntea noastra -> alta punte serveste
+# folderul; CLI-ul nostru ar primi 409 la inregistrare. $Cauta: pid -> @{ Nume; StartUtc } sau $null (fals in teste).
+function Get-ScriitorIndicatorStrain($Indicator, [int[]]$PidExclus, [scriptblock]$Cauta = $null) {
+  if ($null -eq $Indicator -or [int]$Indicator.pid -le 0) { return $null }
+  $idp = [int]$Indicator.pid
+  if (@($PidExclus) -contains $idp) { return $null }
+  if ($null -eq $Cauta) {
+    $Cauta = {
+      param($i)
+      try {
+        $pr = Get-Process -Id $i -ErrorAction Stop
+        $st = $null
+        try { $st = $pr.StartTime.ToUniversalTime() } catch { }
+        return @{ Nume = $pr.ProcessName; StartUtc = $st }
+      } catch { return $null }
+    }
+  }
+  $pr = & $Cauta $idp
+  if ($null -eq $pr -or $pr.Nume -ne 'claude') { return $null }
+  $asteptat = ConvertFrom-DataIso $Indicator.startIso
+  if ($null -ne $asteptat) {
+    # PID refolosit de alt claude.exe (ex. o sesiune copil): ora pornirii nu se potriveste -> nu e scriitorul
+    if ($null -eq $pr.StartUtc -or [math]::Abs(($pr.StartUtc - $asteptat).TotalSeconds) -gt 2) { return $null }
+  }
+  return ('alta punte serveste folderul (claude PID {0}, din indicatorul CLI-ului)' -f $idp)
+}
+
+# Argumentele CLI-ului. Mod normal = ca pana acum (--name, --spawn). Reatasare = `--session-id <id>` singur: CLI-ul refuza
+# spawn flags cu --session-id, iar puntea aceasta nu creeaza sesiuni (numele nu ar folosi la nimic). Id nesigur = refuz.
+function Get-ArgumentePunte([string]$Afisat, [string]$Spawn, [string]$SesiuneId) {
+  if ($SesiuneId) {
+    if (-not (Test-IdSigur $SesiuneId)) { throw 'id de sesiune nesigur pentru reatasare' }
+    return 'remote-control --session-id ' + $SesiuneId
+  }
+  $a = 'remote-control --name "' + $Afisat + '"'
+  if ($Spawn) { $a += ' --spawn=' + $Spawn }
+  return $a
 }
 
 # ---------------------------------------------------------------------------------------------------------------------------
@@ -176,6 +291,33 @@ function Get-ClasaLinie([string]$Linie) {
   return [pscustomobject]$r
 }
 
+# Clasificarea unei linii de pe STDERR a puntii (texte verbatim din CLI 2.1.319, verificate in binar; stderr e al CLI-ului,
+# nu continut extern - textul se mascheaza oricum). "Exiting in about N seconds." e doar numaratoarea de dinaintea iesirii:
+# cauza reala e linia de dinaintea ei (de aceea v2 scria in jurnal numai numaratoarea).
+#   deja-servit      : 409 la inregistrare ("This folder is already served by another Claude Code on this device"),
+#                      "Another `claude remote-control` instance (pid N) is already running in this directory",
+#                      "Environment X is already being served by another `claude remote-control` instance (pid N)"
+#   sesiune-negasita : la --session-id: "Session X not found. It may have been archived or expired." / "has no environment_id"
+#                      / "Invalid session ID" / "No recent session found" -> id-ul nu mai e bun de reatasat
+#   mediu-pierdut    : "Warning: Could not reuse the previous environment ..." -> sesiunile vechi au ramas fara mediu
+function Get-ClasaStderr([string]$Linie) {
+  $t = (Remove-Ansi $Linie).Trim()
+  $r = [ordered]@{ Tip = 'altceva'; Text = (Format-Sigur $t 200); PidStrain = $null }
+  if (-not $t) { $r.Tip = 'gol'; return [pscustomobject]$r }
+  if ($t -match '^Exiting in about \d+ seconds?\.?$') { $r.Tip = 'iesire-programata'; return [pscustomobject]$r }
+  $m = [regex]::Match($t, 'already served by another Claude Code on this device|Another `claude remote-control` instance \(pid (?<p>\d+)\) is already running in this directory|is already being served by another `claude remote-control` instance \(pid (?<p>\d+)\)')
+  if ($m.Success) {
+    $r.Tip = 'deja-servit'
+    if ($m.Groups['p'].Success) { $r.PidStrain = [int]$m.Groups['p'].Value }
+    return [pscustomobject]$r
+  }
+  if ($t -match '^Error: Session \S+ not found\. It may have been archived or expired\.|^Error: Session \S+ has no environment_id|^Error: Invalid session ID |^Error: No recent session found') {
+    $r.Tip = 'sesiune-negasita'; return [pscustomobject]$r
+  }
+  if ($t -match '^Warning: Could not reuse the previous environment') { $r.Tip = 'mediu-pierdut'; return [pscustomobject]$r }
+  return [pscustomobject]$r
+}
+
 # ---------------------------------------------------------------------------------------------------------------------------
 # Starea unei punti (scrisa de releu in <DirStare>\<nume>.stare.json; citita de supervizor).
 function New-StarePunte([string]$Nume, [int]$PidReleu, [string]$StartReleu, [datetime]$Acum) {
@@ -191,6 +333,14 @@ function New-StarePunte([string]$Nume, [int]$PidReleu, [string]$StartReleu, [dat
     eroareFatalaLa = $null; credentialLa = $null
     ultimaEroare = $null; ultimaEroareLa = $null
     codIesire = $null; iesitLa = $null
+    # v3: modul puntii si ce a vazut releul pe stderr / in indicatorul CLI-ului
+    mod = 'normal'; sesiuneReatasare = $null; argumente = $null
+    indicator = $null                    # ultimul indicator citit (mediu, sesiune, sesiuniActive, pid, startIso, scrisLa)
+    aFostConectat = $false
+    dejaServit = $false; pidStrain = $null
+    sesiuneNegasita = $false
+    mediuPierdutLa = $null
+    stderrUltimele = @()
   }
 }
 
@@ -237,7 +387,40 @@ function Update-StareDinLinie([hashtable]$Stare, $Clasa, [datetime]$Acum) {
     'info' { [void]$mes.Add('info punte: ' + (Format-Sigur $Clasa.Text 160)) }
   }
   if ($Clasa.Tip -ne 'gol') { $Stare.ultimaIesire = $iso }
+  if ($Stare.stare -eq 'conectat') { $Stare.aFostConectat = $true }
   return $mes.ToArray()   # apelantii folosesc @(...) (fara virgula unara: @() ar dubla tabloul in PS 5.1)
+}
+
+# Actualizeaza starea dupa o linie de pe stderr (clasificata cu Get-ClasaStderr); intoarce mesajele (mascate) pentru jurnal.
+function Update-StareDinStderr([hashtable]$Stare, $Clasa, [datetime]$Acum) {
+  $mes = New-Object System.Collections.ArrayList
+  if ($Clasa.Tip -eq 'gol') { return $mes.ToArray() }
+  $iso = Get-DataIso $Acum
+  $Stare.stderrUltimele = @(@(@($Stare.stderrUltimele) + @($Clasa.Text)) | Where-Object { $_ } | Select-Object -Last 5)
+  $Stare.ultimaIesire = $iso
+  switch ($Clasa.Tip) {
+    'iesire-programata' { }   # doar numaratoarea; cauza e in linia anterioara (ramasa in ultimaEroare)
+    'deja-servit' {
+      $Stare.dejaServit = $true
+      if ($null -ne $Clasa.PidStrain) { $Stare.pidStrain = [int]$Clasa.PidStrain }
+      $Stare.ultimaEroare = $Clasa.Text; $Stare.ultimaEroareLa = $iso
+      [void]$mes.Add('folderul e deja servit de alta punte (spune CLI-ul): ' + $Clasa.Text)
+    }
+    'sesiune-negasita' {
+      $Stare.sesiuneNegasita = $true
+      $Stare.ultimaEroare = $Clasa.Text; $Stare.ultimaEroareLa = $iso
+      [void]$mes.Add('sesiunea de reatasat nu mai exista (spune CLI-ul): ' + $Clasa.Text)
+    }
+    'mediu-pierdut' {
+      if (-not $Stare.mediuPierdutLa) { $Stare.mediuPierdutLa = $iso }
+      [void]$mes.Add('AVERTISMENT CLI: mediul vechi nu s-a putut refolosi, sesiunile dinainte nu se reconecteaza singure: ' + $Clasa.Text)
+    }
+    default {
+      $Stare.ultimaEroare = $Clasa.Text; $Stare.ultimaEroareLa = $iso
+      [void]$mes.Add('stderr punte: ' + $Clasa.Text)
+    }
+  }
+  return $mes.ToArray()
 }
 
 # ---------------------------------------------------------------------------------------------------------------------------
@@ -275,6 +458,167 @@ function Get-ProblemaPunte([hashtable]$Stare, [datetime]$Acum, $LoginRevalidatLa
   return $null
 }
 
+# ---------------------------------------------------------------------------------------------------------------------------
+# Memoria supervizorului despre o punte (supervizor.json -> punti[nume]): mediul si sesiunile cunoscute + reatasarea in curs.
+#   mediu / sesiune / sesiuniActive / cunoscutLa : din indicatorul CLI-ului (adoptat la pornire, intretinut cat puntea e vie)
+#   negasite  { id = ora } : sesiuni pe care CLI-ul nu le-a mai gasit (arhivate/expirate) - nu se mai incearca
+#   renuntari { id = ora } : sesiuni la care reatasarea a esuat de MaxIncercariReatasare ori - nu se mai incearca
+#   mediuPierdutTratatLa   : avertismentul CLI "Could not reuse" deja tratat (nu porneste a doua reatasare pentru acelasi)
+#   reatasare { sesiune; mediuVechi; mediuNou; pas; incercari; candidati; deLa; mediuReatasat }
+#     pasii: cerut (decizia porneste puntea cu --session-id) -> in-curs (pornita) -> conectata (s-a conectat: mediul sesiunii
+#            e reinviat) -> revenire (puntea normala pornita, va refolosi mediul) -> gata (mediul puntii normale = cel reatasat)
+function New-MemoriePunte {
+  @{ mediu = $null; sesiune = $null; sesiuniActive = @(); cunoscutLa = $null; negasite = @{}; renuntari = @{}; mediuPierdutTratatLa = $null; reatasare = $null }
+}
+
+function Get-MemoriePunte([hashtable]$Sup, [string]$Nume) {
+  $m = New-MemoriePunte
+  if ($null -eq $Sup.punti -or $Sup.punti -isnot [hashtable]) { $Sup.punti = @{} }
+  $vechi = $Sup.punti[$Nume]
+  if ($vechi -is [hashtable]) { foreach ($k in @($vechi.Keys)) { $m[$k] = $vechi[$k] } }
+  foreach ($k in 'negasite', 'renuntari') { if ($m[$k] -isnot [hashtable]) { $m[$k] = @{} } }
+  if ($null -ne $m.reatasare -and $m.reatasare -isnot [hashtable]) { $m.reatasare = $null }
+  $m.sesiuniActive = @(@($m.sesiuniActive) | Where-Object { Test-IdSigur ([string]$_) })
+  $Sup.punti[$Nume] = $m
+  return $m
+}
+
+# Sesiunile care merita reatasate, in ordinea incercarii: sesiunea principala din indicator, apoi cele active cunoscute.
+function Get-SesiuniDeReatasat([hashtable]$Mem) {
+  $l = New-Object System.Collections.ArrayList
+  foreach ($s in @(@($Mem.sesiune) + @($Mem.sesiuniActive))) {
+    $id = [string]$s
+    if (-not (Test-IdSigur $id)) { continue }
+    if ($Mem.negasite -and $Mem.negasite.ContainsKey($id)) { continue }
+    if ($Mem.renuntari -and $Mem.renuntari.ContainsKey($id)) { continue }
+    if (-not $l.Contains($id)) { [void]$l.Add($id) }
+  }
+  return $l.ToArray()   # apelantii folosesc @(...)
+}
+
+# Adopta indicatorul: mediul si sesiunile lui devin "cunoscute" (sesiunile stiute dinainte raman in lista, fara dubluri).
+function Set-MemorieDinIndicator([hashtable]$Mem, $Ind, [datetime]$Acum) {
+  if ($null -eq $Ind -or -not (Test-IdSigur ([string]$Ind.mediu))) { return }
+  $Mem.mediu = [string]$Ind.mediu
+  $vechi = @()
+  if (Test-IdSigur ([string]$Ind.sesiune)) {
+    # sesiunea principala de pana acum ramane cunoscuta (candidata de rezerva) cand puntea noua si-a creat alta
+    if ((Test-IdSigur ([string]$Mem.sesiune)) -and [string]$Mem.sesiune -ne [string]$Ind.sesiune) { $vechi = @([string]$Mem.sesiune) }
+    $Mem.sesiune = [string]$Ind.sesiune
+  }
+  $toate = @(@(@($Mem.sesiuniActive) + $vechi + @($Ind.sesiuniActive)) | ForEach-Object { [string]$_ } | Where-Object { Test-IdSigur $_ } | Select-Object -Unique)
+  if ($toate.Count -gt $script:MaxSesiuniRetinute) { $toate = @($toate | Select-Object -Last $script:MaxSesiuniRetinute) }
+  $Mem.sesiuniActive = $toate
+  $Mem.cunoscutLa = Get-DataIso $Acum
+}
+
+# O incercare de reatasare a esuat: a doua esuare pe aceeasi sesiune = renunt (sesiunea ramane de verificat in aplicatie).
+function Set-EsecReatasare([hashtable]$Mem, [hashtable]$R, [string]$Iso, [string]$Motiv) {
+  $R.incercari = [int]$R.incercari + 1
+  if ($R.incercari -lt $script:MaxIncercariReatasare) {
+    $R.pas = 'cerut'
+    return ('reatasare: {0}; incerc din nou sesiunea {1} ({2}/{3})' -f $Motiv, $R.sesiune, $R.incercari, $script:MaxIncercariReatasare)
+  }
+  $Mem.renuntari[[string]$R.sesiune] = $Iso
+  $Mem.reatasare = $null
+  $Mem.mediu = $null   # mediul curent al puntii normale va fi adoptat la urmatoarea rulare
+  return ('reatasare: {0}; renunt dupa {1} incercari - sesiunea {2} ramane de verificat in aplicatie; retin mediul nou' -f $Motiv, $R.incercari, $R.sesiune)
+}
+
+# Reatasarea: actualizeaza memoria dupa starea curenta a puntii (scrisa de releu); intoarce mesajele (mascate) pentru jurnal.
+# $Stare poate fi $null; $Vie = releu + punte vii. Deciziile se iau dupa aceea in Get-DecizieSupraveghere, din Mem.reatasare.
+function Update-Reatasare([hashtable]$Mem, [hashtable]$Stare, [bool]$Vie, [datetime]$Acum) {
+  $mes = New-Object System.Collections.ArrayList
+  $iso = Get-DataIso $Acum
+  $R = $Mem.reatasare
+  $ind = $null
+  if ($Stare -and $Stare.indicator -is [hashtable]) { $ind = $Stare.indicator }
+  # indicatorul e al puntii noastre (scris de claude.exe-ul releului), nu al altcuiva
+  $alNostru = ($null -ne $ind -and $Stare -and [int]$ind.pid -gt 0 -and [int]$ind.pid -eq [int]$Stare.pidClaude -and (Test-IdSigur ([string]$ind.mediu)))
+  $mod = 'normal'
+  if ($Stare -and $Stare.mod) { $mod = [string]$Stare.mod }
+
+  if ($mod -eq 'reatasare') {
+    if ($null -eq $R) { return $mes.ToArray() }   # stare de reatasare fara reatasare in memorie: decizia o readuce la normal
+    if ([string]$Stare.sesiuneReatasare -ne [string]$R.sesiune) { return $mes.ToArray() }   # punte de reatasare pentru alta sesiune (veche)
+    if ($Vie) {
+      if ($Stare.stare -eq 'conectat' -or $Stare.aFostConectat) {
+        if ($R.pas -ne 'conectata') {
+          $R.pas = 'conectata'; $R.conectataLa = $iso
+          [void]$mes.Add(('reatasare: puntea cu sesiunea {0} s-a conectat (mediul ei e din nou viu); la rularea urmatoare revin la puntea normala, cu toate sesiunile' -f $R.sesiune))
+        }
+      } elseif ($R.pas -eq 'in-curs') {
+        $min = Get-MinuteDeLa $Stare.pornitLa $Acum
+        if ($null -ne $min -and $min -ge $script:PragReatasareMin) {
+          [void]$mes.Add((Set-EsecReatasare $Mem $R $iso ('puntea de reatasare nu s-a conectat in {0:N0} min' -f $min)))
+        }
+      }
+      return $mes.ToArray()
+    }
+    # puntea de reatasare a iesit
+    if ($R.pas -eq 'conectata' -or $Stare.aFostConectat) {
+      # s-a conectat (mediul sesiunii e reinviat), apoi a iesit (modul cu o sesiune iese cand sesiunea se termina): revin la normal
+      if ($R.pas -ne 'conectata') { $R.pas = 'conectata'; $R.conectataLa = $iso }
+    } elseif ($Stare.sesiuneNegasita) {
+      $Mem.negasite[[string]$R.sesiune] = $iso
+      $R.candidati = [int]$R.candidati + 1
+      $urm = @(Get-SesiuniDeReatasat $Mem | Select-Object -First 1)
+      if ($urm.Count -gt 0 -and $R.candidati -lt $script:MaxCandidatiReatasare) {
+        [void]$mes.Add(('reatasare: sesiunea {0} nu mai exista (arhivata/expirata); incerc sesiunea {1}' -f $R.sesiune, $urm[0]))
+        $R.sesiune = $urm[0]; $R.pas = 'cerut'; $R.incercari = 0
+      } else {
+        [void]$mes.Add(('reatasare: sesiunea {0} nu mai exista (arhivata/expirata) si nu mai am alta de incercat; retin mediul nou' -f $R.sesiune))
+        $Mem.reatasare = $null; $Mem.mediu = $null
+      }
+    } elseif ($Stare.dejaServit) {
+      # altcineva serveste folderul: reatasarea ramane ceruta; decizia asteapta eliberarea folderului (vezi dejaServit)
+      if ($R.pas -eq 'in-curs') { $R.pas = 'cerut' }
+    } elseif ($R.pas -eq 'in-curs') {
+      [void]$mes.Add((Set-EsecReatasare $Mem $R $iso ('puntea de reatasare a iesit (cod {0}) fara sa se conecteze' -f $Stare.codIesire)))
+    }
+    return $mes.ToArray()
+  }
+
+  # --- punte normala (sau fara stare) ---
+  if ($null -ne $R) {
+    if ($R.pas -eq 'in-curs') {
+      # puntea de reatasare nu a ajuns sa scrie stare (pornirea a esuat): numar incercarea si cer din nou
+      [void]$mes.Add((Set-EsecReatasare $Mem $R $iso 'puntea de reatasare nu a pornit'))
+      return $mes.ToArray()
+    }
+    if (($R.pas -eq 'revenire' -or $R.pas -eq 'conectata') -and $Vie -and $Stare.stare -eq 'conectat' -and $alNostru) {
+      if (-not $R.mediuReatasat -or [string]$ind.mediu -eq [string]$R.mediuReatasat) {
+        Set-MemorieDinIndicator $Mem $ind $Acum
+        $Mem.reatasare = $null
+        [void]$mes.Add(('reatasare incheiata: sesiunea {0} e servita din nou, puntea normala refoloseste mediul ei' -f $R.sesiune))
+      } else {
+        [void]$mes.Add((Set-EsecReatasare $Mem $R $iso 'puntea normala a primit alt mediu decat cel reatasat'))
+      }
+    }
+    return $mes.ToArray()   # cerut: decizia porneste reatasarea; conectata/revenire fara punte conectata: astept
+  }
+
+  # fara reatasare in curs: a pierdut puntea noastra mediul in care erau sesiunile cunoscute?
+  $pierdut = [bool]($Stare -and $Stare.mediuPierdutLa -and ([string]$Stare.mediuPierdutLa -ne [string]$Mem.mediuPierdutTratatLa))
+  $diferit = [bool]($alNostru -and (Test-IdSigur ([string]$Mem.mediu)) -and ([string]$ind.mediu -ne [string]$Mem.mediu))
+  if ($pierdut) { $Mem.mediuPierdutTratatLa = $Stare.mediuPierdutLa }
+  if ($pierdut -or $diferit) {
+    $cand = @(Get-SesiuniDeReatasat $Mem)
+    $nou = 'necunoscut'
+    if ($alNostru) { $nou = [string]$ind.mediu }
+    if ($cand.Count -gt 0 -and (Test-IdSigur ([string]$Mem.mediu))) {
+      $Mem.reatasare = @{ sesiune = $cand[0]; mediuVechi = $Mem.mediu; mediuNou = $nou; pas = 'cerut'; incercari = 0; candidati = 0; deLa = $iso; mediuReatasat = $null }
+      [void]$mes.Add(('mediul puntii s-a schimbat ({0} -> {1}): sesiunile vechi nu se mai pot conecta ("Environment deleted" in aplicatie); reatasez sesiunea {2}' -f $Mem.mediu, $nou, $cand[0]))
+    } else {
+      if ($alNostru) { Set-MemorieDinIndicator $Mem $ind $Acum }
+      [void]$mes.Add('mediul puntii s-a schimbat, dar nu stiu nicio sesiune de reatasat; retin mediul nou')
+    }
+    return $mes.ToArray()
+  }
+  if ($alNostru -and $Vie) { Set-MemorieDinIndicator $Mem $ind $Acum }   # prima data sau acelasi mediu: retin / completez sesiunile
+  return $mes.ToArray()
+}
+
 # Limita de porniri: fereastra glisanta. Intoarce Permis + istoricul curatat (doar ultimele 60 min).
 function Test-PotPorni($Istoric, [datetime]$Acum, [int]$Max = $script:MaxPorniriPeOra, [int]$FereastraMin = 60) {
   $acumU = $Acum.ToUniversalTime()
@@ -282,24 +626,43 @@ function Test-PotPorni($Istoric, [datetime]$Acum, [int]$Max = $script:MaxPorniri
   return [pscustomobject]@{ Permis = ($curat.Count -lt $Max); Numar = $curat.Count; Istoric = $curat }
 }
 
-# Decizia pentru o punte. Actiune: nimic | porneste | reporneste | asteapta.
+# Decizia pentru o punte. Actiune: nimic | porneste | reporneste | asteapta. Mod: normal | reatasare (+ Sesiune).
+#   $Strain = alta punte (din afara releului) serveste folderul (indicatorul CLI-ului are un scriitor viu) -> nimic, ca la "veche".
+#   $Mem = memoria puntii (Get-MemoriePunte), cu reatasarea in curs (pas 'cerut' = pornim puntea cu --session-id).
+#   Puntea de reatasare (Stare.mod = 'reatasare') NU trece prin regulile de problema (in modul cu o sesiune titlul sesiunii
+#   sta chiar in linia de stare, deci clasificarea nu e sigura); ea traieste cel mult pana la rularea urmatoare.
 function Get-DecizieSupraveghere {
   param(
     $Punte, [hashtable]$Stare,
     [bool]$ReleuViu, [bool]$ClaudeViu, [string]$Veche,
     [bool]$InternetOk, [double]$InternetStabilMin,
     $LoginValid, $LoginRevalidatLa,
-    $Istoric, [datetime]$Acum
+    $Istoric, [datetime]$Acum,
+    [hashtable]$Mem = $null, [string]$Strain = ''
   )
-  $d = [ordered]@{ Actiune = 'nimic'; Motiv = ''; LimitaAtinsa = $false; CereInternetStabil = $false }
+  $d = [ordered]@{ Actiune = 'nimic'; Motiv = ''; LimitaAtinsa = $false; CereInternetStabil = $false; Mod = 'normal'; Sesiune = $null; DejaServit = $false }
   if ($Veche) { $d.Motiv = "punte veche activa ($Veche); nu pornesc dublura"; return [pscustomobject]$d }
+  if ($Strain) { $d.Motiv = "$Strain; nu pornesc dublura"; return [pscustomobject]$d }
+  $R = $null
+  if ($Mem -and $Mem.reatasare -is [hashtable]) { $R = $Mem.reatasare }
+  $modStare = 'normal'
+  if ($Stare -and $Stare.mod) { $modStare = [string]$Stare.mod }
   $vie = $ReleuViu -and $ClaudeViu
   if ($vie) {
-    $p = Get-ProblemaPunte -Stare $Stare -Acum $Acum -LoginRevalidatLa $LoginRevalidatLa
-    if ($null -eq $p) { return [pscustomobject]$d }
-    $d.Motiv = $p.Motiv
-    $d.CereInternetStabil = $p.CereInternetStabil
-    $tinta = 'reporneste'
+    if ($modStare -eq 'reatasare') {
+      if ($R -and $R.pas -eq 'conectata') { $d.Motiv = ('reatasare: sesiunea {0} e servita din nou; revin la puntea normala (toate sesiunile)' -f $R.sesiune); $tinta = 'reporneste' }
+      elseif ($R -and $R.pas -eq 'cerut') { $d.Motiv = ('reatasare: incerc din nou sesiunea {0}' -f $R.sesiune); $tinta = 'reporneste'; $d.Mod = 'reatasare'; $d.Sesiune = [string]$R.sesiune }
+      elseif ($null -eq $R) { $d.Motiv = 'punte de reatasare fara reatasare in memorie; revin la puntea normala'; $tinta = 'reporneste' }
+      else { return [pscustomobject]$d }   # in-curs: astept conectarea (cel mult PragReatasareMin, apoi Update-Reatasare o declara esuata)
+    } elseif ($R -and $R.pas -eq 'cerut') {
+      $d.Motiv = ('mediul sesiunilor vechi s-a pierdut; reatasez sesiunea {0}' -f $R.sesiune); $tinta = 'reporneste'; $d.Mod = 'reatasare'; $d.Sesiune = [string]$R.sesiune
+    } else {
+      $p = Get-ProblemaPunte -Stare $Stare -Acum $Acum -LoginRevalidatLa $LoginRevalidatLa
+      if ($null -eq $p) { return [pscustomobject]$d }
+      $d.Motiv = $p.Motiv
+      $d.CereInternetStabil = $p.CereInternetStabil
+      $tinta = 'reporneste'
+    }
   } else {
     # oricare din cele doua procese inca viu -> "reporneste" (oprire verificata a ce a ramas, apoi releu nou), niciodata "porneste":
     # un releu nou langa o punte orfana ar porni a doua punte pe acelasi folder (Jakarinos r1 P1)
@@ -308,6 +671,16 @@ function Get-DecizieSupraveghere {
     elseif ($ReleuViu) { $d.Motiv = 'releul e viu dar puntea nu' }
     elseif ($Stare -and $Stare.stare -eq 'oprit') { $d.Motiv = ('puntea s-a oprit (cod {0})' -f $Stare.codIesire); $tinta = 'porneste' }
     else { $d.Motiv = 'puntea lipseste'; $tinta = 'porneste' }
+    if ($Stare -and $Stare.dejaServit -and -not $ClaudeViu -and -not $ReleuViu) {
+      # CLI-ul a spus la ultima pornire ca folderul e servit de alta punte (pe care n-o vedem): fara repornire la fiecare 5 min
+      $m = Get-MinuteDeLa $Stare.iesitLa $Acum
+      if ($null -eq $m -or $m -lt $script:PragDejaServitMin) {
+        $d.Actiune = 'asteapta'; $d.DejaServit = $true
+        $d.Motiv = ('folderul era servit de alta punte la ultima pornire (spune CLI-ul); nu pornesc dublura, reincerc dupa {0} min' -f $script:PragDejaServitMin)
+        return [pscustomobject]$d
+      }
+    }
+    if ($R -and $R.pas -eq 'cerut') { $d.Mod = 'reatasare'; $d.Sesiune = [string]$R.sesiune; $d.Motiv += ('; reatasez sesiunea {0}' -f $R.sesiune) }
   }
   if (-not $InternetOk) { $d.Actiune = 'asteapta'; $d.Motiv += '; fara internet'; return [pscustomobject]$d }
   if ($d.CereInternetStabil -and $InternetStabilMin -lt $script:InternetStabilMin) {
@@ -638,7 +1011,9 @@ function Invoke-AuthStatus([string]$Claude, [string]$ConfigDir, [datetime]$Acum)
 # ---------------------------------------------------------------------------------------------------------------------------
 # O rulare a supervizorului, cu dependentele injectate (in autotest se dau functii false, fara procese si fara retea).
 # $Dep: Config, CitesteStareSup, ScrieStareSup, CitesteStarePunte, Procese, Veche, Internet, Login, Porneste, Opreste,
-#       Jurnal, ScrieAlarma, PlanAutentificare. Intoarce lista actiunilor (pentru teste si pentru -DoarVerifica).
+#       Jurnal, ScrieAlarma, PlanAutentificare; v3: CitesteIndicator (punte -> indicatorul CLI-ului sau $null),
+#       Strain (punte, stare, indicator -> descriere daca alta punte serveste folderul), Porneste primeste (punte, mod, sesiune).
+#       Intoarce lista actiunilor (pentru teste si pentru -DoarVerifica).
 function Test-TrebuieLogat([hashtable]$Sup, [string]$Cheie, [datetime]$Acum, [int]$Minute = 60) {
   if (-not $Sup.avertizari) { $Sup.avertizari = @{} }
   $m = Get-MinuteDeLa $Sup.avertizari[$Cheie] $Acum
@@ -670,13 +1045,17 @@ function Invoke-Supervizor([hashtable]$Dep, [datetime]$Acum, [switch]$DoarVerifi
   $stabil = 0.0
   if ($netOk) { $stabil = [double](Get-MinuteDeLa $sup.internetSchimbatLa $acumU) }
 
-  # 2. starea fiecarei punti (procese verificate, punte veche)
+  # 2. starea fiecarei punti (procese verificate, punte veche, indicatorul CLI-ului si eventualul lui scriitor strain)
   $info = @()
   foreach ($p in $Dep.Config) {
     $st = & $Dep.CitesteStarePunte $p
     $pr = & $Dep.Procese $p $st
     $vc = & $Dep.Veche $p $st
-    $info += [pscustomobject]@{ Punte = $p; Stare = $st; ReleuViu = [bool]$pr.ReleuViu; ClaudeViu = [bool]$pr.ClaudeViu; Veche = $vc }
+    $ind = $null
+    if ($Dep.CitesteIndicator) { $ind = & $Dep.CitesteIndicator $p }
+    $strain = ''
+    if ($Dep.Strain) { $strain = [string](& $Dep.Strain $p $st $ind) }
+    $info += [pscustomobject]@{ Punte = $p; Stare = $st; ReleuViu = [bool]$pr.ReleuViu; ClaudeViu = [bool]$pr.ClaudeViu; Veche = $vc; Indicator = $ind; Strain = $strain }
   }
 
   # 3. login per cont (cel mult o data pe ora; mai des daca e invalid sau trebuie pornita o punte a lui)
@@ -689,7 +1068,7 @@ function Invoke-Supervizor([hashtable]$Dep, [datetime]$Acum, [switch]$DoarVerifi
     $aproape = ($null -ne $expVechi) -and (($expVechi - $acumU).TotalDays -le $script:ZileAlarmaLogin)
     $deVerificat = ($null -eq $c.VerificatLa) -or ((Get-MinuteDeLa $c.VerificatLa $acumU) -ge $script:VerificareLoginMin) -or ($c.Valid -eq $false) -or $aproape
     foreach ($i in $info) {
-      if ((Get-CheieCont $i.Punte.ConfigDir) -eq $k -and -not $i.Veche -and -not ($i.ReleuViu -and $i.ClaudeViu)) { $deVerificat = $true }
+      if ((Get-CheieCont $i.Punte.ConfigDir) -eq $k -and -not $i.Veche -and -not $i.Strain -and -not ($i.ReleuViu -and $i.ClaudeViu)) { $deVerificat = $true }
     }
     if (-not $deVerificat) { continue }
     $cfgDir = ($Dep.Config | Where-Object { (Get-CheieCont $_.ConfigDir) -eq $k } | Select-Object -First 1).ConfigDir
@@ -743,12 +1122,19 @@ function Invoke-Supervizor([hashtable]$Dep, [datetime]$Acum, [switch]$DoarVerifi
     $c = $sup.conturi[$k]
     $ist = @()
     if ($sup.istoric[$p.Nume]) { $ist = @($sup.istoric[$p.Nume]) }
+    # v3: memoria puntii (mediu + sesiuni cunoscute) si pasii reatasarii, actualizate din ce a vazut releul
+    $mem = Get-MemoriePunte -Sup $sup -Nume $p.Nume
+    $vieAcum = [bool]($i.ReleuViu -and $i.ClaudeViu)
+    foreach ($mr in @(Update-Reatasare -Mem $mem -Stare $i.Stare -Vie $vieAcum -Acum $acumU)) { & $jurnal "[$($p.Nume)] $mr" }
     $d = Get-DecizieSupraveghere -Punte $p -Stare $i.Stare -ReleuViu $i.ReleuViu -ClaudeViu $i.ClaudeViu -Veche $i.Veche `
-         -InternetOk $netOk -InternetStabilMin $stabil -LoginValid $c.Valid -LoginRevalidatLa $c.RevalidatLa -Istoric $ist -Acum $acumU
+         -InternetOk $netOk -InternetStabilMin $stabil -LoginValid $c.Valid -LoginRevalidatLa $c.RevalidatLa -Istoric $ist -Acum $acumU `
+         -Mem $mem -Strain $i.Strain
     $sup.istoric[$p.Nume] = @((Test-PotPorni -Istoric $ist -Acum $acumU).Istoric | ForEach-Object { Get-DataIso $_ })
-    [void]$actiuni.Add(('{0}: {1} ({2})' -f $p.Nume, $d.Actiune, $d.Motiv))
+    $eticheta = $d.Actiune
+    if ($d.Mod -eq 'reatasare' -and $d.Actiune -ne 'nimic' -and $d.Actiune -ne 'asteapta') { $eticheta += ' [reatasare]' }
+    [void]$actiuni.Add(('{0}: {1} ({2})' -f $p.Nume, $eticheta, $d.Motiv))
     if ($d.Actiune -eq 'nimic') {
-      if ($i.Veche -and (Test-TrebuieLogat $sup "veche-$($p.Nume)" $acumU 60)) { & $jurnal "[$($p.Nume)] $($d.Motiv)" }
+      if (($i.Veche -or $i.Strain) -and (Test-TrebuieLogat $sup "veche-$($p.Nume)" $acumU 60)) { & $jurnal "[$($p.Nume)] $($d.Motiv)" }
       if ($i.ReleuViu -and $i.ClaudeViu -and $i.Stare) {
         $tac = Get-MinuteDeLa $i.Stare.ultimaIesire $acumU
         if ($null -ne $tac -and $tac -ge $script:ObservatieTacereMin -and (Test-TrebuieLogat $sup "tacere-$($p.Nume)" $acumU 60)) {
@@ -764,6 +1150,7 @@ function Invoke-Supervizor([hashtable]$Dep, [datetime]$Acum, [switch]$DoarVerifi
     if ($d.Actiune -eq 'asteapta') {
       $cheieAv = "asteapta-$($p.Nume)-" + ($d.Motiv -replace '\d+', 'N')
       if ($d.LimitaAtinsa) { $cheieAv = "limita-$($p.Nume)" }
+      if ($d.DejaServit) { $cheieAv = "deja-servit-$($p.Nume)" }
       if (Test-TrebuieLogat $sup $cheieAv $acumU 60) {
         if ($d.LimitaAtinsa) { & $jurnal "AVERTISMENT [$($p.Nume)] $($d.Motiv)" } else { & $jurnal "[$($p.Nume)] astept: $($d.Motiv)" }
       }
@@ -773,6 +1160,17 @@ function Invoke-Supervizor([hashtable]$Dep, [datetime]$Acum, [switch]$DoarVerifi
     # Rezervarea in istoric se SALVEAZA inainte de efect (Jakarinos r1 P1, L02/L04): o exceptie mai jos sau o rulare
     # intrerupta nu pot ocoli limita de 3/ora. Daca starea nu se poate salva, nu actionam (L05: necunoscut = nu risc).
     $sup.istoric[$p.Nume] = @(@($sup.istoric[$p.Nume]) + @(Get-DataIso $acumU) | Where-Object { $_ })
+    # v3: pasul reatasarii se noteaza tot inainte de efect. Punte normala: adopt indicatorul existent (mediul in care sunt
+    # sesiunile acum: al puntii noastre dinainte sau al uneia straine care s-a oprit); dupa reatasare = mediul reinviat.
+    $R = $mem.reatasare
+    if ($d.Mod -eq 'reatasare') {
+      if ($R -is [hashtable]) { $R.pas = 'in-curs'; $R.pornitaLa = Get-DataIso $acumU }
+    } elseif ($R -is [hashtable] -and ($R.pas -eq 'conectata' -or $R.pas -eq 'revenire')) {
+      $R.pas = 'revenire'
+      if ($i.Indicator -and (Test-IdSigur ([string]$i.Indicator.mediu))) { $R.mediuReatasat = [string]$i.Indicator.mediu }
+    } elseif ($null -eq $R) {
+      Set-MemorieDinIndicator $mem $i.Indicator $acumU
+    }
     if (-not (& $Dep.ScrieStareSup $sup)) {
       & $jurnal "[$($p.Nume)] EROARE: nu pot salva starea supervizorului; nu actionez in aceasta rulare"
       continue
@@ -789,7 +1187,7 @@ function Invoke-Supervizor([hashtable]$Dep, [datetime]$Acum, [switch]$DoarVerifi
       } else {
         & $jurnal ("[{0}] pornesc: {1}" -f $p.Nume, $d.Motiv)
       }
-      $r = & $Dep.Porneste $p
+      $r = & $Dep.Porneste $p $d.Mod $d.Sesiune
       if ($r.Ok) { & $jurnal ("[{0}] releu pornit: {1}" -f $p.Nume, $r.Mesaj) } else { & $jurnal ("[{0}] EROARE la pornire: {1}" -f $p.Nume, $r.Mesaj) }
     } catch {
       & $jurnal ("[{0}] EROARE la (re)pornire: {1}" -f $p.Nume, (Format-Sigur $_.Exception.Message 200))
