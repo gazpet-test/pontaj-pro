@@ -13,12 +13,17 @@
 --   Runda 4 (răspunsul expertului, 24.11.2026): CFS-ul și suspendările se numără pe zile calendaristice, pe PERIOADA actului (weekendul
 --     dintr-o suspendare e suspendat, weekendul de după sfârșitul ei e zi activă); contractul și corecțiile HR exact pe intervalul lor;
 --     pragul de 50 pe NMA-ul rotunjit (NMA >= 50,00); coloana zile_fara_efectiv scoasă (nu mai există zile de contract fără efectiv).
+--   Runda 6 (răspunsurile expertei contabile, 25.11.2026): absențele nemotivate (N) NU se numără ca zile lucrate (se scad ca suspendările);
+--     reportul NU expiră la sfârșitul anului (trece dintr-un an în altul, cum era deja în cod — probat); termenul la stat = ZI configurabilă pe
+--     perioade (upa_parametri 'termen_stat_zi', implicit 25): 21 pentru noiembrie 2026 (21.12.2026), 25 din decembrie 2026 — dacă 21 e regula
+--     generală pentru decembrie sau o excepție se confirmă de expertă, de aceea nu e o regulă în cod; reportul inițial 0 la octombrie 2026.
 --
 -- Formula (pe luna M; o singură definiție: fn_upa_calcul_la, L19):
 --   NMA = Σ_angajați Σ_zile normă(d) / zilele calendaristice ale lunii, rotunjit la 2 zecimale, pe fiecare zi d a contractului (între
 --     employees.hire_date și employees.termination_date, ambele incluse). Ziua d NU se numără dacă: angajatul era administrator (semnatar
 --     activ sau corecție HR pe interval); contractul era suspendat (corecție upa_angajat_perioade pe interval); era în CFS (CFP) sau într-o
---     suspendare de drept (CM, BO, BP, AM, M: incapacitate temporară de muncă, maternitate — Codul muncii art. 50), pe PERIOADA actului:
+--     suspendare de drept (CM, BO, BP, AM, M: incapacitate temporară de muncă, maternitate — Codul muncii art. 50) sau în absență nemotivată
+--     (N; runda 6: experta — nu e zi lucrată, în sinteza pontajului de lichidare e la perioade suspendate), pe PERIOADA actului:
 --     codul din pontaj pe ziua d (și pe weekend / sărbătoare, dacă e trecut), iar o zi nelucrătoare fără cod e în act doar dacă e între
 --     două zile cu același cod (detaliul: fn_upa_nma_angajati). normă(d) = corecția pe perioadă sau procent_ocupare / 100.
 --   posturi = round(4% × NMA, 2), doar dacă NMA >= 50 (altfel 0); Legea 448/2006 art. 78, Ordinul 1001/2022 art. 4: 2 zecimale, fără
@@ -28,8 +33,9 @@
 --   deducerea maximă = trunc(B / 2, 2): la stat se plătește cel puțin jumătate din B; achizițiile acoperă cel mult cealaltă jumătate
 --   achiziții A = Σ upa_achizitii.valoare_fara_tva ale lunii PLĂTITE până la ultima zi a lunii (stare_plata 'platita', data_plata ≤ ultima zi)
 --   deducere = min(A + report intrat, deducerea maximă); de plată la stat = B − deducere; report ieșit = A + report intrat − deducere
---   termenul la stat = fn_upa_termen_stat: 25 a lunii următoare (zi nelucrătoare -> prima zi lucrătoare următoare); pentru noiembrie (scadența
---     din decembrie) = 21 decembrie (zi nelucrătoare -> ziua lucrătoare anterioară) — Codul de procedură fiscală art. 155 alin. (2).
+--   termenul la stat = fn_upa_termen_stat: ziua 'termen_stat_zi' (upa_parametri, pe perioade; fără rând = 25) a lunii următoare, zi
+--     nelucrătoare -> prima zi lucrătoare următoare (regula generală a termenelor, Codul de procedură fiscală art. 75). Rândurile migrării:
+--     21 de la noiembrie 2026 (experta: 21.12.2026), 25 de la decembrie 2026 (de confirmat de expertă dacă 21 e regula fiecărui decembrie).
 -- Stări: PREVIZIUNE cât luna nu e închisă; din 13 a lunii următoare luna se poate ÎNCHIDE doar de owner, din ecran, pe AMPRENTA datelor pe care
 --   le-a văzut (pontaj pe fiecare zi lucrătoare, corecțiile HR, achizițiile, parametrii): orice schimbare între afișare și închidere = 40001.
 --   Cronul nu mai închide (normele, administratorii și suspendările fără cod nu au istoric în ERP: le confirmă omul); îl anunță zilnic pe owner
@@ -41,7 +47,8 @@
 --     salvării din formular cu amprentă VERSIONATĂ (fn_upa_hash_intentie_v2): fără valorile noi = EXACT amprenta din 20261229a (reîncercările
 --     intențiilor de dinainte de migrare și ale clientului vechi rămân 'existent', și după revenire); cu ele = 'v2:' + md5 pe toate câmpurile.
 --     fn_upa_campuri_intentie / fn_upa_hash_intentie rămân neatinse; fn_upa_achizitii_intentie (triggerul) și fn_upa_achizitie_adauga folosesc v2.
---   * upa_parametri (salariul minim, angajații cu handicap, reportul inițial, pe perioade) — scris doar prin fn_upa_parametru_seteaza.
+--   * upa_parametri (salariul minim, angajații cu handicap, reportul inițial, ziua termenului la stat, pe perioade) — scris doar prin
+--     fn_upa_parametru_seteaza.
 --   * upa_angajat_perioade: corecțiile HR pe interval (normă, administrator da/nu, suspendare fără cod de pontaj), doar owner-ul, cu motiv.
 --   * upa_calcul_lunar + upa_calcul_angajat: luna închisă (instantaneu nemodificabil, cu amprentele surselor și cine a confirmat).
 --   * upa_alerta_jurnal: felul nou 'calcul' (cheia calcul:AAAA-LL), lângă cele vechi (rândurile legacy 'inchidere:AAAA-LL' nu mai suprimă nimic).
@@ -226,15 +233,16 @@ CREATE TABLE public.upa_parametri (
   setat_de uuid,
   setat_la timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT upa_parametri_pk PRIMARY KEY (cheie, de_la),
-  CONSTRAINT upa_parametri_cheie CHECK (cheie = ANY (ARRAY['salariu_minim'::text, 'angajati_handicap'::text, 'report_initial'::text])),
+  CONSTRAINT upa_parametri_cheie CHECK (cheie = ANY (ARRAY['salariu_minim'::text, 'angajati_handicap'::text, 'report_initial'::text, 'termen_stat_zi'::text])),
   CONSTRAINT upa_parametri_prima_zi CHECK (extract(day FROM de_la) = 1),
   CONSTRAINT upa_parametri_valoare CHECK (valoare >= 0 AND valoare < 10000000
-    AND (cheie <> 'salariu_minim' OR valoare > 0) AND (cheie <> 'angajati_handicap' OR valoare = trunc(valoare))),
+    AND (cheie <> 'salariu_minim' OR valoare > 0) AND (cheie <> 'angajati_handicap' OR valoare = trunc(valoare))
+    AND (cheie <> 'termen_stat_zi' OR (valoare = trunc(valoare) AND valoare BETWEEN 1 AND 25))),
   CONSTRAINT upa_parametri_sursa CHECK (sursa = ANY (ARRAY['ecran'::text, 'migrare'::text])),
   CONSTRAINT upa_parametri_autor CHECK ((sursa = 'ecran') = (setat_de IS NOT NULL)),
   CONSTRAINT upa_parametri_nota CHECK (nota IS NULL OR length(nota) <= 300)
 );
-COMMENT ON TABLE public.upa_parametri IS 'UPA (20270101a): intrarile calculului pe perioade (valabile de la luna randului pana la urmatorul rand al cheii): salariu_minim, angajati_handicap, report_initial (prima luna a calculului). Scris doar prin fn_upa_parametru_seteaza.';
+COMMENT ON TABLE public.upa_parametri IS 'UPA (20270101a): intrarile calculului pe perioade (valabile de la luna randului pana la urmatorul rand al cheii): salariu_minim, angajati_handicap, report_initial (prima luna a calculului), termen_stat_zi (ziua din luna urmatoare pana la care se plateste la stat; fara rand = 25; 1..25). Scris doar prin fn_upa_parametru_seteaza.';
 
 -- corecțiile HR pe interval (ERP-ul nu are istoricul normei, al calității de administrator și al suspendărilor fără cod de pontaj): pentru
 --   zilele calendaristice din [de_la, pana_la] ale angajatului (runda 4: exact pe interval), norma (dacă e dată) și administrator (dacă e dat) înlocuiesc valorile de azi,
@@ -355,34 +363,34 @@ LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$
   SELECT CASE WHEN p_an IS NULL OR p_an < 1900 OR p_an > 2099 THEN 99
               ELSE (SELECT count(*)::integer FROM z WHERE NOT EXISTS (SELECT 1 FROM public.calendar_days c WHERE c.date = z.zi AND c.type = 'legal')) END
 $f$;
--- termenul plății la stat pentru luna dată: 25 a lunii următoare, mutat pe prima zi lucrătoare următoare dacă e nelucrătoare; scadența din
---   decembrie (luna noiembrie) = 21 decembrie, mutat pe ziua lucrătoare ANTERIOARĂ dacă e nelucrătoare (Codul de procedură fiscală art. 155
---   alin. (2); regula pentru 21 nelucrător e de confirmat cu expertul — în 2026 și 2027 ziua de 21.12 e lucrătoare)
+-- termenul plății la stat pentru luna dată: ziua 'termen_stat_zi' a lunii următoare (upa_parametri, pe perioade — valabilă de la luna rândului
+--   până la următorul rând; FĂRĂ rând = 25, Codul de procedură fiscală art. 155 alin. (1)); dacă e nelucrătoare -> prima zi lucrătoare
+--   următoare (regula generală a termenelor, art. 75). Runda 6 (experta contabilă, 25.11.2026): pentru noiembrie 2026 termenul e 21.12.2026 —
+--   rândul 21 de la 2026-11-01 și 25 de la 2026-12-01 (secțiunea 13); dacă 21 e regula fiecărui decembrie sau doar o excepție NU se știe încă,
+--   de aceea ziua e valoare pe perioade (schimbabilă din ecran), nu o regulă în cod. Valoarea e 1..25 (CHECK + RPC): cu zilele nelucrătoare
+--   de după, termenul rămâne în luna următoare (CHECK upa_calcul_lunar_termen). Rândurile din afara acestor limite = eroare, nu o presupunere (L18).
 CREATE FUNCTION public.fn_upa_termen_stat(p_luna date) RETURNS date
 LANGUAGE plpgsql STABLE SET search_path = public, pg_temp AS $f$
-DECLARE v_t date; v_n integer := 0;
+DECLARE v_t date; v_n integer := 0; v_zi numeric;
 BEGIN
   IF p_luna IS NULL THEN RETURN NULL; END IF;
-  v_t := (date_trunc('month', p_luna::timestamp) + interval '1 month')::date + 24;
-  IF extract(month FROM v_t) = 12 THEN
-    v_t := make_date(extract(year FROM v_t)::integer, 12, 21);
-    WHILE NOT public.fn_upa_zi_lucratoare(v_t) LOOP
-      v_t := v_t - 1; v_n := v_n + 1;
-      IF v_n > 10 THEN RAISE EXCEPTION 'upa: calendarul nu are zile lucratoare inainte de 21.12' USING ERRCODE = '22023'; END IF;
-    END LOOP;
-  ELSE
-    WHILE NOT public.fn_upa_zi_lucratoare(v_t) LOOP
-      v_t := v_t + 1; v_n := v_n + 1;
-      IF v_n > 10 THEN RAISE EXCEPTION 'upa: calendarul nu are zile lucratoare dupa 25' USING ERRCODE = '22023'; END IF;
-    END LOOP;
+  v_zi := coalesce(public.fn_upa_parametru_la('termen_stat_zi', p_luna), 25);
+  IF v_zi <> trunc(v_zi) OR v_zi < 1 OR v_zi > 25 THEN
+    RAISE EXCEPTION 'upa: termen_stat_zi invalid (%): zi intreaga intre 1 si 25', v_zi USING ERRCODE = '22023';
   END IF;
+  v_t := (date_trunc('month', p_luna::timestamp) + interval '1 month')::date + (v_zi::integer - 1);
+  WHILE NOT public.fn_upa_zi_lucratoare(v_t) LOOP
+    v_t := v_t + 1; v_n := v_n + 1;
+    IF v_n > 10 THEN RAISE EXCEPTION 'upa: calendarul nu are zile lucratoare dupa termen' USING ERRCODE = '22023'; END IF;
+  END LOOP;
   RETURN v_t;
 END $f$;
--- codul de pontaj -> cauza excluderii: CFS ('CFP') sau suspendare de drept (CM / BO / BP / AM = incapacitate temporară de muncă, M =
---   maternitate; Codul muncii art. 50); NULL = ziua se numără (CO, N, O, PRM, PRB, LL, ore lucrate)
+-- codul de pontaj -> cauza excluderii: CFS ('CFP') sau suspendare (CM / BO / BP / AM = incapacitate temporară de muncă, M = maternitate —
+--   Codul muncii art. 50; N = absență nemotivată — runda 6, experta contabilă 25.11.2026: nu e zi lucrată, se scade ca suspendările);
+--   NULL = ziua se numără (CO, O, PRM, PRB, LL, ore lucrate)
 CREATE FUNCTION public.fn_upa_cauza_cod(p text) RETURNS text
 LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS $f$
-  SELECT CASE WHEN upper(btrim(p)) = 'CFP' THEN 'cfs' WHEN upper(btrim(p)) IN ('CM', 'BO', 'BP', 'AM', 'M') THEN 'suspendare' END
+  SELECT CASE WHEN upper(btrim(p)) = 'CFP' THEN 'cfs' WHEN upper(btrim(p)) IN ('CM', 'BO', 'BP', 'AM', 'M', 'N') THEN 'suspendare' END
 $f$;
 
 -- NMA pe angajat, pe zile calendaristice (vezi formula din antet). Intră angajații activi și cei cu dată de încetare, cu contractul suprapus
@@ -390,8 +398,9 @@ $f$;
 -- Runda 4 (răspunsul expertului, 24.11.2026): fiecare zi se judecă pe PERIOADA actului care o acoperă, nu prin ziua lucrătoare dinainte:
 --   * contractul: zilele dintre hire_date și termination_date, ambele incluse (angajat sâmbătă = sâmbăta se numără);
 --   * corecția HR (upa_angajat_perioade: normă / administrator / suspendat) se aplică exact pe zilele intervalului ei;
---   * codul din pontaj al zilei (și pe weekend / sărbătoare, dacă e trecut acolo): CFS (CFP) / suspendare (CM, BO, BP, AM, M) scot ziua;
---   * o zi nelucrătoare FĂRĂ informație (fără rând în pontaj, sau cu un cod care nu spune nimic despre suspendare: CO, LL, N, O ... pe o zi
+--   * codul din pontaj al zilei (și pe weekend / sărbătoare, dacă e trecut acolo): CFS (CFP) / suspendare (CM, BO, BP, AM, M; runda 6: și N,
+--     absența nemotivată) scot ziua;
+--   * o zi nelucrătoare FĂRĂ informație (fără rând în pontaj, sau cu un cod care nu spune nimic despre suspendare: CO, LL, O ... pe o zi
 --     liberă) e înăuntrul unei suspendări doar dacă cea mai apropiată zi cu informație dinainte ȘI cea de după (în contract, fereastra
 --     luna ± 14 zile) au ACELAȘI cod de CFS / suspendare (sau aceeași corecție HR): weekendul dintre CM vineri și CM luni e suspendat, iar
 --     weekendul de după un CM terminat vineri (luni lucrează) se numără. Dacă după ea nu mai există nicio zi a contractului (contractul
@@ -794,14 +803,16 @@ BEGIN
   IF NOT public.fn_upa_poate_scrie() THEN
     RAISE EXCEPTION 'upa: parametrii calculului cer Administrativ / Unitati protejate (admin sau editor)' USING ERRCODE = '42501';
   END IF;
-  IF p_cheie IS NULL OR p_cheie NOT IN ('salariu_minim', 'angajati_handicap', 'report_initial') THEN
+  IF p_cheie IS NULL OR p_cheie NOT IN ('salariu_minim', 'angajati_handicap', 'report_initial', 'termen_stat_zi') THEN
     RAISE EXCEPTION 'upa: parametru necunoscut' USING ERRCODE = '22023';
   END IF;
   IF p_de_la IS NULL OR extract(day FROM p_de_la) <> 1 OR p_de_la < DATE '2020-01-01' OR p_de_la > DATE '2100-01-01' THEN
     RAISE EXCEPTION 'upa: data de inceput trebuie sa fie prima zi a unei luni' USING ERRCODE = '22023';
   END IF;
+  -- termen_stat_zi (runda 6): zi întreagă 1..25 (aceeași regulă ca CHECK-ul upa_parametri_valoare și fn_upa_termen_stat)
   IF p_valoare IS NULL OR p_valoare < 0 OR p_valoare >= 10000000 OR p_valoare <> round(p_valoare, 2)
-     OR (p_cheie = 'salariu_minim' AND p_valoare <= 0) OR (p_cheie = 'angajati_handicap' AND p_valoare <> trunc(p_valoare)) THEN
+     OR (p_cheie = 'salariu_minim' AND p_valoare <= 0) OR (p_cheie = 'angajati_handicap' AND p_valoare <> trunc(p_valoare))
+     OR (p_cheie = 'termen_stat_zi' AND (p_valoare <> trunc(p_valoare) OR p_valoare < 1 OR p_valoare > 25)) THEN
     RAISE EXCEPTION 'upa: valoare invalida pentru %', p_cheie USING ERRCODE = '22023';
   END IF;
   IF p_nota IS NOT NULL AND length(p_nota) > 300 THEN RAISE EXCEPTION 'upa: nota are peste 300 de caractere' USING ERRCODE = '22023'; END IF;
@@ -1154,12 +1165,16 @@ CREATE POLICY upa_calcul_angajat_citire_owner ON public.upa_calcul_angajat FOR S
 CREATE POLICY upa_angajat_perioade_citire_owner ON public.upa_angajat_perioade FOR SELECT TO authenticated
   USING (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.is_owner IS TRUE));
 
--- ─── 13. Intrările cunoscute (răspunsul expertului contabil, 20.11.2026) ─────────────────────────────────────────────────────
--- salariul minim: DOAR valoarea confirmată de expert; prima lună a calculului: octombrie 2026, report inițial 0 (schimbabil cât nu e
--- închisă nicio lună). Numărul angajaților cu handicap NU se pune aici (nu există în ERP): până îl înregistrează cineva, calculul e blocat.
+-- ─── 13. Intrările cunoscute (răspunsurile expertei contabile, 20.11 și 25.11.2026) ────────────────────────────────────────────
+-- salariul minim: DOAR valoarea confirmată de expertă; prima lună a calculului: octombrie 2026, report inițial 0 (confirmat 25.11.2026;
+-- schimbabil cât nu e închisă nicio lună). Termenul la stat: 21 pentru noiembrie 2026 (21.12.2026, confirmat 25.11.2026), apoi înapoi la 25
+-- (implicitul) din decembrie 2026 — dacă 21 e regula fiecărui decembrie, expertă confirmă și se adaugă rândul din ecran.
+-- Numărul angajaților cu handicap NU se pune aici (nu există în ERP): până îl înregistrează cineva, calculul e blocat.
 INSERT INTO public.upa_parametri (cheie, de_la, valoare, sursa, nota) VALUES
-  ('salariu_minim', DATE '2026-07-01', 4325, 'migrare', 'salariul minim brut pe tara de la 01.07.2026 (raspunsul expertului contabil, 20.11.2026)'),
-  ('report_initial', DATE '2026-10-01', 0, 'migrare', 'prima luna a calculului; report initial 0');
+  ('salariu_minim', DATE '2026-07-01', 4325, 'migrare', 'salariul minim brut pe tara de la 01.07.2026 (raspunsul expertei contabile, 20.11.2026)'),
+  ('report_initial', DATE '2026-10-01', 0, 'migrare', 'prima luna a calculului; report initial 0 (confirmat de experta contabila, 25.11.2026)'),
+  ('termen_stat_zi', DATE '2026-11-01', 21, 'migrare', 'termenul pentru noiembrie 2026 = 21.12.2026 (experta contabila, 25.11.2026)'),
+  ('termen_stat_zi', DATE '2026-12-01', 25, 'migrare', 'din decembrie 2026 inapoi la 25 a lunii urmatoare; daca 21 e regula fiecarui decembrie, de confirmat de experta');
 
 -- ─── 14. Postcondiții ────────────────────────────────────────────────────────────────────────────────────────────────────
 DO $post$
@@ -1238,18 +1253,20 @@ BEGIN
     'fn_upa_campuri_intentie_v2', 'fn_upa_hash_intentie_v2', 'fn_upa_achizitii_intentie', 'fn_upa_achizitie_adauga', 'fn_upa_alerta_inscrie',
     'fn_upa_alerta_rezerva_la', 'fn_upa_alerta_proba']);
   IF v_n <> 27 THEN RAISE EXCEPTION '20270101a post: % functii cu numele noi / inlocuite (asteptat 27)', v_n; END IF;
-  IF (SELECT count(*) FROM public.upa_parametri) <> 2 OR EXISTS (SELECT 1 FROM public.upa_calcul_lunar) OR EXISTS (SELECT 1 FROM public.upa_angajat_perioade) THEN
+  IF (SELECT count(*) FROM public.upa_parametri) <> 4 OR EXISTS (SELECT 1 FROM public.upa_calcul_lunar) OR EXISTS (SELECT 1 FROM public.upa_angajat_perioade) THEN
     RAISE EXCEPTION '20270101a post: parametrii de start / calculul gol';
   END IF;
-  -- intrările și regulile fără date: pontajul închis din 13, salariul minim pe perioade, prima lună, termenele (25 / 26 dacă 25 e duminică /
-  --   21.12 pentru noiembrie / 19.12.2025 când 21 e duminică), codurile de suspendare, amprenta intenției compatibilă cu 20261229a
+  -- intrările și regulile fără date: pontajul închis din 13, salariul minim pe perioade, prima lună cu reportul inițial 0, termenele (25.11.2026
+  --   pentru octombrie, fără rând = 25; 26.10.2026 când 25 e duminică; 21.12.2026 pentru noiembrie 2026; 25.01.2027 pentru decembrie 2026 —
+  --   zile fără sărbători legale), codurile de suspendare (N inclus, runda 6), amprenta intenției compatibilă cu 20261229a
   IF public.fn_upa_pontaj_inchis(DATE '2026-10-01', DATE '2026-11-12') OR NOT public.fn_upa_pontaj_inchis(DATE '2026-10-01', DATE '2026-11-13')
      OR public.fn_upa_parametru_la('salariu_minim', DATE '2026-06-01') IS NOT NULL OR public.fn_upa_parametru_la('salariu_minim', DATE '2026-11-15') <> 4325
-     OR public.fn_upa_inceput_calcul() <> DATE '2026-10-01'
-     OR public.fn_upa_termen_stat(DATE '2026-11-01') <> DATE '2026-12-21' OR public.fn_upa_termen_stat(DATE '2026-09-01') <> DATE '2026-10-26'
-     OR public.fn_upa_termen_stat(DATE '2025-11-01') <> DATE '2025-12-19'
+     OR public.fn_upa_inceput_calcul() <> DATE '2026-10-01' OR public.fn_upa_parametru_la('report_initial', DATE '2026-10-01') IS DISTINCT FROM 0
+     OR public.fn_upa_parametru_la('termen_stat_zi', DATE '2026-10-01') IS NOT NULL
+     OR public.fn_upa_termen_stat(DATE '2026-10-01') IS DISTINCT FROM DATE '2026-11-25' OR public.fn_upa_termen_stat(DATE '2026-09-01') IS DISTINCT FROM DATE '2026-10-26'
+     OR public.fn_upa_termen_stat(DATE '2026-11-01') IS DISTINCT FROM DATE '2026-12-21' OR public.fn_upa_termen_stat(DATE '2026-12-01') IS DISTINCT FROM DATE '2027-01-25'
      OR public.fn_upa_cauza_cod(' cfp') IS DISTINCT FROM 'cfs' OR public.fn_upa_cauza_cod('M') IS DISTINCT FROM 'suspendare'
-     OR public.fn_upa_cauza_cod('CO') IS NOT NULL OR public.fn_upa_cauza_cod('N') IS NOT NULL
+     OR public.fn_upa_cauza_cod('n ') IS DISTINCT FROM 'suspendare' OR public.fn_upa_cauza_cod('CO') IS NOT NULL OR public.fn_upa_cauza_cod('O') IS NOT NULL
      OR public.fn_upa_hash_intentie_v2(to_jsonb(jsonb_populate_record(NULL::public.upa_achizitii, '{"luna": "2031-05-01", "valoare": 10}')))
         IS DISTINCT FROM public.fn_upa_hash_intentie(to_jsonb(jsonb_populate_record(NULL::public.upa_achizitii, '{"luna": "2031-05-01", "valoare": 10}')))
      OR public.fn_upa_hash_intentie_v2(to_jsonb(jsonb_populate_record(NULL::public.upa_achizitii, '{"luna": "2031-05-01", "valoare": 10, "stare_plata": "neplatita"}')))
@@ -1326,9 +1343,9 @@ BEGIN
              'fn_upa_alerta_proba')
   ) x;
   -- AMPRENTA_20270101a_SFARSIT
-  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM 'a7d733df35de8abdc3ea18e4f2030667' THEN
+  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM 'a7d5d33685bd2bdffa816515b5e6fd24' THEN
     RAISE NOTICE 'AMPRENTA_20270101a_TEXT %', v_amp;
-    RAISE EXCEPTION '20270101a post: AMPRENTA obiectelor % (asteptat a7d733df35de8abdc3ea18e4f2030667)', md5(coalesce(v_amp, ''));
+    RAISE EXCEPTION '20270101a post: AMPRENTA obiectelor % (asteptat a7d5d33685bd2bdffa816515b5e6fd24)', md5(coalesce(v_amp, ''));
   END IF;
   IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20270101a_administrativ_upa_calcul:' || txid_current() THEN
     RAISE EXCEPTION '20270101a: garda final invalida';

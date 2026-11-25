@@ -10,8 +10,11 @@
 // 50 pe NMA-ul rotunjit (49,99 / 49,995 -> 50,00 / 50,00); secțiunea 3d + mutanții noi.
 // Runda 5 (Jakarinos r4): corecția HR nu se prelungește peste capătul ei (nici la încetarea în weekend: 95); ziua liberă urmată de o zi
 // lucrătoare nepontată (și 2.12) = fără pontaj oricare ar fi starea dinainte (97); totalul lipsurilor numără și zilele din afara lunii (98, 99).
+// Runda 6 (răspunsurile expertei contabile, 25.11.2026): absența nemotivată (N) se scade ca suspendările (angajatul 3 în scenariul A; 100, 101 în 3d);
+// reportul trece peste 31.12 (3e: oct 2026 – ian 2027); termenul la stat = ziua 'termen_stat_zi' pe perioade (21.12.2026 pentru noiembrie 2026, 25
+// implicit, zi nelucrătoare -> următoarea lucrătoare; schimbabil din ecran, în amprentă, UPA03 pe luna închisă); reportul inițial 0 la octombrie 2026.
 // Rulare (din rădăcina repo-ului; cere bash + python3 în PATH): npm install --no-save @electric-sql/pglite && node scripts/pglite/test_upa_calcul_local.mjs
-//   (--scrie-obiecte rescrie lista revizuită L15 din manifestul generat; --fara-mutanti sare secțiunea 7)
+//   (--scrie-obiecte rescrie lista revizuită L15 din manifestul generat; --fara-mutanti sare secțiunea 7; --doar-mutanti <regex> rulează doar mutanții aleși)
 import { PGlite } from '@electric-sql/pglite'
 import { readFileSync, writeFileSync, mkdtempSync, existsSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
@@ -108,9 +111,9 @@ INSERT INTO public.logistica_furnizori (id, nume, este_upa, activ, upa_valabil_p
 const angajati = (n = 60) => `INSERT INTO public.employees (id, name, active, hire_date, procent_ocupare) SELECT g, 'ANGAJAT ' || g, true, DATE '2020-01-01', 100 FROM generate_series(1, ${n}) g;`
 // pontajul (rând pe fiecare zi lucrătoare a contractului, oct + nov + 2.12), DUPĂ codurile speciale; fără administratorul 66 și suspendatul 74.
 //   Runda 5: și miercuri 2.12 (prima zi lucrătoare de după noiembrie), fiindcă de ea depind 28–30.11 (nepontată = blocaj în noiembrie).
-const pontajPlin = (fara = '0') => `
+const pontajPlin = (fara = '0', deLa = '2026-10-01', panaLa = '2026-12-02') => `
 INSERT INTO public.pontaj_records (employee_id, date, norma)
-SELECT e.id, d::date, NULL FROM public.employees e, generate_series(TIMESTAMP '2026-10-01', TIMESTAMP '2026-12-02', interval '1 day') d
+SELECT e.id, d::date, NULL FROM public.employees e, generate_series(TIMESTAMP '${deLa}', TIMESTAMP '${panaLa}', interval '1 day') d
  WHERE extract(isodow FROM d) < 6 AND NOT EXISTS (SELECT 1 FROM public.calendar_days c WHERE c.date = d::date AND c.type = 'legal')
    AND (e.active OR e.termination_date IS NOT NULL) AND d::date >= e.hire_date AND (e.termination_date IS NULL OR d::date <= e.termination_date)
    AND e.id NOT IN (${fara})
@@ -142,15 +145,17 @@ INSERT INTO public.pontaj_records (employee_id, date, norma) SELECT 70, d::date,
 INSERT INTO public.pontaj_records (employee_id, date, norma) VALUES (71, '2026-10-30', 'BO'), (71, '2026-11-02', 'BO'), (71, '2026-11-03', 'BO'),
   (1, '2026-10-02', 'CO'), (2, '2026-10-02', 'CM'), (3, '2026-10-02', 'N'), (67, '2026-10-01', NULL);
 ` + pontajPlin('66, 74')
-// NMA octombrie (de mână): 1..60 = 60 x 31 − 1 (angajatul 2: CM vineri 2.10; luni 5.10 lucrează, deci weekendul 3–4 se numără) = 1.859;
-//   61: 16; 62: 15,5; 63: 10; 64: 26; 65: 28; 66: 0; 68: 31; 70: 1; 71: 29; 72: 23; 73: 15; 74: 0 -> 2.053,5 / 31 = 66,2419 -> 66,24 (CO / N nu scad).
-//   posturi = 4% x 66,24 = 2,6496 -> 2,65 (2 zecimale, rotunjire matematică); locuri = 2,65 (0 angajați cu handicap);
+// NMA octombrie (de mână): 1..60 = 60 x 31 − 1 (angajatul 2: CM vineri 2.10; luni 5.10 lucrează, deci weekendul 3–4 se numără) − 1 (angajatul 3:
+//   N vineri 2.10 — runda 6, experta: absența nemotivată se scade ca suspendările; weekendul 3–4 se numără, luni 5.10 lucrează) = 1.858;
+//   61: 16; 62: 15,5; 63: 10; 64: 26; 65: 28; 66: 0; 68: 31; 70: 1; 71: 29; 72: 23; 73: 15; 74: 0 -> 2.052,5 / 31 = 66,2097 -> 66,21 (CO nu scade;
+//   până la runda 6 era 66,24, cu N numărat).
+//   posturi = 4% x 66,21 = 2,6484 -> 2,65 (2 zecimale, rotunjire matematică); locuri = 2,65 (0 angajați cu handicap);
 //   contribuția integrală = 2,65 x 4.325 = 11.461,25; deducerea maximă = trunc(5.730,625) = 5.730,62 (la stat cel puțin 5.730,63).
 //   Rânduri: 1..60 + 61, 62, 63, 64, 65, 66, 68, 70, 71, 72, 73, 74 = 72.
-//   Zile libere numărate lângă o suspendare (avertisment): 2 (3–4.10), 64 (3–4 și 10–11.10), 70 (31.10) -> 3 angajați.
+//   Zile libere numărate lângă o suspendare (avertisment): 2 (3–4.10), 3 (3–4.10, lângă N), 64 (3–4 și 10–11.10), 70 (31.10) -> 4 angajați.
 // NMA noiembrie: 1..60 = 1.800; 61: 30; 62: 15; 64: 30; 65: 30; 68: 30; 70: 30; 71: 27; 72: 15; 73: 30 -> 2.037 / 30 = 67,90;
 //   posturi 2,716 -> 2,72; contribuția 2,72 x 4.325 = 11.764,00; deducerea maximă 5.882,00. Rânduri: 60 + 11 = 71. Avertisment: 70 (1.11).
-const NMA_OCT = 66.24, NMA_NOV = 67.9, NR_OCT = 72, NR_NOV = 71
+const NMA_OCT = 66.21, NMA_NOV = 67.9, NR_OCT = 72, NR_NOV = 71
 
 const q1 = async (db, sql, p) => (await db.query(sql, p)).rows[0]
 const eroare = async p => { try { await p; return null } catch (e) { return e.message } }
@@ -247,8 +252,8 @@ async function scenariuA(db) {
   tine(n(c.nma) === NMA_OCT && c.nr_angajati === NR_OCT, `NMA octombrie = ${NMA_OCT}, ${NR_OCT} rânduri (primit ${c.nma}, ${c.nr_angajati})`)
   tine(n(c.posturi) === 2.65 && n(c.locuri) === 2.65 && n(c.suma_datorata) === 11461.25 && n(c.jumatate) === 5730.62,
     `posturi 2,65 (2 zecimale), contribuția integrală 11.461,25, deducerea maximă 5.730,62 (${c.posturi} ${c.locuri} ${c.suma_datorata} ${c.jumatate})`)
-  tine(lista(c.avertismente).includes('suspendari_langa_zile_libere:3'),
-    `avertismentul zilelor libere numărate lângă o suspendare: 3 angajați (${JSON.stringify(c.avertismente)})`)
+  tine(lista(c.avertismente).includes('suspendari_langa_zile_libere:4'),
+    `avertismentul zilelor libere numărate lângă o suspendare: 4 angajați (2 CM, 3 N, 64, 70) (${JSON.stringify(c.avertismente)})`)
   tine(c.termen_stat === '2026-11-25' && c.termen_upa === '2026-10-31', `termenele: stat 25.11 (miercuri), UPA 31.10 (${c.termen_stat} ${c.termen_upa})`)
   // 13.11: blocajele, pe rând
   c = await calcul(db, '2026-10-01', '2026-11-13')
@@ -321,8 +326,8 @@ async function scenariuA(db) {
     && d(65).zile_suspendare === 3 && d(2).zile_suspendare === 1 && d(2).c === '30.0000' && d(66).zile_administrator === 31 && d(70).zile_suspendare === 30
     && d(70).c === '1.0000' && d(71).zile_suspendare === 2
     && d(72).c === '23.0000' && d(73).zile_administrator === 16 && d(73).c === '15.0000' && d(74).zile_suspendare === 31 && d(74).c === '0.0000'
-    && d(1).c === '31.0000' && d(3).c === '31.0000' && !det.some(x => x.employee_id === 67 || x.employee_id === 69),
-    `detaliul pe angajat (${det.length} rânduri; 64 cfs ${d(64).zile_cfs}/${d(64).c}, 70 susp ${d(70).zile_suspendare}, 71 ${d(71).zile_suspendare}, 72 ${d(72).c}, 73 adm ${d(73).zile_administrator}/${d(73).c}, 74 ${d(74).c})`)
+    && d(1).c === '31.0000' && d(3).zile_suspendare === 1 && d(3).c === '30.0000' && !det.some(x => x.employee_id === 67 || x.employee_id === 69),
+    `detaliul pe angajat (${det.length} rânduri; 3 (N) susp ${d(3).zile_suspendare}/${d(3).c}, 64 cfs ${d(64).zile_cfs}/${d(64).c}, 70 susp ${d(70).zile_suspendare}, 71 ${d(71).zile_suspendare}, 72 ${d(72).c}, 73 adm ${d(73).zile_administrator}/${d(73).c}, 74 ${d(74).c})`)
   const deja = await inchideEcran(db, U.OWNER, '2026-10-01', ampVazuta)
   tine(deja.rows && deja.rows[0].r.deja === true, 'a doua închidere: „deja”')
   // nemodificabil pe orice cale; corecțiile HR și parametrii lunii închise refuzate
@@ -558,16 +563,18 @@ INSERT INTO public.employees (id, name, active, hire_date, termination_date, pro
   (93, 'CM VINERI, BO LUNI', true, '2020-01-01', NULL, 100), (94, 'CM VINERI 27, DECEMBRIE NEPONTAT', true, '2020-01-01', NULL, 100),
   (95, 'SUSPENDAT HR 9-13, INCETAT DUMINICA', false, '2020-01-01', '2026-11-15', 100), (96, 'SUSPENDAT HR 9-15, INCETAT DUMINICA', false, '2020-01-01', '2026-11-15', 100),
   (97, 'ACTIV VINERI 27, DECEMBRIE NEPONTAT', true, '2020-01-01', NULL, 100), (98, 'NEPONTAT VINERI 27 SI 2.12', true, '2020-01-01', NULL, 100),
-  (99, 'NEPONTAT VINERI 30.10', true, '2020-01-01', NULL, 100);
+  (99, 'NEPONTAT VINERI 30.10', true, '2020-01-01', NULL, 100),
+  (100, 'NEMOTIVAT L-V', true, '2020-01-01', NULL, 100), (101, 'NEMOTIVAT VINERI SI LUNI', true, '2020-01-01', NULL, 100);
 INSERT INTO public.pontaj_records (employee_id, date, norma)
   SELECT 81, d::date, 'CM' FROM generate_series(TIMESTAMP '2026-11-09', TIMESTAMP '2026-11-13', interval '1 day') d
+  UNION ALL SELECT 100, d::date, 'N' FROM generate_series(TIMESTAMP '2026-11-09', TIMESTAMP '2026-11-13', interval '1 day') d
   UNION ALL SELECT 82, d::date, 'BO' FROM generate_series(TIMESTAMP '2026-11-03', TIMESTAMP '2026-11-30', interval '1 day') d
   UNION ALL ${ZILE_LUCR_3_27(83)} UNION ALL ${ZILE_LUCR_3_27(84)}
   UNION ALL SELECT 91, d::date, 'CM' FROM generate_series(TIMESTAMP '2026-11-12', TIMESTAMP '2026-11-13', interval '1 day') d
   UNION ALL SELECT 92, d::date, 'CFP' FROM generate_series(TIMESTAMP '2026-11-06', TIMESTAMP '2026-11-08', interval '1 day') d;
 INSERT INTO public.pontaj_records (employee_id, date, norma) VALUES (83, '2026-12-02', 'BO'), (84, '2026-12-02', NULL), (85, '2026-11-20', 'CM'),
   (89, '2026-11-27', 'CM'), (89, '2026-12-02', 'CM'), (90, '2026-11-27', 'CM'), (90, '2026-11-30', 'LL'), (90, '2026-12-02', 'CM'),
-  (93, '2026-11-13', 'CM'), (93, '2026-11-16', 'BO'), (94, '2026-11-27', 'CM');
+  (93, '2026-11-13', 'CM'), (93, '2026-11-16', 'BO'), (94, '2026-11-27', 'CM'), (101, '2026-11-13', 'N'), (101, '2026-11-16', 'N');
 ` + pontajPlin('66, 74') + `
 DELETE FROM public.pontaj_records WHERE employee_id = 85 AND date = '2026-11-23';
 DELETE FROM public.pontaj_records WHERE (employee_id IN (94, 97, 98) AND date = '2026-12-02') OR (employee_id = 98 AND date = '2026-11-27')
@@ -593,6 +600,9 @@ const ASTEPTAT_SUSP = {
   97: [30, 0, 0, 30, 1, 0],   // P1-2: vineri 27 lucrat, 28–30 libere, 2.12 nepontat -> fără pontaj prin 2.12 (r4: numărat, fără blocaj)
   98: [30, 0, 0, 30, 2, 0],   // vineri 27 și 2.12 nepontate -> două zile lipsă (27.11 și 2.12), fiecare o dată (r4: 1)
   99: [30, 0, 0, 30, 1, 0],   // vineri 30.10 nepontată -> duminica 1.11 depinde de ea: o zi lipsă în totalul lui noiembrie
+  // runda 6 (experta, 25.11.2026): absența nemotivată se scade ca suspendările, cu aceeași regulă a zilelor libere
+  100: [30, 0, 5, 25, 0, 4],  // N L 9 – V 13.11, luni 16 la lucru -> 5 zile scoase (ca 81), weekendurile 7–8 și 14–15 se numără (avertisment 4)
+  101: [30, 0, 4, 26, 0, 0],  // N vineri 13 și luni 16 (același cod) -> weekendul 14–15 e în act: 4 zile scoase
 }
 async function suspendariPerioada(db) {
   const ab = []
@@ -613,11 +623,11 @@ async function suspendariPerioada(db) {
     tine(JSON.stringify(v) === JSON.stringify(ast), `angajatul ${emp}: așteptat ${JSON.stringify(ast)}, primit ${JSON.stringify(v)}`)
   }
   // la nivelul lunii: 85 (1), 94 (1), 97 (1), 98 (2), 99 (1) = 6 zile fără pontaj (blocaj; 30.10 și 2.12 intră în totalul lui noiembrie);
-  //   zilele libere lângă o suspendare din pontaj: 70 (1.11), 81, 84, 93 = 4 angajați (86 / 95 = corecții HR, intervalul e cunoscut)
+  //   zilele libere lângă o suspendare din pontaj: 70 (1.11), 81, 84, 93, 100 (N, runda 6) = 5 angajați (86 / 95 = corecții HR, intervalul e cunoscut)
   const c = await calcul(db, '2026-11-01', '2026-12-13')
   const fp = (await db.query(`SELECT employee_id AS e, zile_fara_pontaj AS n FROM public.fn_upa_nma_angajati('2026-11-01') WHERE zile_fara_pontaj > 0 OR zile_libere_langa_suspendare > 0 ORDER BY 1`)).rows
-  tine(lista(c.blocaje).includes('pontaj_lipsa:6') && lista(c.avertismente).includes('suspendari_langa_zile_libere:4') && c.poate_inchide === false,
-    `noiembrie: pontaj_lipsa:6, suspendari_langa_zile_libere:4, nu se închide (${JSON.stringify(c.blocaje)} ${JSON.stringify(c.avertismente)} ${JSON.stringify(fp)})`)
+  tine(lista(c.blocaje).includes('pontaj_lipsa:6') && lista(c.avertismente).includes('suspendari_langa_zile_libere:5') && c.poate_inchide === false,
+    `noiembrie: pontaj_lipsa:6, suspendari_langa_zile_libere:5, nu se închide (${JSON.stringify(c.blocaje)} ${JSON.stringify(c.avertismente)} ${JSON.stringify(fp)})`)
   // 97: ziua de 2.12 pontată -> 28–30.11 active, lipsa dispare
   await db.query(`INSERT INTO public.pontaj_records (employee_id, date, norma) VALUES (97, '2026-12-02', NULL)`)
   let v97 = await rand(97)
@@ -633,6 +643,72 @@ async function suspendariPerioada(db) {
   await db.query(`UPDATE public.pontaj_records SET norma = NULL WHERE employee_id = 94 AND date = '2026-12-02'`)
   v = await rand(94)
   tine(JSON.stringify(v) === '[30,0,1,29,0,3]', `94 la lucru pe 2.12: doar 27.11 în act, 28–30 active (avertisment 3) (${JSON.stringify(v)})`)
+  return ab
+}
+// ── runda 6 (răspunsurile expertei contabile, 25.11.2026): reportul trece peste 31.12 (nu expiră); termenul la stat = ziua 'termen_stat_zi' pe
+//   perioade (21.12.2026 pentru noiembrie 2026 din rândul migrării; fără rând = 25; zi nelucrătoare -> următoarea lucrătoare); reportul inițial 0
+//   la octombrie 2026. 60 de angajați întregi, octombrie 2026 – ianuarie 2027, pontaj complet până la prima zi lucrătoare de după ianuarie (1.02.2027).
+//   De mână: NMA 60,00 -> posturi 2,40, contribuția 2,40 x 4.325 = 10.380,00, deducerea maximă 5.190,00 în fiecare lună.
+//   Oct: A 20.000 (plătită 15.10) -> deducere 5.190, de plată 5.190, report 14.810; termenul 25.11.2026 (miercuri; fără rând 'termen_stat_zi').
+//   Nov: A 0 -> deducere 5.190 din report, de plată 5.190, report 9.620; termenul 21.12.2026 (luni; rândul migrării 21).
+//   Dec: deducere 5.190, de plată 5.190, report 4.430; termenul 25.01.2027 (luni; rândul migrării 25 din decembrie).
+//   Ian 2027: report intrat 4.430 (PESTE 31.12), deducere 4.430, de plată 10.380 − 4.430 = 5.950, report 0; termenul implicit 25.02.2027 (joi);
+//     cu ziua 20 pusă din ecran de la ianuarie 2027: 20.02.2027 e sâmbătă -> luni 22.02.2027 (și februarie: 20.03 sâmbătă -> 22.03); cu 19: vineri 19.02.
+const PONTAJ_AN = pontajPlin('0', '2026-10-01', '2027-02-01')
+async function reportPesteAn(db) {
+  const ab = []
+  const tine = (c, m) => { if (!c) ab.push(m) }
+  const s0 = await seteaza(db, U.OWNER, 'angajati_handicap', '2026-10-01', 0, null)
+  tine(!s0.err, `nr. handicap 0 de la 01.10.2026 (${s0.err || 'ok'} ${s0.msg || ''})`)
+  // reportul inițial 0 la octombrie 2026 = prima lună a calculului (rândul migrării); septembrie e în afara calculului
+  const p0 = await q1(db, `SELECT public.fn_upa_inceput_calcul()::text AS i, public.fn_upa_parametru_la('report_initial', '2026-10-01')::text AS r`)
+  const sep = await calcul(db, '2026-09-01', '2026-11-13')
+  tine(p0.i === '2026-10-01' && p0.r === '0.00' && sep.stare === 'in_afara_calculului', `prima lună octombrie 2026, report inițial 0, septembrie în afara calculului (${JSON.stringify(p0)} ${sep.stare})`)
+  await achizitie(db, 'F-R1', '2026-10-01', 23800, 20000, '2026-10-15')
+  const inchideLuna = async (luna, azi, ast) => {
+    const c = await calcul(db, luna, azi)
+    tine(c.poate_inchide === true, `${luna}: gata de închis (${JSON.stringify(c.blocaje)})`)
+    const r = await inchide(db, luna, azi, c.amprenta)
+    const x = await q1(db, `SELECT nma::text AS nma, report_intrat::text AS rin, deducere::text AS ded, de_plata::text AS p, report_iesit::text AS ri, termen_stat::text AS t
+                              FROM public.upa_calcul_lunar WHERE luna = $1::date`, [luna])
+    const v = x ? [x.nma, x.rin, x.ded, x.p, x.ri, x.t] : null
+    tine(r?.inchis === true && JSON.stringify(v) === JSON.stringify(ast), `${luna} închis: așteptat ${JSON.stringify(ast)}, primit ${JSON.stringify(v)} (${JSON.stringify(r).slice(0, 80)})`)
+  }
+  await inchideLuna('2026-10-01', '2026-11-13', ['60.00', '0.00', '5190.00', '5190.00', '14810.00', '2026-11-25'])
+  await inchideLuna('2026-11-01', '2026-12-13', ['60.00', '14810.00', '5190.00', '5190.00', '9620.00', '2026-12-21'])
+  await inchideLuna('2026-12-01', '2027-01-13', ['60.00', '9620.00', '5190.00', '5190.00', '4430.00', '2027-01-25'])
+  // ianuarie 2027: reportul lui decembrie intră (nu expiră la 31.12); termenul implicit 25
+  let c = await calcul(db, '2027-01-01', '2027-02-13')
+  tine(n(c.report_intrat) === 4430 && n(c.deducere) === 4430 && n(c.de_plata) === 5950 && n(c.report_iesit) === 0 && c.termen_stat === '2027-02-25' && c.poate_inchide === true,
+    `ian 2027: report intrat 4.430 (peste 31.12), deducere 4.430, de plată 5.950, termenul implicit 25.02.2027 (${[c.report_intrat, c.deducere, c.de_plata, c.report_iesit, c.termen_stat].join(' ')} ${JSON.stringify(c.blocaje)})`)
+  // ziua termenului din ecran: 20 de la ianuarie 2027 -> 20.02.2027 (sâmbătă) -> luni 22.02; perioada ține și pentru februarie (20.03 sâmbătă -> 22.03)
+  let s = await seteaza(db, U.OWNER, 'termen_stat_zi', '2027-01-01', 20, null)
+  tine(!s.err, `owner-ul pune ziua 20 de la ianuarie 2027 (${s.err || 'ok'} ${s.msg || ''})`)
+  c = await calcul(db, '2027-01-01', '2027-02-13')
+  const tf = await q1(db, `SELECT public.fn_upa_termen_stat('2027-02-01')::text AS t`)
+  tine(c.termen_stat === '2027-02-22' && tf.t === '2027-03-22', `ziua 20: ianuarie -> 22.02.2027 (20 e sâmbătă), februarie -> 22.03.2027 (${c.termen_stat} ${tf.t})`)
+  // termenul e în amprentă: schimbat după afișare -> închiderea refuză (40001), nimic scris
+  const amp = c.amprenta
+  s = await seteaza(db, U.OWNER, 'termen_stat_zi', '2027-01-01', 19, 20)
+  tine(!s.err, `ziua 19 peste 20 (CAS cu valoarea văzută) (${s.err || 'ok'})`)
+  tine(/s-au schimbat/.test(await eroare(inchide(db, '2027-01-01', '2027-02-13', amp)) || '') && (await q1(db, `SELECT count(*)::int AS n FROM public.upa_calcul_lunar WHERE luna = '2027-01-01'`)).n === 0,
+    'ziua termenului schimbată după afișare: 40001, nimic scris')
+  await inchideLuna('2027-01-01', '2027-02-13', ['60.00', '4430.00', '4430.00', '5950.00', '0.00', '2027-02-19'])
+  // refuzuri: o lună închisă folosește ziua (UPA03, și pentru rândurile migrării); CAS vechi (40001); în afara 1..25 sau cu zecimale (22023); CHECK-ul tabelului
+  s = await seteaza(db, U.OWNER, 'termen_stat_zi', '2026-11-01', 25, 21)
+  tine(s.err === 'UPA03', `ziua termenului pentru noiembrie 2026 (închis): UPA03 (${s.err || 'trecut'})`)
+  s = await seteaza(db, U.OWNER, 'termen_stat_zi', '2026-12-01', 22, 25)
+  tine(s.err === 'UPA03', `ziua termenului pentru decembrie 2026 (închis): UPA03 (${s.err || 'trecut'})`)
+  s = await seteaza(db, U.OWNER, 'termen_stat_zi', '2027-01-01', 18, 20)
+  tine(s.err === '40001', `CAS: valoarea văzută veche (20, acum 19) -> 40001 (${s.err || 'trecut'})`)
+  for (const v of [0, 26, 21.5]) {
+    s = await seteaza(db, U.ED, 'termen_stat_zi', '2027-03-01', v, null)
+    tine(s.err === '22023', `ziua ${v}: 22023 (${s.err || 'trecut'})`)
+  }
+  tine(/upa_parametri_valoare/.test(await eroare(db.query(`INSERT INTO public.upa_parametri (cheie, de_la, valoare, sursa) VALUES ('termen_stat_zi', '2027-03-01', 26, 'migrare')`)) || ''),
+    'CHECK-ul tabelului refuză ziua 26')
+  s = await seteaza(db, U.ED, 'termen_stat_zi', '2027-03-01', 25, null)
+  tine(!s.err, `editorul pune ziua 25 de la martie 2027 (${s.err || 'ok'} ${s.msg || ''})`)
   return ab
 }
 const LEGACY = async db => { await db.query(`INSERT INTO public.upa_alerta_jurnal (cheie, fel, zi, luna, plafon, consumat, ramas, zile_ramase, nr_destinatari, nr_dest_ignorati, stare, eroare)
@@ -783,9 +859,11 @@ console.log('1. aplicarea ca la livrare (L15 v2) după 20261229a / b / c; reapli
   const j = await aplicaLivrare(db)
   ok(j.some(m => /^20270101a: lock la \d+ ms de la BEGIN \(1 incercari/.test(m)), 'blocul de lock: o încercare')
   ok(/reaplicare/.test(await eroare(aplica(db)) || ''), 'reaplicarea refuzată')
-  const p = (await db.query(`SELECT cheie, de_la::text AS d, valoare::text AS v, sursa FROM public.upa_parametri ORDER BY cheie`)).rows
-  ok(p.length === 2 && p[0].cheie === 'report_initial' && p[0].d === '2026-10-01' && p[0].v === '0.00' && p[1].cheie === 'salariu_minim' && p[1].d === '2026-07-01' && p[1].v === '4325.00',
-    `parametrii de start: ${JSON.stringify(p)}`)
+  const p = (await db.query(`SELECT cheie, de_la::text AS d, valoare::text AS v, sursa FROM public.upa_parametri ORDER BY cheie, de_la`)).rows
+  ok(p.length === 4 && p[0].cheie === 'report_initial' && p[0].d === '2026-10-01' && p[0].v === '0.00' && p[1].cheie === 'salariu_minim' && p[1].d === '2026-07-01' && p[1].v === '4325.00'
+    && p[2].cheie === 'termen_stat_zi' && p[2].d === '2026-11-01' && p[2].v === '21.00' && p[3].cheie === 'termen_stat_zi' && p[3].d === '2026-12-01' && p[3].v === '25.00'
+    && p.every(x => x.sursa === 'migrare'),
+    `parametrii de start (runda 6: + ziua termenului 21 din noiembrie 2026, 25 din decembrie 2026): ${JSON.stringify(p)}`)
   await db.close()
 }
 
@@ -848,6 +926,16 @@ console.log('3d. runda 4: CFS-ul și suspendările pe perioada actului (exemplel
   await db.close()
 }
 
+console.log('3e. runda 6 (experta, 25.11.2026): reportul peste 31.12, ziua termenului pe perioade (21.12.2026 pentru noiembrie), reportul inițial 0 la octombrie 2026')
+{
+  const db = await bazaProd({ date: BAZA + angajati() + PONTAJ_AN })
+  await aplica(db)
+  const ar = await reportPesteAn(db)
+  ar.forEach(a => console.log('     ' + a))
+  ok(ar.length === 0, `reportul peste an + termenul configurabil (${ar.length} abateri)`)
+  await db.close()
+}
+
 console.log('4. edge-ul (ruleazaAlertaUpa) pe BD-ul migrării, cu Resend simulat: alerta exactă după închidere și alerta zilei')
 {
   const db = await bazaProd()
@@ -876,8 +964,8 @@ console.log('4. edge-ul (ruleazaAlertaUpa) pe BD-ul migrării, cu Resend simulat
   ok(x.status === 200 && x.body.ok === true && x.body.trimis === 1 && trimise.length === 1, `15.11 (după închidere): un mail (${JSON.stringify(x.body).slice(0, 160)})`)
   ok(/^Fond handicap octombrie 2026: de plată la bugetul de stat 5\.730,63 lei până pe 25\.11\.2026$/.test(trimise[0]?.subject || ''), `subiectul exact: ${trimise[0]?.subject}`)
   // aici A = 6.000 (fără F-A3): deducere 5.730,62, de plată 5.730,63, report 6.000 − 5.730,62 = 269,38
-  ok(/Număr mediu de angajați/.test(trimise[0]?.html) && /66,24/.test(trimise[0]?.html) && /2,65/.test(trimise[0]?.html) && /269,38/.test(trimise[0]?.html)
-    && JSON.stringify(trimise[0]?.to) === '["ana@gazpet.ro","ion@gazpet.ro"]', 'corpul: NMA 66,24, locurile 2,65, reportul 269,38, doar destinatarii interni')
+  ok(/Număr mediu de angajați/.test(trimise[0]?.html) && /66,21/.test(trimise[0]?.html) && /2,65/.test(trimise[0]?.html) && /269,38/.test(trimise[0]?.html)
+    && JSON.stringify(trimise[0]?.to) === '["ana@gazpet.ro","ion@gazpet.ro"]', 'corpul: NMA 66,21, locurile 2,65, reportul 269,38, doar destinatarii interni')
   ok((await q1(db, `SELECT stare FROM public.upa_alerta_jurnal WHERE cheie = 'calcul:2026-10'`)).stare === 'trimis', 'jurnalul: trimis')
   azi = '2026-11-25'
   x = await MOD_EDGE.ruleazaAlertaUpa({ sb, fetchFn, resendKey: 'k' })
@@ -982,6 +1070,14 @@ if (!process.argv.includes('--fara-mutanti')) {
 console.log('7. MUTANȚI (amprenta oprită, ca să se vadă că probele de comportament îi prind; fiecare TREBUIE să pice)')
 const FARA_AMPRENTA = t => t.replace(/IF md5\(coalesce\(v_amp, ''\)\) IS DISTINCT FROM '[0-9a-f]{32}' THEN\n    RAISE NOTICE 'AMPRENTA_20270101a_TEXT/, "IF false THEN\n    RAISE NOTICE 'AMPRENTA_20270101a_TEXT")
 const unic = (t, din, in_) => { if (t.split(din).length !== 2) throw new Error('textul mutantului nu e unic: ' + din.slice(0, 80)); return t.split(din).join(in_) }
+// un mutant poate avea mai multe înlocuiri (liste paralele), de ex. regula + postcondiția care ar prinde-o la aplicare, ca să se vadă proba de comportament
+const muta = (t, din, in_) => Array.isArray(din) ? din.reduce((acc, d, k) => unic(acc, d, in_[k]), t) : unic(t, din, in_)
+// postcondiția termenelor (cele 4 date din migrare), scoasă la mutanții pe termen
+const POST_TERMEN = "     OR public.fn_upa_termen_stat(DATE '2026-10-01') IS DISTINCT FROM DATE '2026-11-25' OR public.fn_upa_termen_stat(DATE '2026-09-01') IS DISTINCT FROM DATE '2026-10-26'\n"
+  + "     OR public.fn_upa_termen_stat(DATE '2026-11-01') IS DISTINCT FROM DATE '2026-12-21' OR public.fn_upa_termen_stat(DATE '2026-12-01') IS DISTINCT FROM DATE '2027-01-25'\n"
+// --doar-mutanti <regex>: rulează doar mutanții al căror nume se potrivește (secțiunile 0–6 rulează oricum)
+const kDoar = process.argv.indexOf('--doar-mutanti')
+const DOAR_MUTANTI = kDoar > 0 ? new RegExp(process.argv[kDoar + 1]) : null
 // toate probele de comportament pe textul dat (scenariul A + drepturile; exemplele; tranzițiile)
 async function toate(t) {
   let ab = []
@@ -1004,6 +1100,10 @@ async function toate(t) {
     const d5 = await bazaProd({ date: BAZA + angajati() + SPECIALI + SUSP })
     try { await aplica(d5, t); ab = await suspendariPerioada(d5) } catch (e) { ab = ['excepție: ' + e.message] } finally { await d5.close() }
   }
+  if (!ab.length) {
+    const d6 = await bazaProd({ date: BAZA + angajati() + PONTAJ_AN })
+    try { await aplica(d6, t); ab = await reportPesteAn(d6) } catch (e) { ab = ['excepție: ' + e.message] } finally { await d6.close() }
+  }
   return ab
 }
 {
@@ -1021,7 +1121,10 @@ for (const [nume, din, in_] of [
   // NMA (P1-3)
   ['administratorul nu se scoate', "AND lower(btrim(s.calitate)) = 'administrator') AS admin", 'AND false) AS admin'],
   ['CFS citit pe alt cod', "WHEN upper(btrim(p)) = 'CFP' THEN 'cfs'", "WHEN upper(btrim(p)) = 'CFS' THEN 'cfs'"],
-  ['CM / BO / M numărate ca lucrate', "IN ('CM', 'BO', 'BP', 'AM', 'M') THEN 'suspendare'", "IN ('SUSP') THEN 'suspendare'"],
+  ['CM / BO / M numărate ca lucrate', "IN ('CM', 'BO', 'BP', 'AM', 'M', 'N') THEN 'suspendare'", "IN ('SUSP') THEN 'suspendare'"],
+  // runda 6: absența nemotivată numărată ca zi lucrată (regula de până la runda 6), cu postcondiția ei scoasă — trebuie prinsă de probele de comportament
+  ['absența nemotivată (N) numărată ca zi lucrată', ["IN ('CM', 'BO', 'BP', 'AM', 'M', 'N') THEN 'suspendare'", "OR public.fn_upa_cauza_cod('n ') IS DISTINCT FROM 'suspendare' "],
+    ["IN ('CM', 'BO', 'BP', 'AM', 'M') THEN 'suspendare'", 'OR false ']],
   ['sărbătorile legale ignorate', "  SELECT extract(isodow FROM p) < 6 AND NOT EXISTS (SELECT 1 FROM public.calendar_days c WHERE c.date = p AND c.type = 'legal')\n", '  SELECT extract(isodow FROM p) < 6\n'],
   ['ziua încetării exclusă', "AND c.d <= coalesce(e.termination_date, 'infinity'::date)),", "AND c.d < coalesce(e.termination_date, 'infinity'::date)),"],
   ['data angajării ignorată', 'WHERE c.d >= coalesce(e.hire_date, z.l0) AND', 'WHERE c.d >= z.l0 - 14 AND'],
@@ -1069,9 +1172,18 @@ for (const [nume, din, in_] of [
   ['fără TVA lipsă nu blochează', "IF v_ftva > 0 THEN v_bl := v_bl || ('achizitii_fara_tva:'", "IF false THEN v_bl := v_bl || ('achizitii_fara_tva:'"],
   ['reportul definitiv ignorat', 'SELECT c.report_iesit INTO v_rin FROM public.upa_calcul_lunar c', 'SELECT 0 INTO v_rin FROM public.upa_calcul_lunar c'],
   ['prima lună fără reportul inițial', "v_rin := public.fn_upa_parametru_la('report_initial', v_l);", 'v_rin := 100;'],
-  // termenul (P1-8)
-  ['termenul din decembrie pe 25', "  IF extract(month FROM v_t) = 12 THEN\n    v_t := make_date", "  IF false THEN\n    v_t := make_date"],
-  ['termenul nelucrător nemutat', '    WHILE NOT public.fn_upa_zi_lucratoare(v_t) LOOP\n      v_t := v_t + 1;', '    WHILE false LOOP\n      v_t := v_t + 1;'],
+  // runda 6: reportul expiră la sfârșitul anului (experta: NU expiră) — prins în 3e (ianuarie 2027 fără reportul lui decembrie)
+  ['reportul expiră la 31.12', 'SELECT c.report_iesit INTO v_rin FROM public.upa_calcul_lunar c',
+    'SELECT CASE WHEN extract(month FROM c.luna) = 12 THEN 0 ELSE c.report_iesit END INTO v_rin FROM public.upa_calcul_lunar c'],
+  // termenul (P1-8; runda 6: ziua pe perioade). Postcondiția termenelor e scoasă odată cu regula, ca să se vadă proba de comportament (3e / scenariul A)
+  ['termenul fix pe 25 (ziua configurată ignorată)', ["v_zi := coalesce(public.fn_upa_parametru_la('termen_stat_zi', p_luna), 25);", POST_TERMEN], ['v_zi := 25;', '']],
+  ['termenul fără implicitul 25 (fără rând = NULL, nu eroare)', ["v_zi := coalesce(public.fn_upa_parametru_la('termen_stat_zi', p_luna), 25);", POST_TERMEN],
+    ["v_zi := public.fn_upa_parametru_la('termen_stat_zi', p_luna);", '']],
+  ['termenul nelucrător nemutat', ['  WHILE NOT public.fn_upa_zi_lucratoare(v_t) LOOP\n    v_t := v_t + 1;', POST_TERMEN], ['  WHILE false LOOP\n    v_t := v_t + 1;', '']],
+  ['termenul nelucrător mutat înapoi (regula de până la runda 6 pentru 21.12)', ['    v_t := v_t + 1; v_n := v_n + 1;', POST_TERMEN], ['    v_t := v_t - 1; v_n := v_n + 1;', '']],
+  ['ziua termenului fără limita 1..25 în RPC', "\n     OR (p_cheie = 'termen_stat_zi' AND (p_valoare <> trunc(p_valoare) OR p_valoare < 1 OR p_valoare > 25)) THEN", ' THEN'],
+  ['CHECK-ul tabelului fără limita zilei termenului', "AND (cheie <> 'termen_stat_zi' OR (valoare = trunc(valoare) AND valoare BETWEEN 1 AND 25))", "AND (cheie <> 'termen_stat_zi' OR valoare = trunc(valoare))"],
+  ['termen_stat_zi necunoscut pentru RPC', "p_cheie NOT IN ('salariu_minim', 'angajati_handicap', 'report_initial', 'termen_stat_zi')", "p_cheie NOT IN ('salariu_minim', 'angajati_handicap', 'report_initial')"],
   // alerta (P1-6)
   ['alerta exactă doar la închiderea cronului', "  IF v_activ THEN\n    FOR r IN SELECT c.luna", "  IF false THEN\n    FOR r IN SELECT c.luna"],
   ['alerta exactă pe cheia veche', "WHEN 'calcul' THEN 'calcul:' || to_char(p_luna, 'YYYY-MM')", "WHEN 'calcul' THEN 'inchidere:' || to_char(p_luna, 'YYYY-MM')"],
@@ -1104,8 +1216,9 @@ for (const [nume, din, in_] of [
   ['a doua zi de Rusalii = Paște + 49', 'UNION SELECT p.paste + 50 FROM p', 'UNION SELECT p.paste + 49 FROM p'],
   ['situația fără identitate',"  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'upa: cont neautentificat' USING ERRCODE = '42501'; END IF;\n  RETURN public.fn_upa_situatie_la", '  RETURN public.fn_upa_situatie_la'],
 ]) {
+  if (DOAR_MUTANTI && !DOAR_MUTANTI.test(nume)) continue
   let t
-  try { t = unic(FARA_AMPRENTA(MIG), din, in_) } catch (e) { ok(false, `MUTANT ${nume}: nu se aplică (${e.message})`); continue }
+  try { t = muta(FARA_AMPRENTA(MIG), din, in_) } catch (e) { ok(false, `MUTANT ${nume}: nu se aplică (${e.message})`); continue }
   let prins = false, cum = ''
   const db = await bazaProd()
   const m = await eroare(aplica(db, t))

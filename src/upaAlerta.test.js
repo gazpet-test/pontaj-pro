@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest'
 import { lei, lunaText, zileText, mailUpa, cheieIdempotenta, ruleazaAlertaUpa, ADRESA_INTERNA, DOMENIU_INTERN, destinatariValizi, areCalcul, ziText } from '../supabase/functions/_shared/upaAlerta.mjs'
 import { validaSuma, validaFaraTva, stareCalculLuna, etichetaStare, textCod, nrZileLibere, leiSauLipsa, validaParametru, valoareVazuta, mesajParametru,
-         avertismenteAchizitie, lunaDinZi, luniInapoi, ziRO,
+         textValoareParametru, avertismenteAchizitie, lunaDinZi, luniInapoi, ziRO,
          stareSalvare, rezultatNesigur, poateScoatePdf, mesajRefuzAchizitie, CAMPURI_INTENTIE, numarFacturaUpa, refuzNumarFactura, mesajInsertUpa,
          pdfExistaDeja, caleaPdf, ordineFurnizori, paginaCuGarda, validaPlata, textPlata, validaPerioada, mesajPerioada, mesajInchidere } from './upaLogica.js'
 import { paginareKeyset } from './hrDeciziiUtil.js'
@@ -292,6 +292,15 @@ describe('ecranul (upaLogica)', () => {
     expect(validaParametru('angajati_handicap', '2026-10', '0')).toEqual({ de_la: '2026-10-01', valoare: 0 })
     expect(validaParametru('angajati_handicap', '2026-10', '1.5').eroare).toMatch(/întreg/)
     expect(validaParametru('report_initial', '2026-10', '0')).toEqual({ de_la: '2026-10-01', valoare: 0 })
+    // runda 6: ziua termenului la stat (experta: 21 pentru noiembrie 2026), zi întreagă 1..25
+    expect(validaParametru('termen_stat_zi', '2026-11', '21')).toEqual({ de_la: '2026-11-01', valoare: 21 })
+    expect(validaParametru('termen_stat_zi', '2026-12', '25')).toEqual({ de_la: '2026-12-01', valoare: 25 })
+    expect(validaParametru('termen_stat_zi', '2026-12', '0').eroare).toBeTruthy()
+    expect(validaParametru('termen_stat_zi', '2026-12', '26').eroare).toMatch(/între 1 și 25/)
+    expect(validaParametru('termen_stat_zi', '2026-12', '21.5').eroare).toMatch(/zi întreagă/)
+    expect(textValoareParametru('termen_stat_zi', '21.00')).toBe('ziua 21 a lunii următoare')
+    expect(textValoareParametru('angajati_handicap', '2.00')).toBe('2')
+    expect(textValoareParametru('salariu_minim', '4325.00')).toBe('4.325,00 lei')
     expect(validaParametru('alt', '2026-10', '1').eroare).toBeTruthy()
     expect(validaParametru('salariu_minim', '2026-13', '1').eroare).toBeTruthy()
     expect(validaParametru('salariu_minim', '', '1').eroare).toBeTruthy()

@@ -6,8 +6,9 @@
 --   fn_upa_campuri_intentie / fn_upa_hash_intentie nu au fost atinse: amprentele intențiilor fără valorile noi sunt EXACT cele din 20261229a,
 --   deci reîncercările lor rămân 'existent' și după revenire.
 -- REFUZĂ (nimic schimbat) dacă: amprenta COMPLETĂ a obiectelor migrării (blocul AMPRENTA, identic cu cel din postcondițiile migrării) diferă
---   de constanta revizuită, sau dacă au apărut DATE noi: o lună închisă, un parametru schimbat sau adăugat din ecran, o corecție HR, o
---   achiziție cu valoarea fără TVA / starea / data plății completate sau cu amprenta v2, un rând de jurnal de felul 'calcul'.
+--   de constanta revizuită, sau dacă au apărut DATE noi: o lună închisă, un parametru schimbat sau adăugat din ecran (față de cele 4 rânduri
+--   ale migrării: salariul minim, reportul inițial, ziua termenului 21 / 25), o corecție HR, o achiziție cu valoarea fără TVA / starea /
+--   data plății completate sau cu amprenta v2, un rând de jurnal de felul 'calcul'.
 --   Lock-urile se iau ÎNAINTE de verificări (L14). DROP fără CASCADE: o dependență nouă pe tabelele / funcțiile migrării oprește tranzacția.
 -- Ordinea: edge-ul upa-plafon-alerta v11 rămâne (merge cu ambele forme ale rezervării); ecranul se retrage ÎNAINTE (versiunea anterioară
 --   citește fn_upa_luni / upa_plafon_lunar, neatinse de migrare). Revenirea lui 20261229a / b / c se face DUPĂ aceasta (c -> b -> a vin după).
@@ -124,18 +125,21 @@ BEGIN
              'fn_upa_alerta_proba')
   ) x;
   -- AMPRENTA_20270101a_SFARSIT
-  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM 'a7d733df35de8abdc3ea18e4f2030667' THEN
+  IF md5(coalesce(v_amp, '')) IS DISTINCT FROM 'a7d5d33685bd2bdffa816515b5e6fd24' THEN
     RAISE NOTICE 'AMPRENTA_20270101a_TEXT %', v_amp;
-    RAISE EXCEPTION '20270101a revenire: AMPRENTA obiectelor % (asteptat a7d733df35de8abdc3ea18e4f2030667); nimic schimbat', md5(coalesce(v_amp, ''));
+    RAISE EXCEPTION '20270101a revenire: AMPRENTA obiectelor % (asteptat a7d5d33685bd2bdffa816515b5e6fd24); nimic schimbat', md5(coalesce(v_amp, ''));
   END IF;
   -- date noi = refuz (calculul închis, parametrii schimbați, corecțiile HR, achizițiile cu valori în coloanele noi, alerta exactă)
   IF EXISTS (SELECT 1 FROM public.upa_calcul_lunar) OR EXISTS (SELECT 1 FROM public.upa_calcul_angajat) THEN
     RAISE EXCEPTION '20270101a revenire: exista luni cu calculul inchis (upa_calcul_lunar); nimic schimbat';
   END IF;
-  IF (SELECT count(*) FROM public.upa_parametri) <> 2
+  -- runda 6: cele 4 rânduri ale migrării (salariul minim, reportul inițial 0, termenul 21 din noiembrie 2026 și 25 din decembrie 2026)
+  IF (SELECT count(*) FROM public.upa_parametri) <> 4
      OR (SELECT count(*) FROM public.upa_parametri p WHERE p.sursa = 'migrare' AND p.setat_de IS NULL
            AND ((p.cheie = 'salariu_minim' AND p.de_la = DATE '2026-07-01' AND p.valoare = 4325)
-                OR (p.cheie = 'report_initial' AND p.de_la = DATE '2026-10-01' AND p.valoare = 0))) <> 2 THEN
+                OR (p.cheie = 'report_initial' AND p.de_la = DATE '2026-10-01' AND p.valoare = 0)
+                OR (p.cheie = 'termen_stat_zi' AND p.de_la = DATE '2026-11-01' AND p.valoare = 21)
+                OR (p.cheie = 'termen_stat_zi' AND p.de_la = DATE '2026-12-01' AND p.valoare = 25))) <> 4 THEN
     RAISE EXCEPTION '20270101a revenire: parametrii au fost schimbati sau adaugati din ecran (upa_parametri); nimic schimbat';
   END IF;
   IF EXISTS (SELECT 1 FROM public.upa_angajat_perioade) THEN

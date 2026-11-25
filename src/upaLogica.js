@@ -182,17 +182,28 @@ export function stareCalculLuna(c) {
 export const etichetaStare = c => !c ? '' : c.stare === 'definitiv' ? 'EXACT (închis)' : c.stare === 'previziune' ? (c.pontaj_inchis ? 'DE ÎNCHIS' : 'PREVIZIUNE') : ''
 
 // ─── Parametrii pe perioade (upa_parametri, fn_upa_parametru_seteaza) ──────────────────────────────────────────────────
-export const CHEI_PARAMETRI = ['salariu_minim', 'angajati_handicap', 'report_initial']
-export const NUME_PARAMETRU = { salariu_minim: 'Salariul minim brut pe țară (lei)', angajati_handicap: 'Angajați cu handicap', report_initial: 'Report inițial (lei, prima lună a calculului)' }
+// termen_stat_zi (runda 6, experta contabilă 25.11.2026): ziua din luna următoare până la care se plătește la stat (fără rând = 25; 21 pentru
+//   noiembrie 2026); zi întreagă 1..25, aceeași regulă ca CHECK-ul upa_parametri_valoare și RPC-ul
+export const CHEI_PARAMETRI = ['salariu_minim', 'angajati_handicap', 'report_initial', 'termen_stat_zi']
+export const NUME_PARAMETRU = { salariu_minim: 'Salariul minim brut pe țară (lei)', angajati_handicap: 'Angajați cu handicap', report_initial: 'Report inițial (lei, prima lună a calculului)',
+  termen_stat_zi: 'Termenul de plată la stat (ziua din luna următoare; fără valoare = 25)' }
+export const TERMEN_ZI_MAX = 25
 // luna din ecran ('AAAA-LL') + valoarea -> argumentele RPC-ului, sau eroarea
 export function validaParametru(cheie, lunaText, text) {
   if (!CHEI_PARAMETRI.includes(cheie)) return { eroare: 'Alege parametrul.' }
   const m = /^(\d{4})-(\d{2})$/.exec(String(lunaText ?? ''))
   if (!m || Number(m[2]) < 1 || Number(m[2]) > 12) return { eroare: 'Alege luna de la care se aplică.' }
-  const v = validaSuma(text, { zero: cheie !== 'salariu_minim', ce: 'Valoarea' })
+  const v = validaSuma(text, { zero: cheie !== 'salariu_minim' && cheie !== 'termen_stat_zi', ce: 'Valoarea' })
   if (v.eroare) return v
   if (cheie === 'angajati_handicap' && !Number.isInteger(v.valoare)) return { eroare: 'Numărul angajaților cu handicap trebuie să fie întreg.' }
+  if (cheie === 'termen_stat_zi' && (!Number.isInteger(v.valoare) || v.valoare > TERMEN_ZI_MAX)) return { eroare: `Termenul e o zi întreagă a lunii următoare, între 1 și ${TERMEN_ZI_MAX}.` }
   return { de_la: `${m[1]}-${m[2]}-01`, valoare: v.valoare }
+}
+// valoarea unui parametru, pentru oameni (lista și mesajul de după salvare)
+export function textValoareParametru(cheie, valoare) {
+  if (cheie === 'angajati_handicap') return String(Number(valoare))
+  if (cheie === 'termen_stat_zi') return `ziua ${Number(valoare)} a lunii următoare`
+  return lei(valoare) + ' lei'
 }
 // valoarea văzută de om pentru rândul (cheie, de_la) — CAS-ul RPC-ului (p_vechi); null = rândul nu există
 export function valoareVazuta(parametri, cheie, deLa) {

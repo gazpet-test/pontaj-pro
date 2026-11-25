@@ -9,8 +9,10 @@
 // în BD (fn_upa_situatie / fn_upa_calcul_la = o singură definiție, L19): numărul mediu de
 // angajați pe zile calendaristice (runda 4: CFS, CM / BO / M și suspendările scad pe
 // perioada actului; pragul de 50 pe NMA-ul rotunjit), posturile = 4% cu 2 zecimale, salariul minim pe
-// perioade, achizițiile FĂRĂ TVA plătite până la sfârșitul lunii; excedentul se reportează;
-// plata la stat până pe 25 a lunii următoare (21.12 pentru noiembrie). Luna rămâne
+// perioade, achizițiile FĂRĂ TVA plătite până la sfârșitul lunii; excedentul se reportează
+// (și peste sfârșitul anului); plata la stat până la ziua din parametrul „termen” (implicit
+// 25 a lunii următoare; 21.12.2026 pentru noiembrie 2026, răspunsul expertei contabile
+// din 25.11.2026); absențele nemotivate (N) se scad din NMA ca suspendările. Luna rămâne
 // PREVIZIUNE până o închide OWNER-ul din ecran (din 13 a lunii următoare, fără blocaje),
 // pe amprenta datelor pe care le vede (o schimbare între timp = reîncarcă).
 // Plafonul fix din setări (7.000) nu mai e folosit: îl înlocuiește calculul.
@@ -28,7 +30,7 @@ import { paginareKeyset } from './hrDeciziiUtil.js'
 import { avertismenteAchizitie, ziRO, lunaDinZi, luniInapoi,
          stareSalvare, rezultatNesigur, poateScoatePdf, mesajRefuzAchizitie, pdfExistaDeja, caleaPdf, ordineFurnizori,
          paginaCuGarda, validaSuma, validaFaraTva, esteNumar, leiSauLipsa, textCod, nrZileLibere, stareCalculLuna, etichetaStare,
-         CHEI_PARAMETRI, NUME_PARAMETRU, validaParametru, valoareVazuta, mesajParametru,
+         CHEI_PARAMETRI, NUME_PARAMETRU, validaParametru, valoareVazuta, mesajParametru, textValoareParametru,
          validaPlata, textPlata, validaPerioada, mesajPerioada, mesajInchidere } from './upaLogica.js'
 
 const G = {
@@ -633,7 +635,7 @@ export default function UnitatiProtejate({ profile }) {
       if (!actiuneCurenta(ep)) return
       if (error) { setMesaj({ tip: error.code === '40001' ? 'warn' : 'error', text: mesajParametru(error) }); if (error.code === '40001') incarca(); return }
       setFormParam(null)
-      setMesaj({ tip:'success', text:`${NUME_PARAMETRU[formParam.cheie]}: ${formParam.cheie === 'angajati_handicap' ? v.valoare : lei(v.valoare) + ' lei'} de la ${fmtLuna(v.de_la)}.` })
+      setMesaj({ tip:'success', text:`${NUME_PARAMETRU[formParam.cheie]}: ${textValoareParametru(formParam.cheie, v.valoare)} de la ${fmtLuna(v.de_la)}.` })
       incarca()
     } catch (e) { if (actiuneCurenta(ep)) setMesaj({ tip:'error', text:'Nu știu dacă s-a salvat: ' + (e.message || e) + '. Reîncarc.' }); incarca() }
     finally { setLucrez(false) }
@@ -881,7 +883,7 @@ export default function UnitatiProtejate({ profile }) {
         </div>
       )}
 
-      {/* Parametrii calculului pe perioade (upa_parametri): salariul minim, angajații cu handicap, reportul inițial */}
+      {/* Parametrii calculului pe perioade (upa_parametri): salariul minim, angajații cu handicap, reportul inițial, ziua termenului la stat */}
       <div style={{...S.card, marginBottom:16, overflow:'hidden'}}>
         <div style={{padding:'11px 16px', background:G.bg, borderBottom:`1px solid ${G.border}`, fontSize:13, fontWeight:800, display:'flex', justifyContent:'space-between', alignItems:'center', gap:10, flexWrap:'wrap'}}>
           <span>⚙️ Parametrii calculului (pe perioade)</span>
@@ -896,7 +898,7 @@ export default function UnitatiProtejate({ profile }) {
             <label style={{flex:'0 1 160px'}}><span style={S.label}>De la luna</span>
               <input style={S.input} type="month" value={formParam.luna} onChange={e => setFormParam(p => ({ ...p, luna: e.target.value }))} /></label>
             <label style={{flex:'0 1 140px'}}><span style={S.label}>Valoare</span>
-              <input style={S.input} type="number" step={formParam.cheie === 'angajati_handicap' ? '1' : '0.01'} value={formParam.valoare} onChange={e => setFormParam(p => ({ ...p, valoare: e.target.value }))} /></label>
+              <input style={S.input} type="number" step={formParam.cheie === 'angajati_handicap' || formParam.cheie === 'termen_stat_zi' ? '1' : '0.01'} value={formParam.valoare} onChange={e => setFormParam(p => ({ ...p, valoare: e.target.value }))} /></label>
             <button onClick={salveazaParametru} disabled={lucrez} style={S.btnP}>Salvează</button>
             <button onClick={() => setFormParam(null)} style={S.btnS}>✕</button>
             <div style={{fontSize:11, color:G.dim, flexBasis:'100%'}}>Valoarea se aplică de la luna aleasă până la următoarea valoare; lunile deja închise nu se recalculează.</div>
@@ -908,10 +910,11 @@ export default function UnitatiProtejate({ profile }) {
             <div key={k} style={{padding:'9px 16px', borderBottom:`1px solid ${G.border2}`, fontSize:12.5}}>
               <div style={{fontWeight:700, marginBottom:3}}>{NUME_PARAMETRU[k]}</div>
               {r.length === 0
-                ? <div style={{color:G.yellow, fontSize:12}}>neînregistrat — {k === 'angajati_handicap' ? 'calculul nu se poate face până nu se înregistrează (și 0, dacă nu sunt)' : 'de completat'}</div>
+                ? <div style={{color: k === 'termen_stat_zi' ? G.muted : G.yellow, fontSize:12}}>{k === 'termen_stat_zi' ? 'fără valoare: 25 a lunii următoare (zi nelucrătoare → următoarea zi lucrătoare)'
+                    : 'neînregistrat — ' + (k === 'angajati_handicap' ? 'calculul nu se poate face până nu se înregistrează (și 0, dacă nu sunt)' : 'de completat')}</div>
                 : r.map(p => (
                   <div key={p.cheie + p.de_la} style={{color:G.muted, fontSize:12}}>
-                    de la {fmtLuna(p.de_la)}: <b style={{color:G.text}}>{k === 'angajati_handicap' ? Number(p.valoare) : lei(p.valoare) + ' lei'}</b>
+                    de la {fmtLuna(p.de_la)}: <b style={{color:G.text}}>{textValoareParametru(k, p.valoare)}</b>
                     {p.nota ? <span style={{color:G.dim}}> · {p.nota}</span> : null}
                   </div>
                 ))}
