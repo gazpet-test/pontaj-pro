@@ -468,7 +468,8 @@ function Get-ProblemaPunte([hashtable]$Stare, [datetime]$Acum, $LoginRevalidatLa
 #     pasii: cerut (decizia porneste puntea cu --session-id) -> in-curs (pornita) -> conectata (s-a conectat: mediul sesiunii
 #            e reinviat) -> revenire (puntea normala pornita, va refolosi mediul) -> gata (mediul puntii normale = cel reatasat)
 function New-MemoriePunte {
-  @{ mediu = $null; sesiune = $null; sesiuniActive = @(); cunoscutLa = $null; negasite = @{}; renuntari = @{}; mediuPierdutTratatLa = $null; reatasare = $null }
+  @{ mediu = $null; sesiune = $null; sesiuniActive = @(); cunoscutLa = $null; negasite = @{}; renuntari = @{}; mediuPierdutTratatLa = $null; reatasare = $null
+     rezervareRevenire = $null }   # ora rezervarii din istoric pentru intoarcerea la puntea normala (plafonul 3/ora bugetat pe dus-intors)
 }
 
 function Get-MemoriePunte([hashtable]$Sup, [string]$Nume) {
@@ -555,7 +556,11 @@ function Update-Reatasare([hashtable]$Mem, [hashtable]$Stare, [bool]$Vie, [datet
       }
       return $mes.ToArray()
     }
-    # puntea de reatasare a iesit
+    # puntea de reatasare a iesit: iesirea ei se trateaza O data (starea ramane pe disc si la rularile urmatoare, de ex. cat
+    # asteptam plafonul 3/ora; altfel fiecare rulare ar "arde" o candidata sau ar numara o incercare in plus)
+    $cheieIesire = [string]$Stare.pidClaude + '@' + [string]$Stare.iesitLa
+    if ([string]$R.iesireTratata -eq $cheieIesire) { return $mes.ToArray() }
+    $R.iesireTratata = $cheieIesire
     if ($R.pas -eq 'conectata' -or $Stare.aFostConectat) {
       # s-a conectat (mediul sesiunii e reinviat), apoi a iesit (modul cu o sesiune iese cand sesiunea se termina): revin la normal
       if ($R.pas -ne 'conectata') { $R.pas = 'conectata'; $R.conectataLa = $iso }
@@ -586,13 +591,29 @@ function Update-Reatasare([hashtable]$Mem, [hashtable]$Stare, [bool]$Vie, [datet
       [void]$mes.Add((Set-EsecReatasare $Mem $R $iso 'puntea de reatasare nu a pornit'))
       return $mes.ToArray()
     }
-    if (($R.pas -eq 'revenire' -or $R.pas -eq 'conectata') -and $Vie -and $Stare.stare -eq 'conectat' -and $alNostru) {
-      if (-not $R.mediuReatasat -or [string]$ind.mediu -eq [string]$R.mediuReatasat) {
-        Set-MemorieDinIndicator $Mem $ind $Acum
-        $Mem.reatasare = $null
-        [void]$mes.Add(('reatasare incheiata: sesiunea {0} e servita din nou, puntea normala refoloseste mediul ei' -f $R.sesiune))
-      } else {
-        [void]$mes.Add((Set-EsecReatasare $Mem $R $iso 'puntea normala a primit alt mediu decat cel reatasat'))
+    if (($R.pas -eq 'revenire' -or $R.pas -eq 'conectata') -and $Vie) {
+      # revenirea se incheie cu un rezultat EXPLICIT, cu termen (Jakarinos r1 P1): confirmat (indicatorul puntii noastre = mediul
+      # reatasat), esuat (alt mediu / CLI-ul spune ca nu a putut refolosi) sau necunoscut (fara indicator al ei dupa PragReatasareMin)
+      if ($Stare.mediuPierdutLa -and [string]$Stare.mediuPierdutLa -ne [string]$Mem.mediuPierdutTratatLa) {
+        $Mem.mediuPierdutTratatLa = $Stare.mediuPierdutLa
+        [void]$mes.Add((Set-EsecReatasare $Mem $R $iso 'CLI-ul spune ca puntea normala nu a putut refolosi mediul reatasat'))
+        return $mes.ToArray()
+      }
+      if ($Stare.stare -eq 'conectat') {
+        if ($alNostru) {
+          if (-not $R.mediuReatasat -or [string]$ind.mediu -eq [string]$R.mediuReatasat) {
+            Set-MemorieDinIndicator $Mem $ind $Acum
+            $Mem.reatasare = $null
+            [void]$mes.Add(('reatasare incheiata: sesiunea {0} e servita din nou, puntea normala refoloseste mediul ei' -f $R.sesiune))
+          } else {
+            [void]$mes.Add((Set-EsecReatasare $Mem $R $iso 'puntea normala a primit alt mediu decat cel reatasat'))
+          }
+        } else {
+          $min = Get-MinuteDeLa $Stare.pornitLa $Acum
+          if ($null -ne $min -and $min -ge $script:PragReatasareMin) {
+            [void]$mes.Add((Set-EsecReatasare $Mem $R $iso ('nu pot confirma mediul puntii normale dupa {0:N0} min (indicatorul lipseste sau nu e al ei) - rezultat necunoscut' -f $min)))
+          }
+        }
       }
     }
     return $mes.ToArray()   # cerut: decizia porneste reatasarea; conectata/revenire fara punte conectata: astept
@@ -640,7 +661,7 @@ function Get-DecizieSupraveghere {
     $Istoric, [datetime]$Acum,
     [hashtable]$Mem = $null, [string]$Strain = ''
   )
-  $d = [ordered]@{ Actiune = 'nimic'; Motiv = ''; LimitaAtinsa = $false; CereInternetStabil = $false; Mod = 'normal'; Sesiune = $null; DejaServit = $false }
+  $d = [ordered]@{ Actiune = 'nimic'; Motiv = ''; LimitaAtinsa = $false; CereInternetStabil = $false; Mod = 'normal'; Sesiune = $null; DejaServit = $false; Revenire = $false }
   if ($Veche) { $d.Motiv = "punte veche activa ($Veche); nu pornesc dublura"; return [pscustomobject]$d }
   if ($Strain) { $d.Motiv = "$Strain; nu pornesc dublura"; return [pscustomobject]$d }
   $R = $null
@@ -650,7 +671,7 @@ function Get-DecizieSupraveghere {
   $vie = $ReleuViu -and $ClaudeViu
   if ($vie) {
     if ($modStare -eq 'reatasare') {
-      if ($R -and $R.pas -eq 'conectata') { $d.Motiv = ('reatasare: sesiunea {0} e servita din nou; revin la puntea normala (toate sesiunile)' -f $R.sesiune); $tinta = 'reporneste' }
+      if ($R -and $R.pas -eq 'conectata') { $d.Motiv = ('reatasare: sesiunea {0} e servita din nou; revin la puntea normala (toate sesiunile)' -f $R.sesiune); $tinta = 'reporneste'; $d.Revenire = $true }
       elseif ($R -and $R.pas -eq 'cerut') { $d.Motiv = ('reatasare: incerc din nou sesiunea {0}' -f $R.sesiune); $tinta = 'reporneste'; $d.Mod = 'reatasare'; $d.Sesiune = [string]$R.sesiune }
       elseif ($null -eq $R) { $d.Motiv = 'punte de reatasare fara reatasare in memorie; revin la puntea normala'; $tinta = 'reporneste' }
       else { return [pscustomobject]$d }   # in-curs: astept conectarea (cel mult PragReatasareMin, apoi Update-Reatasare o declara esuata)
@@ -681,16 +702,25 @@ function Get-DecizieSupraveghere {
       }
     }
     if ($R -and $R.pas -eq 'cerut') { $d.Mod = 'reatasare'; $d.Sesiune = [string]$R.sesiune; $d.Motiv += ('; reatasez sesiunea {0}' -f $R.sesiune) }
+    elseif ($R -and $R.pas -eq 'conectata' -and $modStare -eq 'reatasare') { $d.Revenire = $true; $d.Motiv += ('; reatasare: revin la puntea normala pentru sesiunea {0}' -f $R.sesiune) }
   }
   if (-not $InternetOk) { $d.Actiune = 'asteapta'; $d.Motiv += '; fara internet'; return [pscustomobject]$d }
   if ($d.CereInternetStabil -and $InternetStabilMin -lt $script:InternetStabilMin) {
     $d.Actiune = 'asteapta'; $d.Motiv += ('; internetul e inapoi doar de {0:N0} min' -f $InternetStabilMin); return [pscustomobject]$d
   }
   if ($LoginValid -eq $false) { $d.Actiune = 'asteapta'; $d.Motiv += '; login expirat/invalid - repornirea nu ajuta, vezi alarma'; return [pscustomobject]$d }
+  # Plafonul 3/ora, bugetat pe toata succesiunea (Jakarinos r1 P2): reatasarea = 2 porniri (dus cu --session-id + intors la normal);
+  # porneste doar daca incap AMANDOUA, iar intoarcerea e rezervata atunci (nu mai consuma la randul ei) -> puntea cu o singura
+  # sesiune nu ramane blocata de plafon. Nimic nu ocoleste plafonul: 2 rezervari = 2 porniri reale.
   $lim = Test-PotPorni -Istoric $Istoric -Acum $Acum
-  if (-not $lim.Permis) {
+  $rezervat = [bool]($Mem -and $Mem.rezervareRevenire)
+  $necesar = 1
+  if ($d.Mod -eq 'reatasare' -and -not $rezervat) { $necesar = 2 }   # dus + intors; o noua incercare refoloseste intoarcerea deja rezervata
+  if ($d.Revenire -and $rezervat) { $necesar = 0 }
+  if ($lim.Numar + $necesar -gt $script:MaxPorniriPeOra) {
     $d.Actiune = 'asteapta'; $d.LimitaAtinsa = $true
-    $d.Motiv += ('; limita de {0} porniri/ora atinsa - doar avertisment' -f $script:MaxPorniriPeOra)
+    if ($necesar -eq 2) { $d.Motiv += ('; reatasarea cere {0} porniri (dus si intors) in plafonul de {1}/ora - amanata' -f $necesar, $script:MaxPorniriPeOra) }
+    else { $d.Motiv += ('; limita de {0} porniri/ora atinsa - doar avertisment' -f $script:MaxPorniriPeOra) }
     return [pscustomobject]$d
   }
   $d.Actiune = $tinta
@@ -1122,10 +1152,23 @@ function Invoke-Supervizor([hashtable]$Dep, [datetime]$Acum, [switch]$DoarVerifi
     $c = $sup.conturi[$k]
     $ist = @()
     if ($sup.istoric[$p.Nume]) { $ist = @($sup.istoric[$p.Nume]) }
-    # v3: memoria puntii (mediu + sesiuni cunoscute) si pasii reatasarii, actualizate din ce a vazut releul
+    # v3: memoria puntii (mediu + sesiuni cunoscute) si pasii reatasarii, actualizate din ce a vazut releul.
+    # Indicatorul citit acum de supervizor, daca e al puntii noastre (pid = claude.exe-ul releului), e mai proaspat decat
+    # ce a scris releul si acopera si puntile v2 inca vii (starea lor nu are "indicator") - Jakarinos r1 P2.
     $mem = Get-MemoriePunte -Sup $sup -Nume $p.Nume
     $vieAcum = [bool]($i.ReleuViu -and $i.ClaudeViu)
+    if ($i.Stare -is [hashtable] -and $i.Indicator -is [hashtable] -and [int]$i.Indicator.pid -gt 0 -and [int]$i.Indicator.pid -eq [int]$i.Stare.pidClaude) {
+      $i.Stare.indicator = $i.Indicator
+    }
     foreach ($mr in @(Update-Reatasare -Mem $mem -Stare $i.Stare -Vie $vieAcum -Acum $acumU)) { & $jurnal "[$($p.Nume)] $mr" }
+    if ($mem.rezervareRevenire -and $null -eq $mem.reatasare) {
+      # reatasarea s-a incheiat fara intoarcere (renunt / nicio candidata): eliberez rezervarea intoarcerii din istoric
+      $rest = New-Object System.Collections.ArrayList; $scos = $false
+      foreach ($x in @($sup.istoric[$p.Nume])) { if (-not $scos -and [string]$x -eq [string]$mem.rezervareRevenire) { $scos = $true; continue }; [void]$rest.Add($x) }
+      $sup.istoric[$p.Nume] = @($rest.ToArray())
+      $ist = @($sup.istoric[$p.Nume])
+      $mem.rezervareRevenire = $null
+    }
     $d = Get-DecizieSupraveghere -Punte $p -Stare $i.Stare -ReleuViu $i.ReleuViu -ClaudeViu $i.ClaudeViu -Veche $i.Veche `
          -InternetOk $netOk -InternetStabilMin $stabil -LoginValid $c.Valid -LoginRevalidatLa $c.RevalidatLa -Istoric $ist -Acum $acumU `
          -Mem $mem -Strain $i.Strain
@@ -1159,17 +1202,30 @@ function Invoke-Supervizor([hashtable]$Dep, [datetime]$Acum, [switch]$DoarVerifi
     if ($DoarVerifica) { continue }
     # Rezervarea in istoric se SALVEAZA inainte de efect (Jakarinos r1 P1, L02/L04): o exceptie mai jos sau o rulare
     # intrerupta nu pot ocoli limita de 3/ora. Daca starea nu se poate salva, nu actionam (L05: necunoscut = nu risc).
-    $sup.istoric[$p.Nume] = @(@($sup.istoric[$p.Nume]) + @(Get-DataIso $acumU) | Where-Object { $_ })
-    # v3: pasul reatasarii se noteaza tot inainte de efect. Punte normala: adopt indicatorul existent (mediul in care sunt
-    # sesiunile acum: al puntii noastre dinainte sau al uneia straine care s-a oprit); dupa reatasare = mediul reinviat.
     $R = $mem.reatasare
+    # rezervarile: 1 pornire; prima reatasare rezerva 2 (dus + intors, intoarcerea notata in mem.rezervareRevenire), o noua
+    # incercare 1 (intoarcerea e deja rezervata), iar intoarcerea rezervata nu mai adauga nimic (vezi decizia)
+    $rezervari = @(Get-DataIso $acumU)
+    if ($d.Mod -eq 'reatasare') {
+      if (-not $mem.rezervareRevenire) { $mem.rezervareRevenire = Get-DataIso $acumU; $rezervari += $mem.rezervareRevenire }
+    } elseif ($d.Revenire -and $mem.rezervareRevenire) { $rezervari = @(); $mem.rezervareRevenire = $null }
+    $sup.istoric[$p.Nume] = @(@($sup.istoric[$p.Nume]) + $rezervari | Where-Object { $_ })
+    # v3: pasul reatasarii se noteaza tot inainte de efect. Punte normala fara reatasare: indicatorul existent (al puntii noastre
+    # dinainte sau al unei punti straine oprite) e adoptat DOAR daca nu contrazice memoria: acelasi mediu, sau nu stim niciun
+    # mediu / nicio sesiune de pastrat. Alt mediu cu sesiuni cunoscute NU se adopta (Jakarinos r1 P1): puntea noua il va refolosi,
+    # diferenta fata de memorie porneste reatasarea, iar CLI-ul (--session-id -> mediul sesiunii, de la server) reconciliaza.
     if ($d.Mod -eq 'reatasare') {
       if ($R -is [hashtable]) { $R.pas = 'in-curs'; $R.pornitaLa = Get-DataIso $acumU }
     } elseif ($R -is [hashtable] -and ($R.pas -eq 'conectata' -or $R.pas -eq 'revenire')) {
       $R.pas = 'revenire'
       if ($i.Indicator -and (Test-IdSigur ([string]$i.Indicator.mediu))) { $R.mediuReatasat = [string]$i.Indicator.mediu }
-    } elseif ($null -eq $R) {
-      Set-MemorieDinIndicator $mem $i.Indicator $acumU
+    } elseif ($null -eq $R -and $i.Indicator -is [hashtable] -and (Test-IdSigur ([string]$i.Indicator.mediu))) {
+      $cand = @(Get-SesiuniDeReatasat $mem)
+      if (-not (Test-IdSigur ([string]$mem.mediu)) -or $cand.Count -eq 0 -or [string]$i.Indicator.mediu -eq [string]$mem.mediu) {
+        Set-MemorieDinIndicator $mem $i.Indicator $acumU
+      } else {
+        & $jurnal ("[{0}] indicatorul folderului arata alt mediu ({1}) decat cel cunoscut ({2}, cu {3} sesiuni); nu il adopt - puntea noua il va verifica prin reatasare" -f $p.Nume, $i.Indicator.mediu, $mem.mediu, $cand.Count)
+      }
     }
     if (-not (& $Dep.ScrieStareSup $sup)) {
       & $jurnal "[$($p.Nume)] EROARE: nu pot salva starea supervizorului; nu actionez in aceasta rulare"

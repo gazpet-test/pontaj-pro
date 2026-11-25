@@ -23,7 +23,7 @@ Lista e definită o singură dată, în `Get-ConfigPunti` din `punti_lib.ps1`.
 | `punte_releu.ps1` | **releul**: câte unul per punte, pornește `claude remote-control` și îi citește ieșirea; trăiește cât puntea. |
 | `punti_lib.ps1` | funcțiile comune (config, clasificarea ieșirii, decizii, login, alarmă, procese). |
 | `instaleaza.ps1` | instalare / dezinstalare (cere admin). |
-| `autotest_punti.ps1` | teste fără rețea (248 de verificări). |
+| `autotest_punti.ps1` | teste fără rețea (267 de verificări). |
 
 Unde scriu:
 - `C:\Users\Public\paw-data\punti\punti.log` — jurnalul (citit de chat). Mascat: fără URL-uri, id-uri de sesiune, tokenuri, emailuri.
@@ -97,12 +97,16 @@ reatasare: puntea cu sesiunea <session-id> s-a conectat ...                     
 reatasare incheiata: sesiunea <session-id> e servita din nou, puntea normala refoloseste mediul ei
 ```
 
-Puntea normală pornită după reatașare citește indicatorul scris de puntea de reatașare (mediul reînviat) și îl refolosește → sesiunea reatașată, plus toate celelalte de pe acel mediu, cu capacitatea normală. Memoria (`supervizor.json` → `punti.<nume>`): `mediu`, `sesiune` (cea din indicator, prima încercată), `sesiuniActive` (celelalte cunoscute, inclusiv sesiunea principală de dinainte), `negasite`, `renuntari`, `reatasare` (pasul curent).
+Puntea normală pornită după reatașare citește indicatorul scris de puntea de reatașare (mediul reînviat) și îl refolosește → sesiunea reatașată, plus toate celelalte de pe acel mediu, cu capacitatea normală. Memoria (`supervizor.json` → `punti.<nume>`): `mediu`, `sesiune` (cea din indicator, prima încercată), `sesiuniActive` (celelalte cunoscute, inclusiv sesiunea principală de dinainte), `negasite`, `renuntari`, `reatasare` (pasul curent), `rezervareRevenire`.
+
+Revenirea se încheie întotdeauna cu un rezultat explicit, cu termen: **confirmată** (indicatorul puntii normale, scris de ea, arată mediul reatașat), **eșuată** (alt mediu, sau CLI-ul scrie „Could not reuse…”) sau **necunoscută** (după 10 min puntea normală e conectată, dar indicatorul lipsește ori nu e al ei) — ultimele două se numără ca încercare eșuată.
+
+Ce **nu** se adoptă orbește: la o pornire normală, indicatorul lăsat în folder de o punte oprită (a noastră sau străină) e preluat în memorie doar dacă arată același mediu, sau dacă memoria nu știe încă nici mediu, nici sesiuni. Dacă arată **alt mediu** iar memoria are sesiuni, supervizorul scrie în jurnal și nu îl adoptă: puntea nouă îl va refolosi, diferența față de memorie pornește reatașarea, iar reconcilierea o face serverul prin `--session-id` (CLI-ul cere mediul sesiunii) — dacă sesiunea a fost mutată de cealaltă punte pe mediul nou, dus-întorsul confirmă asta și memoria trece pe mediul nou; dacă nu, mediul vechi e reînviat.
 
 Limite ale reatașării, intenționate:
-- cele 2–3 porniri ale reatașării intră în plafonul de **3 porniri/oră** (o pierdere de mediu pe oră se repară singură; mai mult = așteaptă, cu avertisment);
+- plafonul de **3 porniri/oră** e bugetat pe tot dus-întorsul: reatașarea pornește numai dacă încap **două** porniri (dus cu `--session-id` + întors la normal), întoarcerea fiind rezervată atunci; altfel e amânată (avertisment o dată pe oră) și sesiunile rămân „Environment deleted” până încap — ca azi, dar niciodată puntea cu o singură sesiune nu rămâne blocată de plafon. Nimic nu ocolește plafonul: 2 rezervări = 2 porniri reale; o rezervare neconsumată (renunț, nicio candidată) e eliberată;
 - dacă puntea normală primește din nou alt mediu după reatașare, se mai încearcă **o dată**; a doua eșuare = se renunță la acea sesiune (rămâne „de verificat în aplicație”, în jurnal) și se reține mediul nou;
-- puntea de reatașare neconectată după 10 min = încercare eșuată; ea nu trece prin regulile de repornire (în modul cu o sesiune titlul sesiunii stă chiar în linia de stare, deci clasificarea ieșirii nu e sigură) și trăiește cel mult până la rularea următoare;
+- puntea de reatașare neconectată după 10 min = încercare eșuată; ea nu trece prin regulile de repornire (în modul cu o sesiune titlul sesiunii stă chiar în linia de stare, deci clasificarea ieșirii nu e sigură) și trăiește cel mult până la rularea următoare; ieșirea ei se tratează o singură dată (starea rămâne pe disc);
 - fără sesiune cunoscută (prima instalare, id lipsă sau invalid) → comportamentul de azi: mediul nou e doar reținut, fără reatașare;
 - id-urile de sesiune ajung pe linia de comandă numai dacă trec de `Test-IdSigur` (`^[A-Za-z0-9][A-Za-z0-9_-]{3,79}$`); în jurnal apar mascate (`<session-id>`, `<env-id>`).
 
@@ -163,7 +167,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\Gazpet\Punti\
 
 ### Trecerea v2 → v3 (același instalator, aceleași 3 fișiere)
 
-Rulezi `instaleaza.ps1` ca mai sus: copiază fișierele noi peste cele vechi (ACL verificat), re-creează sarcina (identică) și o pornește o dată. Punțile v2 pornite **rămân pornite**: starea lor (`<nume>.stare.json`, fără câmpurile v3) e citită ca „mod normal”, iar la prima rulare supervizorul adoptă din indicatorul CLI-ului mediul și sesiunea fiecărei punți vii (rând nou `punti` în `supervizor.json`). Nicio repornire doar pentru upgrade; releele v3 intră în joc când o punte cade sau e repornită.
+Rulezi `instaleaza.ps1` ca mai sus: copiază fișierele noi peste cele vechi (ACL verificat), re-creează sarcina (identică) și o pornește o dată. Punțile v2 pornite **rămân pornite**: starea lor (`<nume>.stare.json`, fără câmpurile v3) e citită ca „mod normal”, iar la prima rulare supervizorul citește el indicatorul CLI-ului al fiecărei punți vii (PID-ul din indicator = `claude.exe`-ul ei) și memorează mediul și sesiunea (rând nou `punti` în `supervizor.json`) — nu așteaptă un releu v3. Nicio repornire doar pentru upgrade; releele v3 intră în joc când o punte cade sau e repornită.
 
 Dacă o punte a rămas în bucla „deja servit” (ca pe 25.11): v3 o vede în `<nume>.stare.json` abia după prima ieșire citită de un releu v3; până atunci regula veche (3/oră) o oprește oricum. Dacă indicatorul folderului are un scriitor viu (puntea pornită de mână), supervizorul scrie o dată „alta punte serveste folderul (claude PID N)” și nu pornește nimic; când acea punte se oprește, pornește puntea normală, care refolosește mediul ei.
 
@@ -196,7 +200,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\server\punti\autotes
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\server\punti\autotest_punti.ps1 -FaraProcese
 ```
 
-Fără rețea și fără `claude.exe`: clasificarea liniilor reale ale punții, detecția „deconectat > 10 min”, limita de 3 reporniri/oră, lipsa tokenului și mediul curățat, internet picat → revenit, login expirat / reînnoit / necunoscut și alarma, punți vechi (fără dubluri), mascarea textelor, fișierele de stare; v3: clasificarea stderr-ului (texte verbatim), indicatorul CLI-ului (cheia folderului, FILETIME, scriitor viu/străin), pașii reatașării (pure + lumea falsă: pana din 25.11 rejucată, eșec → renunțare, sesiune negăsită → următoarea, „deja servit” fără buclă, punte străină, id lipsă/invalid); plus integrare cu procese reale (releu + punte falsă care scrie și pe stderr „deja servit” + „Exiting in about”, releu în mod reatașare cu `--session-id` și indicator, id nesigur refuzat, mutex cu două relee concurente, oprire verificată).
+Fără rețea și fără `claude.exe`: clasificarea liniilor reale ale punții, detecția „deconectat > 10 min”, limita de 3 reporniri/oră, lipsa tokenului și mediul curățat, internet picat → revenit, login expirat / reînnoit / necunoscut și alarma, punți vechi (fără dubluri), mascarea textelor, fișierele de stare; v3: clasificarea stderr-ului (texte verbatim), indicatorul CLI-ului (cheia folderului, FILETIME, scriitor viu/străin), pașii reatașării (pure + lumea falsă: pana din 25.11 rejucată, eșec → renunțare, revenire fără indicator → „necunoscut” cu termen, sesiune negăsită → următoarea, ieșire tratată o dată, bugetul 2 porniri în plafon + rezervare eliberată, indicator străin cu alt mediu neadoptat → reconciliat prin reatașare, punte v2 vie memorată la upgrade, „deja servit” fără buclă, punte străină, id lipsă/invalid, `-DoarVerifica`); plus integrare cu procese reale (releu + punte falsă care scrie și pe stderr „deja servit” + „Exiting in about”, releu în mod reatașare cu `--session-id` și indicator, id nesigur refuzat, mutex cu două relee concurente, oprire verificată).
 
 ## Limite cunoscute
 
