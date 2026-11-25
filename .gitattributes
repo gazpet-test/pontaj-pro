@@ -1,3 +1,7 @@
 *.sh text eol=lf
 *.l15.tsv text eol=lf
 scripts/amprenta_globala_v2.sql text eol=lf
+*.l15.obiecte.tsv text eol=lf
+supabase/migrations/20270112a_ofertare_cantitati_masuratori.sql text eol=lf
+supabase/revenire/20270112a_ofertare_cantitati_masuratori_ROLLBACK.sql text eol=lf
+supabase/tests/20270112a_* text eol=lf

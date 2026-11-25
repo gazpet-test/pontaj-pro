@@ -104,7 +104,8 @@ astept() { if [ "$2" = "$1" ]; then echo "      ok  $3 → $2"; else echo "     
 potriveste() { case "$2" in $1) echo "      ok  $3 → $2";; *) echo "      ABATERE  $3 → $2 (astepta $1)"; esec=$((esec + 1));; esac; }
 q() { psql -X -q -w -v ON_ERROR_STOP=1 -d "$BAZA" -tAc "$1"; }
 U_OWNER=00000000-0000-4000-8000-0000000000d1; U_RESP=00000000-0000-4000-8000-0000000000d3; U_OF=00000000-0000-4000-8000-0000000000d2
-ca() { printf "SET LOCAL ROLE authenticated; SELECT set_config('request.jwt.claim.sub', '%s', true);" "$1"; }
+# JWT ca PostgREST: AMBELE surse (request.jwt.claim.sub și request.jwt.claims cu rolul) — triggerul de proveniență citește rolul din claims
+ca() { printf "SET LOCAL ROLE authenticated; SELECT set_config('request.jwt.claim.sub', '%s', true); SELECT set_config('request.jwt.claims', '{\"sub\": \"%s\", \"role\": \"authenticated\"}', true);" "$1" "$1"; }
 caService() { printf "SET LOCAL ROLE service_role;"; }
 TOKEN_N=0
 token() { TOKEN_N=$((TOKEN_N + 1)); printf '00000000-0000-4000-8000-%012d' "$TOKEN_N"; }

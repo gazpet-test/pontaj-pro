@@ -6,7 +6,7 @@
 -- ofertare_cantitati cu lot_nr integer[] + lot_domeniu (20261024b) și surse_document_ids (20261025a); ofertare_clarificari cu cheie, origine,
 -- sursa, baza_generare, surse_*, nr, UNIQUE (licitatie_id, cheie), FĂRĂ UNIQUE pe nr (migrarea îl adaugă); ofertare_cant_obs /
 -- _extrageri / _felii / _doc_decizii / doc_texte / ai_* EXACT din 20261031a) și funcțiile EXISTENTE pe care migrarea le cheamă sau le
--- rescrie, cu corpurile EXACTE (trase de generatorul claude-tasks/ofertare_0329_bd/gen_schelet.cjs din fișierele sursă, nu retastate):
+-- rescrie, cu corpurile EXACTE (copiate din fișierele sursă, nu retastate; proba t5.1 compară amprentele md5 cu textul acelor fișiere):
 --   * fn_are_acces_ofertare (20260912), fn_ofertare_source_pack_poate_decide (20260923), fn_ofertare_poate_cheltui (20261124a);
 --   * 20261031a: fn_ofertare_cb_lot_canonic, fn_ofertare_cb_imuabil, fn_ofertare_cb_tranzitie, fn_ofertare_cb_poate, fn_ofertare_cb_felie_reia,
 --     fn_ofertare_cb_trg_clarificari (triggerul de jurnal; fn_ofertare_cb_ingheata e stub);

@@ -4,7 +4,7 @@
 --   (20261121a), fn_ofertare_surse_valideaza (20261026a) și vederea v_ofertare_clarificari_baza (docs/R5_MIGRARE_PROPUSA_cantitati_nevalidate.sql) —
 --   amprentele LIVE din $pre$-ul migrării),
 --   scoate UNIQUE (licitatie_id, nr), cele 6 tabele noi (cu politicile, triggerele, indecșii, secvențele lor) și cele 30 de funcții noi.
--- Corpurile vechi sunt generate din fișierele-sursă de claude-tasks/ofertare_0329_bd/gen_revenire.cjs (nu retastate); proba PGlite verifică
+-- Corpurile vechi sunt copiate EXACT din fișierele-sursă de mai sus (nu retastate); proba PGlite (t5.1) verifică
 --   amprentele lor față de scheletul cu corpurile LIVE.
 -- ORDINEA: întâi merge-ul / deploy-ul care scoate ecranul semnalelor și pasul de comparație din edge (altfel: RPC lipsă → eroare afișată, nimic scris),
 --   apoi această revenire.

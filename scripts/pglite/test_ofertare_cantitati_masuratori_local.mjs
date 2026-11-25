@@ -497,7 +497,7 @@ const S3 = {}, S4 = {}
 async function scenariu(nume, fn, text = MIG) {
   const db = await bazaAplicata(text)
   const ab = []
-  try { await fn(db, ab) } catch (e) { ab.push('excepție: ' + (e.message || e).toString().slice(0, 300)) } finally { await db.close() }
+  try { await fn(db, ab) } catch (e) { ab.push('excepție: ' + (e.message || e).toString().slice(0, 300) + ' @ ' + String((e.stack || '').split('\n')[1] || '').trim().slice(0, 120)) } finally { await db.close() }
   ab.forEach(x => console.log('     ' + x))
   ok(ab.length === 0, `${nume} (${ab.length} abateri)`)
 }
@@ -513,10 +513,12 @@ const ast = (ab, cond, msg) => { if (!cond) ab.push(msg) }
     const s = (await semnalCunoscut(db))[0]
     ast(ab, s && s.verdict === 'diferenta' && Number(s.valoare_a) === 6400 && Number(s.valoare_b) === 3995 && s.valori_b.length === 1, 'semnal: ' + JSON.stringify(r.semnale))
     ast(ab, s && s.element === 'teava_pe_dn160' && s.clasa === 'fizica' && s.um_canonica === 'm' && s.obiect_cheie === '*' && s.lot_nr === null, 'identitatea: ' + JSON.stringify(s))
+    if (!s) return   // abaterea e deja notată; fără semnal nu mai e nimic de verificat
     const m = await masuratori(db, s.id)
     ast(ab, m.filter(x => x.parte === 'a').length === 1 && m.filter(x => x.parte === 'b').length === 1 && m.every(x => x.verificare === 'ok'), 'măsurătorile (F3-ul nu intră în B): ' + JSON.stringify(m.map(x => [x.parte, x.verificare, x.valoare])))
     const c = (await ciorne(db))[0]
     ast(ab, c && c.status === 'propunere' && c.origine === 'automat' && c.cheie === 'auto_surse_' + s.identitate && c.nr === 1, 'ciorna: ' + JSON.stringify(c && { status: c.status, cheie: c.cheie, nr: c.nr }))
+    if (!c) return   // fără ciornă (abatere notată), restul verificărilor n-au obiect
     ast(ab, c && /pagina 1, rândul „003 SA11G1 TEAVA PE100 DN160 M 6.400”/.test(c.intrebare) && /pagina 1, fragmentul „în lungime totală de 3.995 m”/.test(c.intrebare) && /6400 m/.test(c.intrebare) && /3995 m/.test(c.intrebare), 'textul ciornei: ' + (c && c.intrebare))
     ast(ab, c && JSON.stringify((c.surse_document_ids || []).map(Number).sort()) === JSON.stringify([f.dF3, f.dAtr].sort()) && JSON.stringify((c.surse_cantitati_ids || []).map(Number)) === JSON.stringify(f.cant), 'proveniența: ' + JSON.stringify([c?.surse_document_ids, c?.surse_cantitati_ids]))
     ast(ab, c && c.sursa === `surse_auto:${f.dAtr},gen_${md5(c.intrebare).slice(0, 12)},ev_${s.evaluare_amprenta.slice(0, 12)}`.replace(/,ev_.*/, ',ev_' + md5(s.evaluare_amprenta).slice(0, 12)), 'sursa: ' + c?.sursa)
@@ -1090,13 +1092,15 @@ if (vrea('t3') && MIG) { console.log(S3._titlu); for (const nume of Object.keys(
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 // t4: circuitul auto_planse_* extins la auto_surse_* (inventarul #2–#6, #9), ca authenticated cu / fără drept de decizie
-const vedere = async (db, cont, clarId) => { const r = await ca(db, cont, `SELECT * FROM public.v_ofertare_clarificari_baza WHERE id = $1`, [clarId]); if (r.code) throw new Error('view: ' + r.message); return r.rows[0] }
+// rândul ciornei din vedere; null = ciorna NU apare în vedere (abatere explicită la apelant, nu excepție de JS)
+const vedere = async (db, cont, clarId) => { const r = await ca(db, cont, `SELECT * FROM public.v_ofertare_clarificari_baza WHERE id = $1`, [clarId]); if (r.code) throw new Error('view: ' + r.message); return r.rows[0] || null }
 const reconfirma = (db, cont, clarId, amprenta, decizie = 'revizuit', nota = 'verificat de om in proba') => scrieCa(db, cont, `SELECT public.ofertare_clarificare_reconfirma($1, $2, $3, $4) x`, [clarId, amprenta, decizie, nota])
 const upd = (db, cont, clarId, set, params = []) => scrieCa(db, cont, `UPDATE public.ofertare_clarificari SET ${set} WHERE id = $1 RETURNING id`, [clarId, ...params])
 const exporta = (db, cont, lic = LIC) => scrieCa(db, cont, `SELECT public.ofertare_clarificari_export($1) x`, [lic])
 const notifica = (db, cont, lic = LIC) => scrieCa(db, cont, `SELECT public.ofertare_clarificari_notifica($1) x`, [lic])
 async function aproba(db, ab, clarId, cont = 'RESP') {
   const v = await vedere(db, cont, clarId)
+  if (!v) { ast(ab, false, 'aprobarea: ciorna nu apare în vedere'); return null }
   const r = await reconfirma(db, cont, clarId, v.amprenta_curenta)
   ast(ab, r.ok && r.rows[0].x.ok === true, 'reconfirmarea: ' + JSON.stringify(r.rows?.[0]?.x || r.message))
   return v
@@ -1119,11 +1123,11 @@ async function aproba(db, ab, clarId, cont = 'RESP') {
     ast(ab, v && v.stare === 'necesita_review' && /^[0-9a-f]{32}$/.test(v.amprenta_curenta) && v.detalii.evaluare === 'surse_v1' && v.mod_ciorna === 'surse' && v.marcaj_planse === false && v.text, 'view: ' + JSON.stringify(v && [v.stare, v.mod_ciorna, v.detalii.evaluare]))
     const v0 = await ca(db, 'STRAIN', `SELECT count(*)::int n FROM public.v_ofertare_clarificari_baza`)
     ast(ab, !v0.code && v0.rows[0].n === 0, 'view fără acces Ofertare: 0 rânduri: ' + JSON.stringify(v0))
-    ast(ab, JSON.stringify(Object.keys(v).sort()) === JSON.stringify(['amprenta_curenta', 'detalii', 'id', 'licitatie_id', 'marcaj_planse', 'mod_ciorna', 'mod_curent', 'nr', 'stare', 'status', 'text']), 'coloanele vechi ale view-ului: ' + Object.keys(v).sort().join(','))
+    ast(ab, v && JSON.stringify(Object.keys(v).sort()) === JSON.stringify(['amprenta_curenta', 'detalii', 'id', 'licitatie_id', 'marcaj_planse', 'mod_ciorna', 'mod_curent', 'nr', 'stare', 'status', 'text']), 'coloanele vechi ale view-ului: ' + Object.keys(v || {}).sort().join(','))
     // de_trimis fără reconfirmare → refuz; fără drept de decizie → refuz
     asteptMesaj(await upd(db, 'RESP', c.id, `status = 'de_trimis'`), /Clarificare blocată: necesită review/, 'de_trimis fără reconfirmare', ab)
     // reconfirmare: fără drept de decizie → eroare; cu drept → ok; tokenul = token_curent
-    const rOF = await reconfirma(db, 'OF', c.id, v.amprenta_curenta)
+    const rOF = await reconfirma(db, 'OF', c.id, v?.amprenta_curenta)
     ast(ab, rOF.ok && /fără drept de decizie/.test(rOF.rows[0].x.error || ''), 'reconfirmare fără drept de decizie: ' + JSON.stringify(rOF.rows?.[0]?.x))
     asteptMesaj(await upd(db, 'OF', c.id, `status = 'de_trimis'`), /drept de decizie/, 'de_trimis fără drept de decizie', ab)
     const rBad = await reconfirma(db, 'RESP', c.id, 'amprenta_gresita')
@@ -1133,7 +1137,7 @@ async function aproba(db, ab, clarId, cont = 'RESP') {
     const st = await stareBaza(db, c.id, 'tranzitie')
     ast(ab, st.stare === 'ok' && c.baza_generare.reconfirmare.token === st.token_aprobare && c.baza_generare.reconfirmare.token_curent === st.amprenta_curenta && c.baza_generare.reconfirmare.evaluare_amprenta === s.evaluare_amprenta && c.baza_generare.reconfirmare.surse_sha === s.surse_sha,
       'reconfirmarea scrie token_aprobare / token_curent / evaluare_amprenta / surse_sha: ' + JSON.stringify([st.stare, Object.keys(c.baza_generare.reconfirmare)]))
-    ast(ab, (await vedere(db, 'OF', c.id)).stare === 'ok', 'view după reconfirmare: ok')
+    ast(ab, (await vedere(db, 'OF', c.id))?.stare === 'ok', 'view după reconfirmare: ok')
     // ciorna aprobată, încă propunere (reconfirmare în bază): sursa se schimbă → alt text propus → sistemul NU o rescrie (nu e „liberă”), doar neatinsa
     await db.query(`UPDATE public.ofertare_cantitati SET cantitate = 6500 WHERE licitatie_id = $1`, [LIC])
     const evAp = await evalueaza(db)
@@ -1142,7 +1146,7 @@ async function aproba(db, ab, clarId, cont = 'RESP') {
       'propunere aprobată, sursă schimbată → textul aprobat NU e rescris (neatinsa): ' + JSON.stringify([cAp.intrebare === c.intrebare, cAp.status, evAp.semnale[0]?.clarificare]))
     await db.query(`UPDATE public.ofertare_cantitati SET cantitate = 6400 WHERE licitatie_id = $1`, [LIC])
     await evalueaza(db)
-    ast(ab, (await vedere(db, 'OF', c.id)).stare === 'ok', 'sursa revenită, reevaluată: aceeași amprentă → ok')
+    ast(ab, (await vedere(db, 'OF', c.id))?.stare === 'ok', 'sursa revenită, reevaluată: aceeași amprentă → ok')
     // de_trimis ok; export ok
     const dt = await upd(db, 'RESP', c.id, `status = 'de_trimis'`)
     ast(ab, dt.ok, 'de_trimis după reconfirmare: ' + (dt.message || 'ok'))
@@ -1169,43 +1173,43 @@ async function aproba(db, ab, clarId, cont = 'RESP') {
       }
       await db.exec(schimba)
       const vv = await vedere(db, 'RESP', c.id)
-      ast(ab, vv.stare === 'schimbata' && vv.text === 'baza s-a schimbat — de reverificat', `${nume}: view → schimbata: ${JSON.stringify([vv.stare, vv.text])}`)
+      ast(ab, vv?.stare === 'schimbata' && vv?.text === 'baza s-a schimbat — de reverificat', `${nume}: view → schimbata: ${JSON.stringify([vv?.stare, vv?.text])}`)
       asteptMesaj(await exporta(db, 'RESP'), BLOC, `${nume}: export blocat`, ab)
       asteptMesaj(await upd(db, 'RESP', c.id, `status = 'trimisa'`), /Clarificare blocată: baza s-a schimbat/, `${nume}: trimisa refuzată`, ab)
       await db.exec(revino)
       const vr = await vedere(db, 'RESP', c.id)
-      ast(ab, vr.stare === 'ok', `${nume}: revenit → ok: ${vr.stare}`)
+      ast(ab, vr?.stare === 'ok', `${nume}: revenit → ok: ${vr?.stare}`)
     }
     // document existent șters (sursa A fără extragere): măsurătorile dispar → fotografia se schimbă → blocat
     const dS = await document(db, { tip: 'alta', nume: 'DOC_SURSA2' })
     const vAd = await vedere(db, 'RESP', c.id)
-    ast(ab, vAd.stare === 'schimbata', 'document adăugat în fotografie → schimbata')
+    ast(ab, vAd?.stare === 'schimbata', 'document adăugat în fotografie → schimbata')
     await db.query(`DELETE FROM public.ofertare_documente_atribuire WHERE id = $1`, [dS])
-    ast(ab, (await vedere(db, 'RESP', c.id)).stare === 'ok', 'documentul șters la loc → ok')
+    ast(ab, (await vedere(db, 'RESP', c.id))?.stare === 'ok', 'documentul șters la loc → ok')
     // evaluare în curs → blocat; verdict devenit in_regula → blocat (fara_diferenta); răspuns confirmat → blocat (rezolvata_de_raspuns)
     const p = await propune(db)
     let vv = await vedere(db, 'RESP', c.id)
-    ast(ab, vv.stare === 'evaluare_in_curs' && vv.text === 'baza s-a schimbat — de reverificat', 'evaluare în curs → evaluare_in_curs: ' + vv.stare)
+    ast(ab, vv?.stare === 'evaluare_in_curs' && vv?.text === 'baza s-a schimbat — de reverificat', 'evaluare în curs → evaluare_in_curs: ' + vv?.stare)
     asteptMesaj(await exporta(db, 'RESP'), BLOC, 'evaluare în curs: export blocat', ab)
     await publica(db, LIC, p.evaluare_id, p.token)
-    ast(ab, (await vedere(db, 'RESP', c.id)).stare === 'ok', 'publicată fără schimbări → ok (aceeași amprentă)')
+    ast(ab, (await vedere(db, 'RESP', c.id))?.stare === 'ok', 'publicată fără schimbări → ok (aceeași amprentă)')
     await db.query(`INSERT INTO public.ofertare_cantitati_setari (licitatie_id, prag) VALUES ($1, 0.5)`, [LIC])
     await evalueaza(db)
     c = (await ciorne(db))[0]
     ast(ab, c.status === 'de_trimis', 'ciorna aprobată (de_trimis) NU e retrasă de sistem la verdict schimbat: ' + c.status)
     vv = await vedere(db, 'RESP', c.id)
-    ast(ab, vv.stare === 'fara_diferenta' && vv.text === 'baza s-a schimbat — de reverificat', 'verdict in_regula → fara_diferenta: ' + JSON.stringify([vv.stare, vv.text]))
+    ast(ab, vv?.stare === 'fara_diferenta' && vv?.text === 'baza s-a schimbat — de reverificat', 'verdict in_regula → fara_diferenta: ' + JSON.stringify([vv?.stare, vv?.text]))
     asteptMesaj(await exporta(db, 'RESP'), BLOC, 'fara_diferenta: export blocat', ab)
     await db.query(`DELETE FROM public.ofertare_cantitati_setari WHERE licitatie_id = $1`, [LIC])
     await evalueaza(db)
     vv = await vedere(db, 'RESP', c.id)
-    ast(ab, vv.stare === 'ok', 'prag revenit, reevaluat: amprenta aceeași → ok: ' + vv.stare)
+    ast(ab, vv?.stare === 'ok', 'prag revenit, reevaluat: amprenta aceeași → ok: ' + vv?.stare)
     const dR = await document(db, { tip: 'raspuns_clarificare', nume: 'RASPUNS', text: PAG(1, 'r'), revizie: 'R1' })
     await evalueaza(db)
     const sId = (await semnalCunoscut(db))[0].id
     await scrieCa(db, 'RESP', `SELECT public.fn_ofertare_semnal_raspuns_leaga($1, $2, 3995) x`, [sId, dR])
     vv = await vedere(db, 'RESP', c.id)
-    ast(ab, vv.stare === 'rezolvata_de_raspuns' && /semnal rezolvat prin răspunsul Autorității/.test(vv.text) && (await ciorne(db))[0].status === 'de_trimis', 'răspuns confirmat → rezolvata_de_raspuns, ciorna aprobată neatinsă: ' + JSON.stringify([vv.stare, vv.text]))
+    ast(ab, vv?.stare === 'rezolvata_de_raspuns' && /semnal rezolvat prin răspunsul Autorității/.test(vv?.text) && (await ciorne(db))[0].status === 'de_trimis', 'răspuns confirmat → rezolvata_de_raspuns, ciorna aprobată neatinsă: ' + JSON.stringify([vv?.stare, vv?.text]))
     asteptMesaj(await exporta(db, 'RESP'), /Export blocat: semnal rezolvat prin răspunsul Autorității/, 'rezolvata_de_raspuns: export blocat', ab)
   }
   S4['t4_trigger_new_nu_old + t4_stari + t4_notifica_surse + t4_exceptie_surse_refuz'] = async (db, ab) => {
@@ -1228,7 +1232,7 @@ async function aproba(db, ab, clarId, cont = 'RESP') {
     const e = await upd(db, 'RESP', c.id, `intrebare = intrebare || ' (editat)'`)
     c = (await ciorne(db))[0]
     ast(ab, e.ok && c.status === 'propunere' && c.baza_generare.text_editat_de === U.RESP && !c.baza_generare.reconfirmare && c.baza_generare.istoric_decizii.length === 2, 'editarea: propunere + text_editat_de, aprobările (2) în istoric: ' + JSON.stringify([c.status, c.baza_generare.istoric_decizii?.length]))
-    ast(ab, (await vedere(db, 'RESP', c.id)).stare === 'necesita_review', 'după editare: necesita_review')
+    ast(ab, (await vedere(db, 'RESP', c.id))?.stare === 'necesita_review', 'după editare: necesita_review')
     // reconfirmare → de_trimis → trimisa; apoi cantitate schimbată → doar luat_act, textul imuabil
     await aproba(db, ab, c.id)
     ast(ab, (await upd(db, 'RESP', c.id, `status = 'de_trimis'`)).ok && (await upd(db, 'RESP', c.id, `status = 'trimisa'`)).ok, 'de_trimis → trimisa pe baza reconfirmată')
@@ -1249,7 +1253,7 @@ async function aproba(db, ab, clarId, cont = 'RESP') {
     ast(ab, v.stare === 'luat_act', 'după luat_act: luat_act (informativ, nu aprobare)')
     // o nouă schimbare → alt token_curent → din nou schimbata
     await db.query(`UPDATE public.ofertare_cantitati SET cantitate = 6402 WHERE licitatie_id = $1`, [LIC])
-    ast(ab, (await vedere(db, 'RESP', c.id)).stare === 'schimbata', 'a doua schimbare → schimbata din nou (token_curent include fotografia)')
+    ast(ab, (await vedere(db, 'RESP', c.id))?.stare === 'schimbata', 'a doua schimbare → schimbata din nou (token_curent include fotografia)')
     // ciorna trimisă pe evaluarea veche + semnalul reevaluat (altă amprentă) → schimbata în afisare, NU ok
     await evalueaza(db)
     v = await vedere(db, 'RESP', c.id)
@@ -1298,20 +1302,20 @@ async function aproba(db, ab, clarId, cont = 'RESP') {
       [LIC, textP, `planse_auto:${f.dAtr},gen_${md5(textP).slice(0, 12)},ev_${md5('x').slice(0, 12)}`, JSON.stringify({ ...baza, la: new Date().toISOString(), sursa_generare: 'v6-r9b', text_hash: md5(textP) })])
     const cp = (await q(db, `SELECT id FROM public.ofertare_clarificari WHERE cheie = 'auto_planse_1'`))[0].id
     let vp = await vedere(db, 'RESP', cp)
-    ast(ab, vp.stare === 'necesita_review' && vp.mod_ciorna === 'corespondenta' && vp.detalii.evaluare === 'r9b', 'planșe: stare inițială necesita_review (R9b): ' + JSON.stringify([vp.stare, vp.mod_ciorna]))
-    const rp = await reconfirma(db, 'RESP', cp, vp.amprenta_curenta)
+    ast(ab, vp?.stare === 'necesita_review' && vp?.mod_ciorna === 'corespondenta' && vp?.detalii.evaluare === 'r9b', 'planșe: stare inițială necesita_review (R9b): ' + JSON.stringify([vp?.stare, vp?.mod_ciorna]))
+    const rp = await reconfirma(db, 'RESP', cp, vp?.amprenta_curenta)
     ast(ab, rp.ok && rp.rows[0].x.ok === true, 'planșe: reconfirmarea: ' + JSON.stringify(rp.rows?.[0]?.x || rp.message))
     ast(ab, (await upd(db, 'RESP', cp, `status = 'de_trimis'`)).ok, 'planșe: după reconfirmare „de trimis” e permis (A3)')
     let exp = await exporta(db, 'RESP')
     ast(ab, exp.ok && exp.rows[0].x.some(x => x.id === cp), 'planșe: exportul include ciorna aprobată')
     await db.query(`UPDATE public.ofertare_cantitati SET cantitate = coalesce(cantitate, 0) + 1 WHERE licitatie_id = $1`, [LIC])
     vp = await vedere(db, 'RESP', cp)
-    ast(ab, vp.stare === 'schimbata', 'planșe: cantitate schimbată ⇒ baza „schimbata” (A3)')
+    ast(ab, vp?.stare === 'schimbata', 'planșe: cantitate schimbată ⇒ baza „schimbata” (A3)')
     asteptMesaj(await upd(db, 'RESP', cp, `status = 'trimisa'`), /Clarificare blocată: baza s-a schimbat — de reverificat/, 'planșe: trimiterea pe baza schimbată e refuzată', ab)
     asteptMesaj(await exporta(db, 'RESP'), /Export blocat: baza s-a schimbat — de reverificat/, 'planșe: export blocat', ab)
     // A7: omul modifică cifra din text ⇒ aprobarea nu se transferă
     vp = await vedere(db, 'RESP', cp)
-    await reconfirma(db, 'RESP', cp, vp.amprenta_curenta, 'revizuit', 'reverificat după schimbare')
+    await reconfirma(db, 'RESP', cp, vp?.amprenta_curenta, 'revizuit', 'reverificat după schimbare')
     ast(ab, (await upd(db, 'RESP', cp, `status = 'de_trimis'`)).ok, 'planșe: reaprobare')
     const r3 = await upd(db, 'RESP', cp, `intrebare = intrebare || ' (123 m)'`)
     ast(ab, r3.ok && (await q(db, `SELECT status FROM public.ofertare_clarificari WHERE id = $1`, [cp]))[0].status === 'propunere', 'planșe: textul editat se salvează și pierde aprobarea (A7)')
@@ -1319,7 +1323,7 @@ async function aproba(db, ab, clarId, cont = 'RESP') {
     asteptMesaj(await upd(db, 'RESP', cp, `cheie = NULL`), /imuabilă/, 'planșe: cheie = NULL refuzat', ab)
     asteptMesaj(await upd(db, 'RESP', cp, `baza_generare = NULL`), /reconfirmare|doar serverul/, 'planșe: baza_generare = NULL refuzat', ab)
     vp = await vedere(db, 'RESP', cp)
-    const exP = await scrieCa(db, 'RESP', `SELECT public.ofertare_clarificare_exceptie_identitate($1, $2, 'motiv suficient de lung') x`, [cp, vp.amprenta_curenta])
+    const exP = await scrieCa(db, 'RESP', `SELECT public.ofertare_clarificare_exceptie_identitate($1, $2, 'motiv suficient de lung') x`, [cp, vp?.amprenta_curenta])
     ast(ab, exP.ok && exP.rows[0].x.error === 'baza curentă nu cere excepție de identitate', 'planșe: excepția pe calea veche: ' + JSON.stringify(exP.rows?.[0]?.x))
     // t4_fara_advisory: static, pe prosrc
     const adv = (await q(db, `SELECT proname, prosrc ~* 'pg_advisory' AS adv, prosrc ~* 'ORDER BY id FOR UPDATE' AS oid FROM pg_proc WHERE proname IN ('fn_trg_ofertare_clarificari_baza', 'ofertare_clarificare_reconfirma', 'ofertare_clarificare_exceptie_identitate', 'ofertare_clarificari_export', 'ofertare_clarificari_notifica', 'ofertare_clarificare_baza_stare', 'ofertare_semnal_baza_stare', 'fn_ofertare_ciorna_auto_stare', 'fn_ofertare_semnal_raspuns_leaga', 'fn_ofertare_semnale_setari', 'fn_ofertare_semnale_lista') ORDER BY proname`))
@@ -1543,12 +1547,13 @@ if (vrea('t5') && MIG) {
   console.log('t5.5 mutanți comportamentali (postcondițiile scoase: doar probele îi pot prinde)')
   const comport = async (text, scen) => {
     const db = await bazaNoua()
+    const ab = []   // abaterile strânse PÂNĂ la o eventuală excepție rămân (excepția se adaugă la final, cu locul ei)
     try {
       const a = await livreaza(db, text)
       if (!a.ok) return ['aplicare: ' + a.eroare.slice(0, 120)]
       if (scen === 't2') return await verificaT2(db)
-      const ab = []; await (S3[scen] || S4[scen])(db, ab); return ab
-    } catch (e) { return ['excepție: ' + String(e.message).slice(0, 160)] } finally { await db.close() }
+      await (S3[scen] || S4[scen])(db, ab); return ab
+    } catch (e) { return [...ab, 'excepție: ' + String(e.message).slice(0, 160) + ' @ ' + String((e.stack || '').split('\n')[1] || '').trim().slice(0, 120)] } finally { await db.close() }
   }
   {
     const ab = await comport(FARA_POST(MIG), 't3_cazul_tichetului')
@@ -1565,7 +1570,7 @@ if (vrea('t5') && MIG) {
     ['M06 modul afisare compară cu semnal.surse_sha în loc de baza la aprobare', [["    ELSIF (v_foto ->> 'sha') IS DISTINCT FROM (v_rc ->> 'surse_sha') OR s.evaluare_amprenta IS DISTINCT FROM (v_rc ->> 'evaluare_amprenta') THEN", "    ELSIF (v_foto ->> 'sha') IS DISTINCT FROM s.surse_sha THEN"]], ['t4_trigger_new_nu_old + t4_stari + t4_notifica_surse + t4_exceptie_surse_refuz']],
     ['M07 fotografia fără stare_loturi', [["'cantitati_sha', v_cant, 'prag', v_prag, 'plafon', v_plafon, 'v', 'surse_v1');", "'cantitati_sha', v_cant, 'prag', v_prag, 'plafon', v_plafon, 'v', 'surse_v1') - 'stare_loturi';"]], ['t3_loturi', 't4_trigger_surse + t4_reconfirmare_surse + t4_view_surse + t4_export_surse']],
     // obs_sha singur e redundant cu felii_sha (observațiile se scriu doar pe felii în zbor → orice observație nouă schimbă și încercările): mutantul pe felii_sha
-    ['M08 fotografia fără felii_sha (feliile reluate nu schimbă fotografia)', [["'extragere_id', e.id, 'extractor_id', e.extractor_id, 'felii_distincte', coalesce(fa.n, 0), 'felii_sha', fa.sha, 'obs_sha', oa.sha, 'decizii_sha', da.sha)", "'extragere_id', e.id, 'extractor_id', e.extractor_id, 'felii_distincte', coalesce(fa.n, 0), 'felii_sha', 'x', 'obs_sha', oa.sha, 'decizii_sha', da.sha)"]], ['t3_drept + t3_lista_actual + t3_felii + t3_context']],
+    ['M08 fotografia fără felii_sha (feliile reluate nu schimbă fotografia)', [["'extragere_id', e.id, 'extractor_id', e.extractor_id, 'felii_distincte', coalesce(fa.n, 0), 'felii_sha', fa.sha, 'obs_sha', oa.sha, 'decizii_sha', da.sha)", "'extragere_id', e.id, 'extractor_id', e.extractor_id, 'felii_distincte', coalesce(fa.n, 0), 'felii_sha', 'x', 'obs_sha', oa.sha, 'decizii_sha', da.sha)"]], ['t3_depasita + t3_izolare + t3_extragere_noua_intre_rpc + t3_plafon_vechi']],
     ['M09 propune citește observațiile tuturor extragerilor gata pe sha (nu extragere_id din fotografie)', [["             JOIN public.ofertare_cant_obs ob ON ob.extragere_id = (x ->> 'extragere_id')::bigint", "             JOIN public.ofertare_cant_obs ob ON ob.document_id = (x ->> 'id')::bigint AND ob.doc_sha256 = x ->> 'sha'"]], ['t3_extrageri_duble + t3_identitate_pozitiei']],
     ['M10 observațiile de pe paginile peste plafon tratate ca ok', [["    ELSIF o.pagina IS NOT NULL AND o.pagina > o.lim THEN v_ver := 'pagina_nepermisa';", "    ELSIF false THEN v_ver := 'pagina_nepermisa';"]], ['t3_depasita + t3_izolare + t3_extragere_noua_intre_rpc + t3_plafon_vechi']],
     ['M11 observațiile de pe paginile peste plafon OMISE (asocierea dispare)', [["    ELSIF o.pagina IS NOT NULL AND o.pagina > o.lim THEN v_ver := 'pagina_nepermisa';", "    ELSIF o.pagina IS NOT NULL AND o.pagina > o.lim THEN CONTINUE;"]], ['t3_depasita + t3_izolare + t3_extragere_noua_intre_rpc + t3_plafon_vechi']],
@@ -1612,7 +1617,9 @@ if (vrea('t5') && MIG) {
     ['M51 propune fără refuzul fotografiei vechi', [["  IF p_fotografie ->> 'sha' IS DISTINCT FROM v_foto ->> 'sha' THEN RETURN jsonb_build_object('refuz', 'evaluare_depasita', 'sha_acum', v_foto ->> 'sha'); END IF;\n", ""]], ['t3_depasita + t3_izolare + t3_extragere_noua_intre_rpc + t3_plafon_vechi']],
     ['M52 publica fără refuzul fotografiei schimbate', [["  IF v_foto ->> 'sha' IS DISTINCT FROM v_ev.surse_sha THEN\n    PERFORM set_config('ofertare.masuratori_rpc', '1', true);", "  IF false THEN\n    PERFORM set_config('ofertare.masuratori_rpc', '1', true);"]], ['t3_depasita + t3_izolare + t3_extragere_noua_intre_rpc + t3_plafon_vechi']],
   ]
+  const DOAR_MUTANT = (process.argv.find(a => a.startsWith('--mutant=')) || '').slice('--mutant='.length)   // depanare: un singur mutant
   for (const [nume, inl, scenarii] of MUTANTI) {
+    if (DOAR_MUTANT && !nume.startsWith(DOAR_MUTANT + ' ')) continue
     let text
     try { text = FARA_POST(aplica(MIG, inl)) } catch (e) { ok(false, `${nume}: ${e.message}`); continue }
     const rez = []
