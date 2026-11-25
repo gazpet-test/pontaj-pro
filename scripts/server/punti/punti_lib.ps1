@@ -469,7 +469,19 @@ function Get-ProblemaPunte([hashtable]$Stare, [datetime]$Acum, $LoginRevalidatLa
 #            e reinviat) -> revenire (puntea normala pornita, va refolosi mediul) -> gata (mediul puntii normale = cel reatasat)
 function New-MemoriePunte {
   @{ mediu = $null; sesiune = $null; sesiuniActive = @(); cunoscutLa = $null; negasite = @{}; renuntari = @{}; mediuPierdutTratatLa = $null; reatasare = $null
-     rezervareRevenire = $null }   # ora rezervarii din istoric pentru intoarcerea la puntea normala (plafonul 3/ora bugetat pe dus-intors)
+     # jetonul intoarcerii (plafonul 3/ora bugetat pe dus-intors): ora unei intrari din istoric rezervata pentru intoarcerea la puntea normala.
+     # Se pune la plecare (--session-id), se MUTA la ora reala a intoarcerii cand aceea porneste (revenirePornita), se elibereaza (intrarea e scoasa)
+     # daca dus-intorsul se incheie fara intoarcere, si se uita (intrarea ramane: e o pornire reala) dupa ce intoarcerea a pornit.
+     rezervareRevenire = $null; revenirePornita = $false }
+}
+
+# Jetonul intoarcerii e inca in fereastra de 60 min? ($Istoric = lista ISO sau datetime-urile curatate de Test-PotPorni)
+function Test-JetonPrezent([hashtable]$Mem, $Istoric) {
+  if ($null -eq $Mem -or -not $Mem.rezervareRevenire) { return $false }
+  $tk = ConvertFrom-DataIso $Mem.rezervareRevenire
+  if ($null -eq $tk) { return $false }
+  foreach ($x in @($Istoric)) { $d = ConvertFrom-DataIso $x; if ($null -ne $d -and $d -eq $tk) { return $true } }
+  return $false
 }
 
 function Get-MemoriePunte([hashtable]$Sup, [string]$Nume) {
@@ -713,7 +725,7 @@ function Get-DecizieSupraveghere {
   # porneste doar daca incap AMANDOUA, iar intoarcerea e rezervata atunci (nu mai consuma la randul ei) -> puntea cu o singura
   # sesiune nu ramane blocata de plafon. Nimic nu ocoleste plafonul: 2 rezervari = 2 porniri reale.
   $lim = Test-PotPorni -Istoric $Istoric -Acum $Acum
-  $rezervat = [bool]($Mem -and $Mem.rezervareRevenire)
+  $rezervat = Test-JetonPrezent -Mem $Mem -Istoric $lim.Istoric   # jetonul expirat din fereastra nu mai conteaza: intoarcerea costa o pornire
   $necesar = 1
   if ($d.Mod -eq 'reatasare' -and -not $rezervat) { $necesar = 2 }   # dus + intors; o noua incercare refoloseste intoarcerea deja rezervata
   if ($d.Revenire -and $rezervat) { $necesar = 0 }
@@ -1161,13 +1173,24 @@ function Invoke-Supervizor([hashtable]$Dep, [datetime]$Acum, [switch]$DoarVerifi
       $i.Stare.indicator = $i.Indicator
     }
     foreach ($mr in @(Update-Reatasare -Mem $mem -Stare $i.Stare -Vie $vieAcum -Acum $acumU)) { & $jurnal "[$($p.Nume)] $mr" }
-    if ($mem.rezervareRevenire -and $null -eq $mem.reatasare) {
-      # reatasarea s-a incheiat fara intoarcere (renunt / nicio candidata): eliberez rezervarea intoarcerii din istoric
-      $rest = New-Object System.Collections.ArrayList; $scos = $false
-      foreach ($x in @($sup.istoric[$p.Nume])) { if (-not $scos -and [string]$x -eq [string]$mem.rezervareRevenire) { $scos = $true; continue }; [void]$rest.Add($x) }
-      $sup.istoric[$p.Nume] = @($rest.ToArray())
-      $ist = @($sup.istoric[$p.Nume])
-      $mem.rezervareRevenire = $null
+    if ($mem.rezervareRevenire) {
+      $modAcum = 'normal'
+      if ($i.Stare -is [hashtable] -and $i.Stare.mod) { $modAcum = [string]$i.Stare.mod }
+      if ($null -eq $mem.reatasare) {
+        # dus-intorsul s-a incheiat: fara intoarcere reala (renunt / nicio candidata) eliberez intrarea rezervata; cu intoarcere, intrarea ramane (pornire reala)
+        if (-not $mem.revenirePornita) {
+          $rest = New-Object System.Collections.ArrayList; $scos = $false
+          foreach ($x in @($sup.istoric[$p.Nume])) { if (-not $scos -and [string]$x -eq [string]$mem.rezervareRevenire) { $scos = $true; continue }; [void]$rest.Add($x) }
+          $sup.istoric[$p.Nume] = @($rest.ToArray())
+          $ist = @($sup.istoric[$p.Nume])
+        }
+        $mem.rezervareRevenire = $null; $mem.revenirePornita = $false
+      } elseif ($mem.revenirePornita -and $modAcum -ne 'reatasare') {
+        # intoarcerea a pornit efectiv (nu mai e puntea cu o sesiune): jetonul e de acum o pornire reala; o noua reatasare va rezerva din nou
+        $mem.rezervareRevenire = $null; $mem.revenirePornita = $false
+      }
+      # revenirePornita + puntea de reatasare inca vie = intoarcerea a fost notata, dar efectul nu a avut loc (intrerupere): jetonul ramane,
+      # intoarcerea se reia la cost 0 (Jakarinos r2 P2)
     }
     $d = Get-DecizieSupraveghere -Punte $p -Stare $i.Stare -ReleuViu $i.ReleuViu -ClaudeViu $i.ClaudeViu -Veche $i.Veche `
          -InternetOk $netOk -InternetStabilMin $stabil -LoginValid $c.Valid -LoginRevalidatLa $c.RevalidatLa -Istoric $ist -Acum $acumU `
@@ -1203,12 +1226,22 @@ function Invoke-Supervizor([hashtable]$Dep, [datetime]$Acum, [switch]$DoarVerifi
     # Rezervarea in istoric se SALVEAZA inainte de efect (Jakarinos r1 P1, L02/L04): o exceptie mai jos sau o rulare
     # intrerupta nu pot ocoli limita de 3/ora. Daca starea nu se poate salva, nu actionam (L05: necunoscut = nu risc).
     $R = $mem.reatasare
-    # rezervarile: 1 pornire; prima reatasare rezerva 2 (dus + intors, intoarcerea notata in mem.rezervareRevenire), o noua
-    # incercare 1 (intoarcerea e deja rezervata), iar intoarcerea rezervata nu mai adauga nimic (vezi decizia)
-    $rezervari = @(Get-DataIso $acumU)
+    # Istoricul (plafonul 3/ora): o pornire = o intrare. Reatasarea adauga si JETONUL intoarcerii (a doua intrare) daca nu exista deja unul
+    # in fereastra; intoarcerea nu adauga nimic, ci MUTA jetonul la ora ei reala (intrarea rezervata devine pornirea reala - Jakarinos r2 P2:
+    # altfel expira la ora plecarii); un jeton expirat nu mai conteaza, intoarcerea costa atunci o pornire obisnuita.
+    $acumIso = Get-DataIso $acumU
+    $jeton = Test-JetonPrezent -Mem $mem -Istoric $sup.istoric[$p.Nume]
+    $rezervari = @($acumIso)
     if ($d.Mod -eq 'reatasare') {
-      if (-not $mem.rezervareRevenire) { $mem.rezervareRevenire = Get-DataIso $acumU; $rezervari += $mem.rezervareRevenire }
-    } elseif ($d.Revenire -and $mem.rezervareRevenire) { $rezervari = @(); $mem.rezervareRevenire = $null }
+      if (-not $jeton) { $mem.rezervareRevenire = $acumIso; $mem.revenirePornita = $false; $rezervari += $acumIso }
+    } elseif ($d.Revenire -and $jeton) {
+      $rezervari = @()
+      $mutat = $false
+      $sup.istoric[$p.Nume] = @(@($sup.istoric[$p.Nume]) | ForEach-Object { if (-not $mutat -and [string]$_ -eq [string]$mem.rezervareRevenire) { $mutat = $true; $acumIso } else { $_ } })
+      $mem.rezervareRevenire = $acumIso; $mem.revenirePornita = $true
+    } else {
+      $mem.rezervareRevenire = $null; $mem.revenirePornita = $false   # pornire obisnuita (sau intoarcere cu jeton expirat): fara jeton
+    }
     $sup.istoric[$p.Nume] = @(@($sup.istoric[$p.Nume]) + $rezervari | Where-Object { $_ })
     # v3: pasul reatasarii se noteaza tot inainte de efect. Punte normala fara reatasare: indicatorul existent (al puntii noastre
     # dinainte sau al unei punti straine oprite) e adoptat DOAR daca nu contrazice memoria: acelasi mediu, sau nu stim niciun

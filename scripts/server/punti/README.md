@@ -23,7 +23,7 @@ Lista e definită o singură dată, în `Get-ConfigPunti` din `punti_lib.ps1`.
 | `punte_releu.ps1` | **releul**: câte unul per punte, pornește `claude remote-control` și îi citește ieșirea; trăiește cât puntea. |
 | `punti_lib.ps1` | funcțiile comune (config, clasificarea ieșirii, decizii, login, alarmă, procese). |
 | `instaleaza.ps1` | instalare / dezinstalare (cere admin). |
-| `autotest_punti.ps1` | teste fără rețea (267 de verificări). |
+| `autotest_punti.ps1` | teste fără rețea (278 de verificări). |
 
 Unde scriu:
 - `C:\Users\Public\paw-data\punti\punti.log` — jurnalul (citit de chat). Mascat: fără URL-uri, id-uri de sesiune, tokenuri, emailuri.
@@ -104,7 +104,7 @@ Revenirea se încheie întotdeauna cu un rezultat explicit, cu termen: **confirm
 Ce **nu** se adoptă orbește: la o pornire normală, indicatorul lăsat în folder de o punte oprită (a noastră sau străină) e preluat în memorie doar dacă arată același mediu, sau dacă memoria nu știe încă nici mediu, nici sesiuni. Dacă arată **alt mediu** iar memoria are sesiuni, supervizorul scrie în jurnal și nu îl adoptă: puntea nouă îl va refolosi, diferența față de memorie pornește reatașarea, iar reconcilierea o face serverul prin `--session-id` (CLI-ul cere mediul sesiunii) — dacă sesiunea a fost mutată de cealaltă punte pe mediul nou, dus-întorsul confirmă asta și memoria trece pe mediul nou; dacă nu, mediul vechi e reînviat.
 
 Limite ale reatașării, intenționate:
-- plafonul de **3 porniri/oră** e bugetat pe tot dus-întorsul: reatașarea pornește numai dacă încap **două** porniri (dus cu `--session-id` + întors la normal), întoarcerea fiind rezervată atunci; altfel e amânată (avertisment o dată pe oră) și sesiunile rămân „Environment deleted” până încap — ca azi, dar niciodată puntea cu o singură sesiune nu rămâne blocată de plafon. Nimic nu ocolește plafonul: 2 rezervări = 2 porniri reale; o rezervare neconsumată (renunț, nicio candidată) e eliberată;
+- plafonul de **3 porniri/oră** e bugetat pe tot dus-întorsul: reatașarea pornește numai dacă încap **două** porniri (dus cu `--session-id` + întors la normal), întoarcerea fiind rezervată atunci printr-un „jeton” în istoric; altfel e amânată (avertisment o dată pe oră) și sesiunile rămân „Environment deleted” până încap — ca azi, dar niciodată puntea cu o singură sesiune nu rămâne blocată de plafon. Nimic nu ocolește plafonul: jetonul e o intrare reală din istoric; la întoarcere el primește ora reală a pornirii (nu rămâne la ora plecării), o întoarcere notată dar neefectuată (întrerupere) se reia tot pe jeton, un jeton ieșit din fereastră nu mai contează (întoarcerea costă atunci o pornire obișnuită), iar un jeton neconsumat (renunț, nicio candidată) e scos;
 - dacă puntea normală primește din nou alt mediu după reatașare, se mai încearcă **o dată**; a doua eșuare = se renunță la acea sesiune (rămâne „de verificat în aplicație”, în jurnal) și se reține mediul nou;
 - puntea de reatașare neconectată după 10 min = încercare eșuată; ea nu trece prin regulile de repornire (în modul cu o sesiune titlul sesiunii stă chiar în linia de stare, deci clasificarea ieșirii nu e sigură) și trăiește cel mult până la rularea următoare; ieșirea ei se tratează o singură dată (starea rămâne pe disc);
 - fără sesiune cunoscută (prima instalare, id lipsă sau invalid) → comportamentul de azi: mediul nou e doar reținut, fără reatașare;
