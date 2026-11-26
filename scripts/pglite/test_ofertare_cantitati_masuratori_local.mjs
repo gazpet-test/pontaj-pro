@@ -686,6 +686,13 @@ const ast = (ab, cond, msg) => { if (!cond) ab.push(msg) }
     ast(ab, m3 && m3.verificare === 'nedovedit' && m3.rand === null && m4 && m4.verificare === 'ok' && Number(m4.valoare) === 100 && m1 && m1.verificare === 'ok' && Number(s.valoare_a) === 6500,
       'denumirea scurtă NU ia rândul denumirii lungi (nedovedit); poziția SDR17 → ok 100; A = 6400 + 100 doar din rândurile dovedite… agregare incompletă: ' + JSON.stringify(m.map(x => [x.cantitate_id, x.verificare, x.valoare])))
     ast(ab, s.verdict === 'neverificat' && /agregare incompletă/.test(s.motiv), 'poziția nedovedită → neverificat (agregare incompletă): ' + s.motiv)
+    // r4 P1: denumirea ca SUFIX al celulei altui articol („… DN110 si furnizare teava PE100 DN160 M 100”) → celula nu începe cu denumirea → nedovedit, nu ok
+    m = await reeval(PAG(1, 'Formularul F3', 'Nr. Cod Denumire UM Cantitate', '003 SA11G1 TEAVA PE100 DN160 M 6.400', 'Nr. Denumire UM Cantitate', '007 Furnizare teava PE100 DN110 si furnizare teava PE100 DN160 M 100'))
+    ast(ab, m.find(x => Number(x.cantitate_id) === p3)?.verificare === 'nedovedit' && m.find(x => Number(x.cantitate_id) === p3)?.rand === null && m.find(x => Number(x.cantitate_id) === p4)?.verificare === 'nedovedit',
+      'denumirea ca sufix al unei celule cu două diametre → nedovedit (celula trebuie să ÎNCEAPĂ cu denumirea): ' + JSON.stringify(m.map(x => [x.cantitate_id, x.verificare, x.rand])))
+    // numărul de ordine ierarhic („1.2.3”) și rândul fără număr: celula începe tot cu denumirea → ok
+    m = await reeval(PAG(1, 'Formularul F3', 'Nr. Denumire UM Cantitate', '1.2.3 Furnizare teava PE100 DN160 M 100', 'Furnizare teava PE100 DN160 SDR17 M 100', 'Nr. Cod Denumire UM Cantitate', '003 SA11G1 TEAVA PE100 DN160 M 6.400'))
+    ast(ab, m.filter(x => x.verificare === 'ok').length === 3, 'nr. ierarhic / fără nr. înaintea denumirii → ok: ' + JSON.stringify(m.map(x => [x.cantitate_id, x.verificare])))
     // rândul scurt există și el: fiecare poziție își ia rândul ei (denumire + UM ca ancoră)
     m = await reeval(PAG(1, 'Formularul F3', 'Nr. Denumire UM Cantitate', '006 Furnizare teava PE100 DN160 M 100', '007 Furnizare teava PE100 DN160 SDR17 M 100', 'Nr. Cod Denumire UM Cantitate', '003 SA11G1 TEAVA PE100 DN160 M 6.400'))
     ast(ab, m.filter(x => x.verificare === 'ok').length === 3 && m.find(x => Number(x.cantitate_id) === p3)?.rand === '006 Furnizare teava PE100 DN160 M 100' && m.find(x => Number(x.cantitate_id) === p4)?.rand === '007 Furnizare teava PE100 DN160 SDR17 M 100',
@@ -1709,7 +1716,9 @@ if (vrea('t5') && MIG) {
     ['M57 rândul-ancoră ales după cantitate (forma r2)', [["END;   -- ancora, FARA cantitate", "END\n       AND EXISTS (SELECT 1 FROM unnest(regexp_split_to_array(btrim(regexp_replace(l.linie, '[ ' || chr(9) || ']+', ' ', 'g')), ' ')) t WHERE (public.fn_ofertare_numar_ro(t) ->> 'valoare')::numeric = q.cantitate);   -- ancora, FARA cantitate"]], ['t3_dovada_a_cod_intreg + t3_dovada_a_ambigua']],
     // r3 P1: același rând revendicat de două poziții; denumirea ca subșir al alteia (fără UM-ul poziției după ea)
     ['M58 rândul revendicat de două poziții → ambele ok (revendicările ignorate)', [["          IF v_anc_n > 1 OR v_rev > 0 THEN v_ver := 'rand_ambiguu'; END IF;", "          IF v_anc_n > 1 THEN v_ver := 'rand_ambiguu'; END IF;"]], ['t3_dovada_a_cod_intreg + t3_dovada_a_ambigua']],
-    ['M59 ancora pe denumire fără UM-ul poziției după ea (forma r3)', [["' ' || public.fn_ofertare_masura_norm(q.denumire) || ' ' || public.fn_ofertare_masura_norm(q.um) || ' ') > 0 END;", "' ' || public.fn_ofertare_masura_norm(q.denumire) || ' ') > 0 END;"]], ['t3_dovada_a_cod_intreg + t3_dovada_a_ambigua']],
+    ['M59 ancora pe denumire fără UM-ul poziției după ea (forma r3)', [["public.fn_ofertare_masura_norm(q.denumire) || ' ' || public.fn_ofertare_masura_norm(q.um) || ' ') = 1 END;", "public.fn_ofertare_masura_norm(q.denumire) || ' ') = 1 END;"]], ['t3_dovada_a_cod_intreg + t3_dovada_a_ambigua']],
+    // r4 P1: denumirea acceptată oriunde în celulă (sufix), nu la începutul ei
+    ['M60 ancora pe denumire ca subșir al celulei, nu la început (forma r4)', [["public.fn_ofertare_masura_norm(q.um) || ' ') = 1 END;   -- ancora, FARA cantitate", "public.fn_ofertare_masura_norm(q.um) || ' ') > 0 END;   -- ancora, FARA cantitate"]], ['t3_dovada_a_cod_intreg + t3_dovada_a_ambigua']],
   ]
   const DOAR_MUTANT = (process.argv.find(a => a.startsWith('--mutant=')) || '').slice('--mutant='.length)   // depanare: un singur mutant
   for (const [nume, inl, scenarii] of MUTANTI) {

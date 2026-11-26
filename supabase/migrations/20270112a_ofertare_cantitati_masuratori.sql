@@ -941,9 +941,11 @@ BEGIN
      WHERE d.licitatie_id = p_licitatie_id
        AND d.id IN (SELECT q.surse_document_ids[1] FROM public.ofertare_cantitati q WHERE q.licitatie_id = p_licitatie_id AND q.surse_document_ids IS NOT NULL AND cardinality(q.surse_document_ids) > 0);
   -- (c2) ancorele pozitiilor F3 (pasul (1) al dovezii A), pentru TOATE pozitiile deodata si FARA cantitate (r2 / r3 P1): randurile documentului-sursa
-  --      care contin codul articolului CA TOKEN INTREG (intre spatii, dupa normalizarea spatiilor; „SA11G1” NU e „SA11G10”) sau, fara cod, denumirea
-  --      normalizata URMATA de UM-ul pozitiei (celula de denumire se termina inaintea coloanei UM: „furnizare teava pe100 dn160 m” nu e inclusa in
-  --      „… dn160 sdr17 m”). Un rand revendicat de MAI MULTE pozitii nu dovedeste pe niciuna (rand_ambiguu la toate, pasul (d)).
+  --      care contin codul articolului CA TOKEN INTREG (intre spatii, dupa normalizarea spatiilor; „SA11G1” NU e „SA11G10”) sau, fara cod, CELULA de
+  --      denumire INTREAGA: randul normalizat, dupa numarul de ordine optional („007 ” / „1.2.3 ”), INCEPE cu denumirea normalizata urmata de UM-ul
+  --      pozitiei (celula se termina inaintea coloanei UM si incepe la inceputul randului): „furnizare teava pe100 dn160 m” nu e inclusa in
+  --      „… dn160 sdr17 m”, nici ca sufix in „… dn110 si furnizare teava pe100 dn160 m” (r4 P1). Un rand revendicat de MAI MULTE pozitii nu dovedeste
+  --      pe niciuna (rand_ambiguu la toate, pasul (d)). F3-urile cu coloana de cod, dar pozitii fara cod in ERP, raman nedovedite (la om).
   DROP TABLE IF EXISTS cm_ancore;
   CREATE TEMP TABLE cm_ancore ON COMMIT DROP AS
     SELECT q.id AS cantitate_id, l.document_id, l.pagina, l.nr, l.linie
@@ -952,7 +954,8 @@ BEGIN
      WHERE q.licitatie_id = p_licitatie_id AND q.status IS DISTINCT FROM 'retrasa' AND q.surse_document_ids IS NOT NULL AND cardinality(q.surse_document_ids) > 0
        AND CASE WHEN nullif(btrim(q.cod_articol), '') IS NOT NULL
                 THEN strpos(' ' || upper(btrim(regexp_replace(l.linie, '[ ' || chr(9) || ']+', ' ', 'g'))) || ' ', ' ' || upper(btrim(q.cod_articol)) || ' ') > 0
-                ELSE strpos(' ' || public.fn_ofertare_masura_norm(l.linie) || ' ', ' ' || public.fn_ofertare_masura_norm(q.denumire) || ' ' || public.fn_ofertare_masura_norm(q.um) || ' ') > 0 END;   -- ancora, FARA cantitate
+                ELSE strpos(regexp_replace(public.fn_ofertare_masura_norm(l.linie), '^[0-9]+([.][0-9]+)*[.]? ', '') || ' ',
+                            public.fn_ofertare_masura_norm(q.denumire) || ' ' || public.fn_ofertare_masura_norm(q.um) || ' ') = 1 END;   -- ancora, FARA cantitate
   -- (d) pozitiile F3 (partea A): clasificare in SQL, lot, obiect; componenta A se scrie MEREU (pe obiect SI pe nivelul lucrarii '*')
   FOR r IN SELECT q.* FROM public.ofertare_cantitati q WHERE q.licitatie_id = p_licitatie_id AND q.status IS DISTINCT FROM 'retrasa' ORDER BY q.id LOOP
     v_tip := CASE WHEN public.fn_ofertare_masura_norm(r.denumire) ~ 'protect' THEN 'protectie' WHEN public.fn_ofertare_masura_norm(r.denumire) ~ 'bransament' THEN 'bransament'
