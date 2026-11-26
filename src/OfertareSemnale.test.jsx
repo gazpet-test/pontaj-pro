@@ -207,6 +207,9 @@ dom('ecranul semnalelor (jsdom)', () => {
     const butoane = () => [...d.querySelectorAll('button')].filter(b => b.textContent.includes('Nu e sursă cantitativă'))
     expect(butoane().length).toBe(2)
     const apasa = async b => { await act(async () => { b.dispatchEvent(new j.MouseEvent('click', { bubbles: true })) }); await act(async () => { for (let i = 0; i < 80; i++) await Promise.resolve() }) }
+    // sha-ul se calculează cu crypto.subtle (nu e microtask): se așteaptă condiția, cu timp real, până la 2 s (sub încărcare 80 de microtask-uri nu ajung)
+    const pana = async (cond) => { for (let i = 0; i < 200 && !cond(); i++) await act(async () => { await new Promise(r => setTimeout(r, 10)) }) }
+    const nToast = () => toast.mock.calls.length
     // anulare: prompt → null → nimic trimis
     j.prompt = () => null
     await apasa(butoane()[0])
@@ -218,10 +221,12 @@ dom('ecranul semnalelor (jsdom)', () => {
     // documentul fără text (103) → sha-ul șirului vid (așteptat din sursă independentă: node:crypto)
     const { createHash } = await import('node:crypto')
     j.prompt = () => 'document al altui lot'
-    await apasa(butoane()[0])
+    let t0 = nToast()
+    await apasa(butoane()[0]); await pana(() => nToast() > t0)
     expect(decizii[0]).toEqual({ p_document_id: DOC_ATR_T2, p_doc_sha256: createHash('sha256').update('').digest('hex'), p_rol: 'alt', p_sectiune: '*', p_decizie: 'nu_e_sursa_cantitativa', p_motiv: 'document al altui lot' })
     // documentul cu text (104) → sha-ul textului de ACUM
-    await apasa(butoane()[1])
+    t0 = nToast()
+    await apasa(butoane()[1]); await pana(() => nToast() > t0)
     expect(decizii[1]).toMatchObject({ p_document_id: DOC_CU_TEXT, p_doc_sha256: createHash('sha256').update(TEXT_DOC_104, 'utf8').digest('hex'), p_decizie: 'nu_e_sursa_cantitativa' })
     expect(toast.mock.calls.filter(c => String(c[0]).includes('Decizia a fost înregistrată')).length).toBe(2)
   })
