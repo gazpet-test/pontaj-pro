@@ -201,9 +201,12 @@ BEGIN
                    AND pg_get_constraintdef(oid) = 'CHECK ((status = ANY (ARRAY[''propunere''::text, ''de_trimis''::text, ''trimisa''::text, ''raspunsa''::text, ''retrasa''::text])))') THEN
     RAISE EXCEPTION '20270112a: CHECK-ul de status al ofertare_clarificari nu e cel asteptat (propunere / de_trimis / trimisa / raspunsa / retrasa)';
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid = 'public.ofertare_clarificari'::regclass AND c.contype = 'u'
-                   AND (SELECT string_agg(a.attname::text, ',' ORDER BY k.o) FROM unnest(c.conkey) WITH ORDINALITY k(n, o)
-                          JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.n) = 'licitatie_id,cheie') THEN
+  -- unicitatea (licitatie_id, cheie): pe producție e INDEX unic (ofertare_clarificari_cheie_uq), nu constrângere — se cere un index unic
+  -- (orice constrângere UNIQUE are și ea unul) valid, imediat, nepartial, fără expresii, cu cheia EXACT (licitatie_id, cheie), în ordine
+  IF NOT EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid = 'public.ofertare_clarificari'::regclass
+                   AND i.indisunique AND i.indisvalid AND i.indimmediate AND i.indpred IS NULL AND i.indexprs IS NULL AND i.indnkeyatts = 2
+                   AND (SELECT string_agg(a.attname::text, ',' ORDER BY k.o) FROM unnest(i.indkey::int2[]) WITH ORDINALITY k(n, o)
+                          JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.n WHERE k.o <= i.indnkeyatts) = 'licitatie_id,cheie') THEN
     RAISE EXCEPTION '20270112a: lipseste UNIQUE (licitatie_id, cheie) pe ofertare_clarificari';
   END IF;
   IF EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid = 'public.ofertare_clarificari'::regclass AND c.contype IN ('u', 'p')

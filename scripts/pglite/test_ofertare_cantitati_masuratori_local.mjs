@@ -1758,6 +1758,50 @@ if (vrea('t5') && MIG) {
     try { ro = await rezultat(SCEN[scenariu_], orig); rm = await rezultat(SCEN[scenariu_], aplica(orig, inl)) } catch (e) { ro = 'x'; rm = 'x'; console.log('     ' + e.message) }
     ok(ro !== rm && /^REFUZ/.test(ro), `${nume} prins: original «${ro.slice(0, 80)}» ≠ mutant «${rm.slice(0, 80)}»`)
   }
+
+  // ── garda UNIQUE (licitatie_id, cheie) (proba pe clona 176, 26.11.2026): pe producție unicitatea e INDEX unic, nu constrângere ──
+  // Scheletul are acum forma producției (index); aici: forma constrângere trebuie acceptată, iar orice unicitate care NU e exact
+  // (licitatie_id, cheie) — parțială, pe expresie, în altă ordine, neunică, lipsă — refuzată, cu baza neschimbată.
+  console.log('t5.7 garda UNIQUE (licitatie_id, cheie): index unic (producție) / constrângere acceptate; formele greșite refuzate')
+  const FARA_UQ = `DROP INDEX public.ofertare_clarificari_cheie_uq;`
+  const UQ = {
+    constrangere: [`${FARA_UQ} ALTER TABLE public.ofertare_clarificari ADD CONSTRAINT ofertare_clarificari_licitatie_id_cheie_key UNIQUE (licitatie_id, cheie);`, true],
+    cuInclude: [`${FARA_UQ} CREATE UNIQUE INDEX uq_t ON public.ofertare_clarificari (licitatie_id, cheie) INCLUDE (nr);`, true],
+    partial: [`${FARA_UQ} CREATE UNIQUE INDEX uq_t ON public.ofertare_clarificari (licitatie_id, cheie) WHERE cheie IS NOT NULL;`, false],
+    expresie: [`${FARA_UQ} CREATE UNIQUE INDEX uq_t ON public.ofertare_clarificari (licitatie_id, lower(cheie));`, false],
+    ordine: [`${FARA_UQ} CREATE UNIQUE INDEX uq_t ON public.ofertare_clarificari (cheie, licitatie_id);`, false],
+    treiColoane: [`${FARA_UQ} CREATE UNIQUE INDEX uq_t ON public.ofertare_clarificari (licitatie_id, cheie, nr);`, false],
+    neunic: [`${FARA_UQ} CREATE INDEX uq_t ON public.ofertare_clarificari (licitatie_id, cheie);`, false],
+    amanat: [`${FARA_UQ} ALTER TABLE public.ofertare_clarificari ADD CONSTRAINT uq_t UNIQUE (licitatie_id, cheie) DEFERRABLE INITIALLY DEFERRED;`, false],
+    lipsa: [FARA_UQ, false],
+  }
+  for (const [nume, [sql, acceptat]] of Object.entries(UQ)) {
+    const db = await bazaNoua()
+    try {
+      await db.exec(sql)
+      const s = await stare(db)
+      const r = await livreaza(db, MIG)
+      if (acceptat) ok(r.ok, `UNIQUE ${nume}: acceptat (${r.ok ? 'aplicat' : r.eroare.slice(0, 120)})`)
+      else ok(!r.ok && /lipseste UNIQUE \(licitatie_id, cheie\)/.test(r.eroare) && JSON.stringify(await stare(db)) === JSON.stringify(s),
+        `UNIQUE ${nume}: refuzat de gardă, baza neschimbată (${(r.eroare || 'APLICAT').slice(0, 120)})`)
+    } finally { await db.close() }
+  }
+  // mutanții gărzii: fiecare condiție scoasă lasă să treacă o formă greșită (original REFUZ ≠ mutant APLICAT)
+  for (const [nume, inl, forma] of [
+    ['G1 garda fără indpred (parțial acceptat)', [[' AND i.indpred IS NULL AND i.indexprs IS NULL', ' AND i.indexprs IS NULL']], 'partial'],
+    // (G2 „fără indexprs” e un mutant ECHIVALENT: coloana-expresie are attnum 0 în indkey, nu se potrivește cu nicio coloană, deci comparația
+    //  pe numele coloanelor refuză oricum indexul pe expresie — apărare dublă, verificată de forma „expresie” de mai sus, nu lipsă de probă)
+    ['G3 garda fără indisunique (index simplu acceptat)', [['AND i.indisunique AND i.indisvalid', 'AND i.indisvalid']], 'neunic'],
+    ['G4 garda fără indimmediate (constrângere amânată acceptată)', [[' AND i.indimmediate AND', ' AND']], 'amanat'],
+    // ordinea ignorată: coloanele sortate descrescător dau „licitatie_id,cheie” pentru ambele ordini
+    ['G5 garda fără ordinea coloanelor', [['ORDER BY k.o) FROM unnest(i.indkey::int2[])', 'ORDER BY a.attname DESC) FROM unnest(i.indkey::int2[])']], 'ordine'],
+    ['G6 garda pe primele 2 coloane, fără numărul de coloane-cheie', [[' AND i.indnkeyatts = 2', ''], ['WHERE k.o <= i.indnkeyatts)', 'WHERE k.o <= 2)']], 'treiColoane'],
+  ]) {
+    const scen = async (db, t) => { await db.exec(UQ[forma][0]); return livreaza(db, t) }
+    let ro, rm
+    try { ro = await rezultat(scen, MIG); rm = await rezultat(scen, aplica(MIG, inl)) } catch (e) { ro = 'x'; rm = 'x'; console.log('     ' + e.message) }
+    ok(/^REFUZ/.test(ro) && /^APLICAT/.test(rm), `${nume} prins: original «${ro.slice(0, 70)}» / mutant «${rm.slice(0, 70)}»`)
+  }
 }
 
 console.log(esec ? `\nEȘEC: ${esec} verificări picate` : '\nTOATE VERIFICĂRILE AU TRECUT')

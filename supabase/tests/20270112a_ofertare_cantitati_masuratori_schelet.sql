@@ -161,9 +161,10 @@ CREATE TABLE public.ofertare_clarificari (
     CONSTRAINT ofertare_clarificari_status_check CHECK (status = ANY (ARRAY['propunere', 'de_trimis', 'trimisa', 'raspunsa', 'retrasa'])),
   raspuns text, raspuns_la timestamptz, created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now(), origine text, cheie text,
   baza_generare jsonb, fisier_path text, creat_de uuid, citita_la timestamptz, citita_rezumat text, raspuns_document_id bigint,
-  surse_document_ids bigint[], surse_cerinte_ids bigint[], surse_cantitati_ids bigint[],
-  CONSTRAINT ofertare_clarificari_licitatie_id_cheie_key UNIQUE (licitatie_id, cheie)
+  surse_document_ids bigint[], surse_cerinte_ids bigint[], surse_cantitati_ids bigint[]
 );
+-- unicitatea (licitatie_id, cheie) ca pe producție și pe clona 176: INDEX unic, nu constrângere (proba pe clonă 26.11.2026)
+CREATE UNIQUE INDEX ofertare_clarificari_cheie_uq ON public.ofertare_clarificari USING btree (licitatie_id, cheie);
 ALTER TABLE public.ofertare_clarificari ENABLE ROW LEVEL SECURITY;
 CREATE POLICY clar_acces ON public.ofertare_clarificari FOR ALL TO authenticated USING (public.fn_are_acces_ofertare()) WITH CHECK (public.fn_are_acces_ofertare());
 
