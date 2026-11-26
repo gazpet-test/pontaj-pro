@@ -489,3 +489,19 @@ describe('runda r2 Jakarinos', () => {
     expect(() => creeazaAxa(creeazaCalendar(), '2099-12-30').zi(5)).toThrow(/dincolo de 2099-12-31/)
   })
 })
+
+describe('runda r3 Jakarinos (condiția GO)', () => {
+  it('termen după 31.12.2099: eroare TERMEN_INVALID, nu rezervă trunchiată', () => {
+    const g = { ...graficBun(), data_start: '2099-12-31', termen: { tip: 'data', valoare: '2100-01-05' },
+      activitati: [{ cod: 'A1', denumire: 'Sudură', categorie: 'executie', articole_deviz: ['ART1'], executant: 'Gazpet', durata_zile_lucratoare: 1, sursa_durata: 'norma:SUD-01', tip_echipa: 'sudori' },
+        { cod: 'A2', denumire: 'Izolare', categorie: 'executie', articole_deviz: ['ART2'], executant: 'SubX', durata_zile_lucratoare: 0, sursa_durata: 'raspuns:17', tip_echipa: 'izolatori' }],
+      legaturi: [] }
+    expect(() => dataLimita({ tip: 'data', valoare: '2100-01-05' }, '2099-12-31', creeazaAxa(creeazaCalendar(), '2099-12-31'))).not.toThrow() // data în sine e validă
+    const r = calculeazaGrafic(g)
+    expect(r.probleme.find(p => p.cod === 'TERMEN_INVALID')?.mesaj).toMatch(/dincolo de capătul calendarului/)
+    expect(r.poate_fi_go).toBe(false)
+    expect(r.termen).toBe(null)
+    // termenul chiar pe 31.12.2099 rămâne calculabil
+    expect(coduri(calculeazaGrafic({ ...g, termen: { tip: 'data', valoare: '2099-12-31' } }))).not.toContain('TERMEN_INVALID')
+  })
+})

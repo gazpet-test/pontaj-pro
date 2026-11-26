@@ -61,6 +61,8 @@ export function verificaStructura({ noduri, legaturi, cpm, mod, articoleValidate
   else {
     try {
       const limita = dataLimita(termen, dataOI, axa)
+      // r3 Jak (condiția GO): calendarul (Paștele calculat) se oprește la 31.12.2099 — un termen de după n-are rezervă calculabilă
+      if (limita > '2099-12-31') throw new Error(`termenul ${limita} e dincolo de capătul calendarului (31.12.2099) — rezerva nu se poate calcula`)
       const iLim = axa.index(limita)
       const iFin = Math.max(0, cpm.durata - 1)
       termenRez = { data_limita: limita, data_final: dataFinal, rezerva_zile_lucratoare: iLim - iFin, incadrat: dinIso(dataFinal) <= dinIso(limita) }
