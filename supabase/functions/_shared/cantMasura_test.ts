@@ -177,6 +177,12 @@ Deno.test('paginiRulare: document fără extragere gata → documente_necitite (
   assertEquals(r.felii_incomplete, [{ extragere_id: 7, felie_nr: 0, motiv: 'deficit' }])
   // document necitit fără stare din rulare → eticheta implicită
   assertEquals(paginiRulare(foto, new Map(), [], []).documente_necitite_stare, [{ document_id: 2, stare: 'fara_extragere_gata' }])
+  // eligibilitatea: doar documentele pe care extragerea le citește pot fi „necitite” (o planșă / o versiune înlocuită fără extragere nu blochează)
+  assertEquals(paginiRulare(foto, new Map(), [], [], new Set([1, 3])).documente_necitite, [])
+  assertEquals(paginiRulare(foto, new Map(), [], [], new Set([1, 2, 3])).documente_necitite, [2])
+  assertEquals(paginiRulare(foto, new Map(), [], [], null).documente_necitite, [2])
+  // paginile și plafonul nu depind de eligibilitate (plafonul numără toate documentele, ca SQL)
+  assertEquals(paginiRulare(foto, new Map(), [], [], new Set([1, 3])).pagini_necitite, paginiRulare(foto, new Map(), [], []).pagini_necitite)
 })
 
 Deno.test('rezumatSemnale: răspuns mixt al publicării; fără semnale / formă străină → zerouri', () => {

@@ -19,6 +19,8 @@ function fals(raspunsuri: Partial<Record<'principal' | 'escaladare', RezultatAI>
     rpc: async (fn, args) => {
       ;(rpcArgs[fn] ??= []).push(args)
       if (fn === 'fn_ofertare_cb_text_valid') return { data: { tip: 'prov', id: 1 }, error: null }
+      // TKT-0329 A (PR-extragere): fotografia surselor (plafonul de pagini) — fără ea extragerea nu pornește (fail-closed)
+      if (fn === 'fn_ofertare_semnale_fotografie') return { data: { licitatie_id: 15, sha: 'foto', documente: [{ id: 212, pagini: 1 }], plafon: 200 }, error: null }
       if (fn === 'fn_ofertare_cb_felie_inchide') inchideri.push(String(args.p_stare))
       if (fn === 'fn_ofertare_cb_extragere_incepe_grup') return { data: { ok: true, cache: false, extragere_id: 7 }, error: null }
       if (fn === 'fn_ofertare_cb_felie_incepe') return { data: { ok: true, felie_id: 70 }, error: null }

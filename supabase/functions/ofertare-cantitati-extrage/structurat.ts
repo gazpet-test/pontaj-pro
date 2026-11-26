@@ -13,6 +13,8 @@ import { feliiCuPozitie } from './sectiuni.ts'
 import { type Rol, type SectiuneRol, aplicaDecizii, cheieSectiune, sectiuniRol } from './roluri.ts'
 import { MODEL_A, MODEL_S, OVERHEAD_A, PROMPT_A, tarifA, tarifS } from './extractorA.ts'
 import { type PoartaFelie, poartaFelie } from './poartaB1.ts'
+import { eFotografie, limitaPagini, paginiInterval } from '../_shared/cantMasura.ts'
+import { comparaSurse, type RaportMasuratori } from './masuratori.ts'
 
 export const EXTRACTOR = { model: 'gpt-5-mini', prompt: 'p3', normalizator: 'n7', feliere: 'f2' }   // n5 (20.10): coduri cu „%” + coloana „[ n]”; n6 (21.10): antetul „<cod> pag N” sub marcaj; n7 (21.10): „<n> COD <cod>” = continuare
 export const EXTRACTOR_ID = `${EXTRACTOR.model}@${EXTRACTOR.prompt}@${EXTRACTOR.normalizator}@${EXTRACTOR.feliere}`
@@ -43,7 +45,9 @@ export const idExtractor = (e: Extractor) => `${e.model}${e.escaladare ? '/' + e
 // review Jakarinos #757 r1 (P1): 'lista_alt' rămâne extrasă — eticheta e euristică (o pagină F3 / un memoriu pot moșteni lista_alt), deci
 // excluderea ei poate tăia lungimi reale; rândurile C7 / C8 întoarse ca obiecte sunt acum normalizabile (n4)
 const ROLURI_EXTRASE: Rol[] = ['f3', 'c6', 'lista_alt', 'atr', 'cs', 'fisa_date', 'memoriu', 'plansa', 'raspuns']
-const TIPURI_ELIGIBILE = ['lista_cantitati', 'cs_volum', 'fisa_date', 'alta', 'raspuns_clarificare']
+// TKT-0329 A (PR-extragere, decizia 14 / întrebarea (f), aprobată de owner): și `formular` — F3-ul stă deseori acolo; costul intră în aceeași
+// cerere și sub același plafon de pagini al licitației. `plansa` rămâne în afara extragerii structurate (textul planșelor vine din fluxul separat)
+export const TIPURI_ELIGIBILE = ['lista_cantitati', 'formular', 'cs_volum', 'fisa_date', 'alta', 'raspuns_clarificare']
 
 export type Raspuns = { status: number; body: Record<string, unknown> }
 export type RezultatAI = { txt: string; inF: number; outF: number; eroare?: string; necunoscut?: boolean }
@@ -119,9 +123,11 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
     return { status: 402, body: { ok: false, error: 'Fără cerere de cheltuială activă pentru extragere (o aprobă owner-ul sau responsabilul).' } }
   }
   // 2. documentele: ultimele versiuni, tipurile eligibile, cu text; sha + validitatea textului (predicatul unic, prin RPC)
-  const docs0 = ultimeleVersiuni(await deps.documente(p.licitatie_id))
-    .filter((d) => TIPURI_ELIGIBILE.includes(d.tip) && (d.text_extras || '').length > 0)
+  const eligibileToate = ultimeleVersiuni(await deps.documente(p.licitatie_id)).filter((d) => TIPURI_ELIGIBILE.includes(d.tip))
+  const docs0 = eligibileToate.filter((d) => (d.text_extras || '').length > 0)
   const raport: Record<string, unknown>[] = []
+  // TKT-0329 A: un document de tip extractibil FĂRĂ text (încă necitit) e raportat, nu sărit tăcut — intră în documente_necitite ale comparației
+  for (const d of eligibileToate) if (!(d.text_extras || '').length) raport.push({ document_id: d.id, sarit: 'fara_text' })
   const docs: (Document & { sha: string })[] = []
   for (const d of docs0) {
     const sha = await sha256Hex(d.text_extras as string)
@@ -145,8 +151,26 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
   const rezumatPoarta = (pb: PoartaFelie) => ({ ancore: pb.ancore, acoperite: pb.acoperite, incerte: pb.incerte,
     tabele_nedeterminate: pb.tabele_nedeterminate, deficit: pb.deficit, complet: pb.complet,
     neacoperite: pb.neacoperite.slice(0, 10).map((x) => x.nr_id ?? `linia ${x.linie}`) })
+  // TKT-0329 A (PR-extragere, decizia 18): plafonul de pagini = UN singur numărător cumulat peste TOATE documentele licitației din fotografia
+  // surselor (ordinea id, inclusiv cele servite din cache), cu plafonul licitației (fn_ofertare_semnale_fotografie, 20270112a) — aceeași
+  // definiție ca fn_ofertare_masura_pagini_permise (limitaPagini). Fotografia indisponibilă = plafon neverificabil = NICIUN apel plătit
+  // (fail-closed, L18 / L22): raportul spune de ce, nimic nu se procesează, iar comparația nu propune nimic.
+  const foto0 = await deps.rpc('fn_ofertare_semnale_fotografie', { p_licitatie_id: p.licitatie_id })
+  if (foto0.error || !eFotografie(foto0.data)) {
+    const m = 'fotografie: ' + (foto0.error?.message ?? 'răspuns fără forma fotografiei')
+    raport.push({ eroare: m, nota: 'plafonul de pagini nu poate fi verificat — nicio felie nu a fost trimisă la AI' })
+    const masuratori: RaportMasuratori = { ok: false, eroare: m, felii: 0 }
+    return { status: 200, body: { ok: false, mod: 'structurat', extractor: idExtractor(xt), felii_apelate: 0, felii_cu_deficit_b1: 0, felii_escaladate: 0, cost_usd: 0,
+      oprit: 'fotografie_indisponibila', raport, plafon: null, peste_plafon: [], masuratori } }
+  }
+  const limita = limitaPagini(foto0.data.documente.map((x) => ({ id: x.id, pagini: x.pagini })), foto0.data.plafon)
+  const ultimaPermisa = new Map(limita.limita.map((x) => [x.document_id, x.ultima_pagina_permisa]))
+  // feliile excluse de plafon (pe document: numerele feliilor + paginile lor) și starea fiecărui document în această rulare (pentru inventar)
+  const pestePlafon = new Map<number, { felii: number[]; pagini: Set<number> }>()
+  const stareDoc = new Map<number, string>()
+  for (const x of raport) if (typeof x.document_id === 'number' && typeof x.sarit === 'string') stareDoc.set(x.document_id, 'sarit:' + x.sarit)
   for (const d of docs) {
-    if (oprit) break
+    if (oprit) { stareDoc.set(d.id, 'neprocesat:' + oprit); continue }
     const text = d.text_extras as string
     const ctxConv = conv.get(radacinaParte(d.nume_original))!
     const lot = loturi.get(d.id) ?? { domeniu: 'necunoscut' as const, loturi: [] }
@@ -154,13 +178,27 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
     const dDoc = decizii.filter((x) => x.document_id === d.id && x.doc_sha256 === d.sha)
     const sectiuni = aplicaDecizii(sectiuniRol(text, d.nume_original, d.tip), dDoc)
     const deExtras = sectiuni.filter((s) => s.rol !== null && ROLURI_EXTRASE.includes(s.rol)) as SectiuneRol[]
-    if (!deExtras.length) { raport.push({ document_id: d.id, sarit: 'fara_sectiuni_cantitative' }); continue }
+    if (!deExtras.length) { raport.push({ document_id: d.id, sarit: 'fara_sectiuni_cantitative' }); stareDoc.set(d.id, 'sarit:fara_sectiuni_cantitative'); continue }
     const felii: Felie[] = []
     for (const s of deExtras) {
       for (const f of feliiCuPozitie(text.slice(s.de, s.pana))) {
         felii.push({ nr: felii.length, de_la: s.de + f.de, pana_la: s.de + f.de + f.text.length, text: f.text, s })
       }
     }
+    // plafonul (decizia 18), ÎNAINTEA buclei de felii: o felie e permisă DOAR dacă TOATE paginile ei sunt ≤ ultima pagină permisă a documentului;
+    // una care traversează limita e exclusă întreagă (nu se împarte), paginile ei intră în pagini_necitite; feliile excluse nu ajung la
+    // felie_incepe / rezervare / AI, iar extragerea documentului rămâne `partial`. Un document absent din fotografie = 0 pagini permise.
+    const permise = new Set<number>()
+    for (const f of felii) {
+      const pg = paginiInterval(text, f.de_la, f.pana_la)
+      if (pg.pagina_pana_la <= (ultimaPermisa.get(d.id) ?? 0)) { permise.add(f.nr); continue }
+      const e = pestePlafon.get(d.id) ?? { felii: [], pagini: new Set<number>() }
+      e.felii.push(f.nr)
+      for (let q = pg.pagina_de_la; q <= pg.pagina_pana_la; q++) e.pagini.add(q)
+      pestePlafon.set(d.id, e)
+      raport.push({ document_id: d.id, felie: f.nr, peste_plafon: [pg.pagina_de_la, pg.pagina_pana_la] })
+    }
+    if (!permise.size) { raport.push({ document_id: d.id, sarit: 'peste_plafon', felii: felii.length }); stareDoc.set(d.id, 'sarit:peste_plafon'); continue }
     const extractorId = await extractorCuContext(ctxConv.conventie, ctxConv.manifest, dDoc, xt)
     // 4. extragerea, prin RPC-ul de GRUP (20261031b, review r3): sub lock-uri pe toate documentele grupului, mulțimea curentă a părților
     // valide trebuie să fie EXACT manifestul convenției (altfel „grup_schimbat”, tot grupul sărit, rularea următoare recalculează);
@@ -169,14 +207,14 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
     const ex = await deps.rpc('fn_ofertare_cb_extragere_incepe_grup', { p_cerere_id: c.id, p_document_id: d.id, p_sha256: d.sha, p_familie_id: familie,
       p_extractor_id: extractorId, p_felii_total: felii.length, p_manifest: ctxConv.manifest,
       p_decizii: dDoc.map((x) => Number(x.id)).filter((x) => Number.isFinite(x)) })
-    if (ex.error) { raport.push({ document_id: d.id, eroare: 'extragere_incepe: ' + ex.error.message }); continue }
+    if (ex.error) { raport.push({ document_id: d.id, eroare: 'extragere_incepe: ' + ex.error.message }); stareDoc.set(d.id, 'eroare:extragere_incepe'); continue }
     // contextul s-a schimbat sub mutex (grup / decizii de rol) sau un document e ocupat de un producător: sărit, fail-closed, reîncercat
-    if (['grup_schimbat', 'context_schimbat', 'grup_ocupat', 'cerere_ocupata'].includes(ex.data?.refuz)) { raport.push({ document_id: d.id, sarit: ex.data.refuz }); continue }
-    if (ex.data?.cache) { raport.push({ document_id: d.id, cache: true, extragere_id: ex.data.extragere_id }); continue }
+    if (['grup_schimbat', 'context_schimbat', 'grup_ocupat', 'cerere_ocupata'].includes(ex.data?.refuz)) { raport.push({ document_id: d.id, sarit: ex.data.refuz }); stareDoc.set(d.id, 'sarit:' + ex.data.refuz); continue }
+    if (ex.data?.cache) { raport.push({ document_id: d.id, cache: true, extragere_id: ex.data.extragere_id }); stareDoc.set(d.id, 'cache'); continue }
     let x: number
     if (ex.data?.refuz === 'extragere_in_lucru') {
       const preluata = await deps.extragereInLucru(d.id, d.sha, extractorId)
-      if (!preluata) { raport.push({ document_id: d.id, refuz: 'extragere_in_lucru' }); continue }
+      if (!preluata) { raport.push({ document_id: d.id, refuz: 'extragere_in_lucru' }); stareDoc.set(d.id, 'refuz:extragere_in_lucru'); continue }
       // review r2: preluarea doar pe ACEEAȘI cerere (rularea → aprobarea ei); pe altă cerere = închidere / redeschidere de om
       if (preluata.cerere_id !== c.id) {
         // 20.10.2026 (extragerea #157 rămasă în lucru pe cererea expirată #2): dacă cererea veche NU mai e activă (expirată / anulată),
@@ -186,23 +224,25 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
         const cv = await deps.cerere(preluata.cerere_id)
         const vecheActiva = !cv || (cv.stare === 'activa' && Date.parse(cv.valabil_pana) > Date.now())
         const g = vecheActiva ? null : await deps.feliiGata(preluata.id)
-        if (!g) { raport.push({ document_id: d.id, refuz: 'in_lucru_pe_alta_cerere', cerere_id: preluata.cerere_id }); continue }
+        if (!g) { raport.push({ document_id: d.id, refuz: 'in_lucru_pe_alta_cerere', cerere_id: preluata.cerere_id }); stareDoc.set(d.id, 'refuz:in_lucru_pe_alta_cerere'); continue }
         // review Gemini #813 r1 (P2): un total 0 / invalid nu poate da „gata”
         const st = Number.isFinite(g.total) && g.total > 0 && g.gata >= g.total ? 'gata' : g.gata > 0 ? 'partial' : 'esuat'
         const ic = await deps.rpc('fn_ofertare_cb_extragere_inchide', { p_extragere_id: preluata.id, p_stare: st })
         raport.push({ document_id: d.id, refuz: 'in_lucru_pe_alta_cerere', cerere_id: preluata.cerere_id, extragere_id: preluata.id,
           ...(ic.data?.ok ? { inchisa_cerere_inactiva: st } : { inchidere_refuzata: ic.data?.refuz ?? ic.error?.message ?? 'necunoscut' }) })
+        stareDoc.set(d.id, ic.data?.ok ? 'inchisa_cerere_inactiva:' + st : 'refuz:in_lucru_pe_alta_cerere')
         continue
       }
       x = preluata.id
       raport.push({ document_id: d.id, preluata: x })
-    } else if (ex.data?.refuz) { raport.push({ document_id: d.id, refuz: ex.data.refuz }); continue }
+    } else if (ex.data?.refuz) { raport.push({ document_id: d.id, refuz: ex.data.refuz }); stareDoc.set(d.id, 'refuz:' + ex.data.refuz); continue }
     else x = ex.data.extragere_id as number
 
     // conflict = altă rulare lucrează pe aceleași munci (rezervare concurentă, încercare în zbor cu rezervare): starea finală NU se
     // decide din contorul local — extragerea rămâne în lucru și se preia (review r3)
     let gata = 0, lasataInLucru = false, conflict = false
     for (const f of felii) {
+      if (!permise.has(f.nr)) continue   // peste plafon (raportată mai sus): fără felie_incepe, fără rezervare, fără AI
       if (deps.acum() - t0 > buget) { oprit = 'buget_timp'; lasataInLucru = true; break }
       if (p.max_felii && feliiApelate >= p.max_felii) { oprit = 'max_felii'; lasataInLucru = true; break }
       const shaFelie = await sha256Hex(f.text)
@@ -343,15 +383,26 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
     }
     // închiderea controlată: la oprirea pe timp / număr de felii extragerea rămâne în lucru (se preia la rularea următoare); altfel
     // gata (toate feliile) / partial / esuat — RPC-ul refuză cât timp există felii în zbor (atunci rămâne în lucru și se preia)
-    if (lasataInLucru || conflict) raport.push({ document_id: d.id, extragere_id: x, stare: 'in_lucru (se preia la rularea următoare)' + (conflict ? ' — muncă concurentă' : '') })
-    else {
+    if (lasataInLucru || conflict) {
+      raport.push({ document_id: d.id, extragere_id: x, stare: 'in_lucru (se preia la rularea următoare)' + (conflict ? ' — muncă concurentă' : '') })
+      stareDoc.set(d.id, 'in_lucru' + (conflict ? ':munca_concurenta' : ':' + (oprit ?? 'oprit')))
+    } else {
       const st = gata === felii.length ? 'gata' : gata > 0 ? 'partial' : 'esuat'
       const ic = await deps.rpc('fn_ofertare_cb_extragere_inchide', { p_extragere_id: x, p_stare: st })
       raport.push({ document_id: d.id, extragere_id: x, stare: ic.data?.refuz ? 'ramane_in_lucru:' + ic.data.refuz : st })
+      stareDoc.set(d.id, ic.data?.refuz ? 'in_lucru:' + ic.data.refuz : st)
     }
   }
+  // TKT-0329 A (PR-extragere): comparația surselor — ÎNTOTDEAUNA după bucla documentelor, și la `oprit` (decizia 15): zero apeluri AI,
+  // serverul decide (fn_ofertare_masuratori_propune / fn_ofertare_semnale_publica); documentele fără extragere gata intră în documente_necitite
+  const paginiPestePlafon = [...pestePlafon].map(([document_id, e]) => ({ document_id, pagini: [...e.pagini].sort((a, b) => a - b) }))
+  const masuratori = await comparaSurse({ rpc: deps.rpc }, { licitatie_id: p.licitatie_id, cerere_id: c.id, stareExtrageri: stareDoc, paginiPestePlafon,
+    eligibile: new Set(eligibileToate.map((d) => d.id)) })
   return { status: 200, body: { ok: true, mod: 'structurat', extractor: idExtractor(xt), felii_apelate: feliiApelate, felii_cu_deficit_b1: feliiCuDeficit, felii_escaladate: feliiEscaladate,
-    cost_usd: Math.round(cost * 1e4) / 1e4, oprit, raport } }
+    cost_usd: Math.round(cost * 1e4) / 1e4, oprit, raport,
+    plafon: { plafon: foto0.data.plafon, plafon_atins: limita.plafon_atins },
+    peste_plafon: [...pestePlafon].map(([document_id, e]) => ({ document_id, felii: e.felii })),
+    masuratori } }
 }
 
 export function parseRaspuns(txt: string): unknown[][] | null {

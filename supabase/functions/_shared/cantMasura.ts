@@ -172,11 +172,15 @@ export type PaginiRulare = {
   pagini_necitite: PaginiDocument[]                              // ale documentului ∪ peste limita plafonului ∪ feliile excluse în rulare
   felii_incomplete: FelieIncompleta[]
 }
-export function paginiRulare(foto: Fotografie, stareExtrageri: Map<number, string>, feliiIncomplete: FelieIncompleta[], paginiPestePlafon: PaginiDocument[]): PaginiRulare {
+// `eligibile` = documentele pe care extragerea structurată le citește (ultimele versiuni ale tipurilor eligibile, inclusiv cele fără text încă);
+// doar ele pot fi „necitite” (decizia 15: extragere lipsă / neterminată). Un tip în afara extragerii (ex. planșele, abaterea (g)) sau o versiune
+// înlocuită nu e un document necitit. `null` = toate documentele fotografiei (conservator, când apelantul nu știe eligibilitatea).
+export function paginiRulare(foto: Fotografie, stareExtrageri: Map<number, string>, feliiIncomplete: FelieIncompleta[], paginiPestePlafon: PaginiDocument[],
+  eligibile: Set<number> | null = null): PaginiRulare {
   const docs = [...(foto.documente ?? [])].sort((a, b) => Number(a.id) - Number(b.id))
   const { limita, plafon_atins } = limitaPagini(docs.map((d) => ({ id: d.id, pagini: d.pagini })), foto.plafon)
   const ultima = new Map(limita.map((x) => [x.document_id, x.ultima_pagina_permisa]))
-  const necitite = docs.filter((d) => d.extragere_id === null || d.extragere_id === undefined).map((d) => Number(d.id))
+  const necitite = docs.filter((d) => (d.extragere_id === null || d.extragere_id === undefined) && (eligibile === null || eligibile.has(Number(d.id)))).map((d) => Number(d.id))
   const pagini_necitite: PaginiDocument[] = []
   for (const d of docs) {
     const s = new Set<number>()
