@@ -83,8 +83,9 @@ END $f$;
 CREATE FUNCTION pg_temp.rd_doc(lic int, tip text, nume text, txt text) RETURNS bigint LANGUAGE plpgsql AS $f$
 DECLARE v bigint;
 BEGIN
-  INSERT INTO public.ofertare_documente_atribuire (licitatie_id, nume_original, tip, text_extras, revizie, status_procesare)
-    VALUES (pg_temp.rd_lic(lic), nume, tip, txt, 'A', 'procesat') RETURNING id INTO v;
+  -- fisier_path e NOT NULL fara default pe productie (proba pe clona 176)
+  INSERT INTO public.ofertare_documente_atribuire (licitatie_id, nume_original, fisier_path, tip, text_extras, revizie, status_procesare)
+    VALUES (pg_temp.rd_lic(lic), nume, 'dry/' || nume || '.pdf', tip, txt, 'A', 'procesat') RETURNING id INTO v;
   RETURN v;
 END $f$;
 CREATE FUNCTION pg_temp.rd_extragere(doc bigint, extractor text, obs jsonb) RETURNS bigint LANGUAGE plpgsql AS $f$
@@ -233,7 +234,7 @@ BEGIN
       ('prag', format('INSERT INTO public.ofertare_cantitati_setari (licitatie_id, prag) VALUES (%s, 0.1)', pg_temp.rd_lic(1)), format('DELETE FROM public.ofertare_cantitati_setari WHERE licitatie_id = %s', pg_temp.rd_lic(1))),
       ('plafon', format('INSERT INTO public.ofertare_cantitati_setari (licitatie_id, plafon_pagini) VALUES (%s, 300)', pg_temp.rd_lic(1)), format('DELETE FROM public.ofertare_cantitati_setari WHERE licitatie_id = %s', pg_temp.rd_lic(1))),
       ('stare_loturi', format('UPDATE public.ofertare_licitatii SET stare_loturi = ''are_loturi'' WHERE id = %s', pg_temp.rd_lic(1)), format('UPDATE public.ofertare_licitatii SET stare_loturi = ''fara_loturi'' WHERE id = %s', pg_temp.rd_lic(1))),
-      ('document adaugat', format('INSERT INTO public.ofertare_documente_atribuire (licitatie_id, nume_original, tip, revizie, status_procesare) VALUES (%s, ''DRY_NOU'', ''alta'', ''A'', ''neprocesat'')', pg_temp.rd_lic(1)), format('DELETE FROM public.ofertare_documente_atribuire WHERE licitatie_id = %s AND nume_original = ''DRY_NOU''', pg_temp.rd_lic(1)))
+      ('document adaugat', format('INSERT INTO public.ofertare_documente_atribuire (licitatie_id, nume_original, fisier_path, tip, revizie, status_procesare) VALUES (%s, ''DRY_NOU'', ''dry/DRY_NOU.pdf'', ''alta'', ''A'', ''neprocesat'')', pg_temp.rd_lic(1)), format('DELETE FROM public.ofertare_documente_atribuire WHERE licitatie_id = %s AND nume_original = ''DRY_NOU''', pg_temp.rd_lic(1)))
     ) x(ce, schimba, revino) LOOP
     EXECUTE p.schimba;
     PERFORM pg_temp.rd_ca('resp');

@@ -156,7 +156,7 @@ INSERT INTO public.profiles (id, name, is_owner) VALUES ('00000000-0000-4000-800
 INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES ('00000000-0000-4000-8000-0000000000d2', 'ofertare', 'editor'), ('00000000-0000-4000-8000-0000000000d3', 'ofertare', 'editor');
 CREATE FUNCTION public.t_doc(lic bigint, tip text, nume text, txt text) RETURNS bigint LANGUAGE plpgsql AS $f$
 DECLARE v bigint; BEGIN
-  INSERT INTO public.ofertare_documente_atribuire (licitatie_id, nume_original, tip, text_extras, revizie, status_procesare) VALUES (lic, nume, tip, txt, 'A', 'procesat') RETURNING id INTO v; RETURN v;
+  INSERT INTO public.ofertare_documente_atribuire (licitatie_id, nume_original, fisier_path, tip, text_extras, revizie, status_procesare) VALUES (lic, nume, 'conc/' || nume || '.pdf', tip, txt, 'A', 'procesat') RETURNING id INTO v; RETURN v;
 END $f$;
 CREATE FUNCTION public.t_extragere(doc bigint, extractor text, obs jsonb) RETURNS bigint LANGUAGE plpgsql AS $f$
 DECLARE d record; v_sha text; v_prov bigint; v_cerere bigint; v_ex bigint; o jsonb; BEGIN
@@ -180,7 +180,7 @@ END $f$;
 -- o licitație completă a cazului din tichet: întoarce id-ul ei; ATR cu valoarea dată (3995 implicit)
 CREATE FUNCTION public.t_licitatie(lic bigint, atr_val text DEFAULT '3.995') RETURNS bigint LANGUAGE plpgsql AS $f$
 DECLARE v_f3 bigint; v_atr bigint; BEGIN
-  INSERT INTO public.ofertare_licitatii (id, nr_anunt, obiect, responsabil_id, stare_loturi) VALUES (lic, 'T-' || lic, 'licitatie de proba', '00000000-0000-4000-8000-0000000000d3', 'fara_loturi');
+  INSERT INTO public.ofertare_licitatii (id, nr_anunt, autoritate, obiect, responsabil_id, stare_loturi) VALUES (lic, 'T-' || lic, 'AUTORITATE PROBA', 'licitatie de proba', '00000000-0000-4000-8000-0000000000d3', 'fara_loturi');
   INSERT INTO public.ofertare_ai_buget (licitatie_id, scop, plafon_usd) VALUES (lic, 'cant_extragere', 10);
   INSERT INTO public.ofertare_ai_cereri (licitatie_id, lot_domeniu, scop, aprobat_de, valabil_pana) VALUES (lic, 'toate', 'cant_extragere', '00000000-0000-4000-8000-0000000000d1', now() + interval '1 day');
   v_f3 := public.t_doc(lic, 'formular', 'DOC_F3_T', E'⟦PAGINA 1⟧\nFormularul F3\nNr. Cod Denumire UM Cantitate\n003 SA11G1 TEAVA PE100 DN160 M 6.400\n');

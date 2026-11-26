@@ -71,9 +71,9 @@ INSERT INTO public.profiles (id, name, is_owner) VALUES ('${U.OWNER}', 'OWNER', 
   ('${U.STRAIN}', 'STRAIN', false), ('${U.ADM}', 'ADM', false);
 INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES ('${U.OF}', 'ofertare', 'editor'), ('${U.RESP}', 'ofertare', 'editor'),
   ('${U.ADM}', 'ofertare', 'admin'), ('${U.STRAIN}', 'logistica', 'admin');
-INSERT INTO public.ofertare_licitatii (id, nr_anunt, obiect, responsabil_id, stare_loturi) VALUES
-  (${LIC}, 'T-1', 'licitatie de test', '${U.RESP}', 'fara_loturi'), (${LIC2}, 'T-2', 'alta licitatie', NULL, 'fara_loturi'),
-  (${LIC_LOT}, 'T-3', 'licitatie cu loturi', '${U.RESP}', 'are_loturi');
+INSERT INTO public.ofertare_licitatii (id, nr_anunt, autoritate, obiect, responsabil_id, stare_loturi) VALUES
+  (${LIC}, 'T-1', 'AUTORITATE TEST', 'licitatie de test', '${U.RESP}', 'fara_loturi'), (${LIC2}, 'T-2', 'AUTORITATE TEST', 'alta licitatie', NULL, 'fara_loturi'),
+  (${LIC_LOT}, 'T-3', 'AUTORITATE TEST', 'licitatie cu loturi', '${U.RESP}', 'are_loturi');
 INSERT INTO public.ofertare_licitatie_loturi (licitatie_id, nr, denumire) VALUES (${LIC_LOT}, 1, 'lot 1'), (${LIC_LOT}, 2, 'lot 2');
 INSERT INTO public.ofertare_ai_buget (licitatie_id, scop, plafon_usd) VALUES (${LIC}, 'cant_extragere', 10), (${LIC2}, 'cant_extragere', 10), (${LIC_LOT}, 'cant_extragere', 10);
 INSERT INTO public.ofertare_ai_cereri (licitatie_id, lot_domeniu, scop, aprobat_de, valabil_pana) VALUES
@@ -152,8 +152,8 @@ const PAG = (n, ...linii) => `⟦PAGINA ${n}⟧\n${linii.join('\n')}\n`
 let nextId = 700000
 async function document(db, { id, lic = LIC, tip = 'alta', nume = 'DOC', text = null, revizie = 'A', lot_stare = 'necunoscut', pagini_necitite = [] }) {
   const did = id ?? ++nextId
-  await db.query(`INSERT INTO public.ofertare_documente_atribuire (id, licitatie_id, tip, nume_original, text_extras, revizie, lot_stare, pagini_necitite)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, [did, lic, tip, nume, text, revizie, lot_stare, pagini_necitite])
+  await db.query(`INSERT INTO public.ofertare_documente_atribuire (id, licitatie_id, tip, nume_original, fisier_path, text_extras, revizie, lot_stare, pagini_necitite)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, [did, lic, tip, nume, `test/${nume}.pdf`, text, revizie, lot_stare, pagini_necitite])
   return did
 }
 // o extragere `gata` (sau altă stare) pe textul CURENT al documentului, cu feliile și observațiile date. Feliile: {nr, de_la, pana_la, stare, incercare,
@@ -1219,8 +1219,8 @@ async function aproba(db, ab, clarId, cont = 'RESP') {
       ['prag', `INSERT INTO public.ofertare_cantitati_setari (licitatie_id, prag) VALUES (${LIC}, 0.1)`, `DELETE FROM public.ofertare_cantitati_setari WHERE licitatie_id = ${LIC}`],
       ['plafon', `INSERT INTO public.ofertare_cantitati_setari (licitatie_id, plafon_pagini) VALUES (${LIC}, 300)`, `DELETE FROM public.ofertare_cantitati_setari WHERE licitatie_id = ${LIC}`],
       ['stare_loturi', `UPDATE public.ofertare_licitatii SET stare_loturi = 'are_loturi' WHERE id = ${LIC}`, `UPDATE public.ofertare_licitatii SET stare_loturi = 'fara_loturi' WHERE id = ${LIC}`],
-      ['document adăugat', `INSERT INTO public.ofertare_documente_atribuire (id, licitatie_id, tip, nume_original) VALUES (799999, ${LIC}, 'alta', 'NOU')`, `DELETE FROM public.ofertare_documente_atribuire WHERE id = 799999`],
-      ['document șters (fără extragere)', `INSERT INTO public.ofertare_documente_atribuire (id, licitatie_id, tip, nume_original) VALUES (799998, ${LIC}, 'alta', 'X'); DELETE FROM public.ofertare_documente_atribuire WHERE id = 799998`, null],
+      ['document adăugat', `INSERT INTO public.ofertare_documente_atribuire (id, licitatie_id, tip, nume_original, fisier_path) VALUES (799999, ${LIC}, 'alta', 'NOU', 'test/NOU.pdf')`, `DELETE FROM public.ofertare_documente_atribuire WHERE id = 799999`],
+      ['document șters (fără extragere)', `INSERT INTO public.ofertare_documente_atribuire (id, licitatie_id, tip, nume_original, fisier_path) VALUES (799998, ${LIC}, 'alta', 'X', 'test/X.pdf'); DELETE FROM public.ofertare_documente_atribuire WHERE id = 799998`, null],
     ]
     for (const [nume, schimba, revino] of probe) {
       if (nume.startsWith('document șters')) {
