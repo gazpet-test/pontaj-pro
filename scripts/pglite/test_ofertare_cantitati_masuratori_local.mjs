@@ -1201,7 +1201,8 @@ async function aproba(db, ab, clarId, cont = 'RESP') {
     const cAp = (await ciorne(db))[0]
     ast(ab, cAp.intrebare === c.intrebare && cAp.status === 'propunere' && cAp.baza_generare.reconfirmare && evAp.semnale[0]?.clarificare === 'neatinsa',
       'propunere aprobată, sursă schimbată → textul aprobat NU e rescris (neatinsa): ' + JSON.stringify([cAp.intrebare === c.intrebare, cAp.status, evAp.semnale[0]?.clarificare]))
-    await db.query(`UPDATE public.ofertare_cantitati SET cantitate = 6400 WHERE licitatie_id = $1`, [LIC])
+    // ca pe producție (trg_zz_ofertare_cantitati_aprobare): schimbarea a trecut rândul validat pe „diferenta”; revenirea = cifra + revalidarea omului
+    await db.query(`UPDATE public.ofertare_cantitati SET cantitate = 6400, status = 'validat' WHERE licitatie_id = $1`, [LIC])
     await evalueaza(db)
     ast(ab, (await vedere(db, 'OF', c.id))?.stare === 'ok', 'sursa revenită, reevaluată: aceeași amprentă → ok')
     // de_trimis ok; export ok
@@ -1213,7 +1214,7 @@ async function aproba(db, ab, clarId, cont = 'RESP') {
     // invalidarea LIVE, fără extragere nouă, pe rând: fiecare sursă schimbată → Export blocat: baza s-a schimbat — de reverificat
     const BLOC = /Export blocat: baza s-a schimbat — de reverificat/
     const probe = [
-      ['cantitate F3', `UPDATE public.ofertare_cantitati SET cantitate = 6401 WHERE licitatie_id = ${LIC}`, `UPDATE public.ofertare_cantitati SET cantitate = 6400 WHERE licitatie_id = ${LIC}`],
+      ['cantitate F3', `UPDATE public.ofertare_cantitati SET cantitate = 6401 WHERE licitatie_id = ${LIC}`, `UPDATE public.ofertare_cantitati SET cantitate = 6400, status = 'validat' WHERE licitatie_id = ${LIC}`],   // revalidarea omului (triggerul de aprobare)
       ['revizie document', `UPDATE public.ofertare_documente_atribuire SET revizie = 'B' WHERE id = ${f.dAtr}`, `UPDATE public.ofertare_documente_atribuire SET revizie = 'A' WHERE id = ${f.dAtr}`],
       ['text_extras', `UPDATE public.ofertare_documente_atribuire SET text_extras = text_extras || ' ' WHERE id = ${f.dAtr}`, `UPDATE public.ofertare_documente_atribuire SET text_extras = left(text_extras, -1) WHERE id = ${f.dAtr}`],
       ['prag', `INSERT INTO public.ofertare_cantitati_setari (licitatie_id, prag) VALUES (${LIC}, 0.1)`, `DELETE FROM public.ofertare_cantitati_setari WHERE licitatie_id = ${LIC}`],

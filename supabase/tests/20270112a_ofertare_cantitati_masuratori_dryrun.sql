@@ -228,7 +228,7 @@ BEGIN
   IF jsonb_array_length(e) <> 1 THEN RAISE EXCEPTION 't_invalidare FAIL: exportul nu include ciorna aprobata'; END IF;
   PERFORM pg_temp.rd_postgres();
   FOR p IN SELECT * FROM (VALUES
-      ('cantitate F3', format('UPDATE public.ofertare_cantitati SET cantitate = 6401 WHERE id = %s', current_setting('dry.cant')), format('UPDATE public.ofertare_cantitati SET cantitate = 6400 WHERE id = %s', current_setting('dry.cant'))),
+      ('cantitate F3', format('UPDATE public.ofertare_cantitati SET cantitate = 6401 WHERE id = %s', current_setting('dry.cant')), format('UPDATE public.ofertare_cantitati SET cantitate = 6400, status = ''validat'' WHERE id = %s', current_setting('dry.cant'))),   -- pe productie schimbarea a trecut randul pe diferenta (trg_zz_ofertare_cantitati_aprobare): revenirea = cifra + revalidarea omului
       ('revizie document', format('UPDATE public.ofertare_documente_atribuire SET revizie = ''B'' WHERE id = %s', current_setting('dry.atr')), format('UPDATE public.ofertare_documente_atribuire SET revizie = ''A'' WHERE id = %s', current_setting('dry.atr'))),
       ('text_extras', format('UPDATE public.ofertare_documente_atribuire SET text_extras = text_extras || '' '' WHERE id = %s', current_setting('dry.atr')), format('UPDATE public.ofertare_documente_atribuire SET text_extras = left(text_extras, -1) WHERE id = %s', current_setting('dry.atr'))),
       ('prag', format('INSERT INTO public.ofertare_cantitati_setari (licitatie_id, prag) VALUES (%s, 0.1)', pg_temp.rd_lic(1)), format('DELETE FROM public.ofertare_cantitati_setari WHERE licitatie_id = %s', pg_temp.rd_lic(1))),
