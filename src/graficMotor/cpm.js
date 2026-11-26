@@ -66,7 +66,7 @@ export function valideazaStructura(activitati, legaturi) {
     if (!TIPURI_LEGATURA.includes(tip)) { fatal('TIP_LEGATURA_INVALID', `legătura ${i + 1} (${de} → ${la}): tip „${tip}” (aștept FS/SS/FF/SF)`, loc); return }
     if (!Number.isInteger(lag)) { fatal('LAG_INVALID', `legătura ${i + 1} (${de} → ${la}): decalajul trebuie să fie întreg (zile lucrătoare), are ${JSON.stringify(lag)}`, loc); return }
     if (dupaCod.get(de).rezumat || dupaCod.get(la).rezumat) { fatal('LEGATURA_PE_REZUMAT', `legătura ${i + 1} (${de} → ${la}): legăturile se pun între activități, nu pe rezumate`, loc); return }
-    leg.push({ de, la, tip, lag, motiv: str(l?.motiv) || null, index: i })
+    leg.push({ de, la, tip, lag, motiv: str(l?.motiv) || null, control: l?.control === true, index: i })
   })
   return { probleme, noduri, legaturi: leg, dupaCod, copii }
 }
@@ -119,7 +119,7 @@ export function calculeazaCPM({ noduri, legaturi, dupaCod, copii }) {
     }
     // limitat_la_start: legăturile ar fi permis un început ÎNAINTEA datei de start (decalaj negativ / SF / FF) și l-a oprit ES ≥ 0;
     // exportul MSPDI pune pe ea „începe nu mai devreme de” data de start, ca orice planificator să dea același rezultat
-    r.set(c, { es, ef: es + d, d, limitat_la_start: brut < 0 })
+    r.set(c, { es, ef: es + d, d, limitat_la_start: pred.get(c).length > 0 && brut < 0 })
   }
   const T = Math.max(0, ...frunze.map(c => r.get(c).ef))
   for (const c of [...topo].reverse()) {

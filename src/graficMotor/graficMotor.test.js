@@ -7,6 +7,7 @@ import {
   valideazaStructura, calculeazaCPM, calculeazaGrafic, tabelPERT, tabelDrumCritic, genereazaMSPDI,
 } from './index.js'
 import { exceptiiCalendar, CAMPURI_TEXT } from './mspdi.js'
+// ID-urile câmpurilor MS Project scrise LITERAL în teste (Task Text1 = 188743731, Text2 = 188743734, Text3 = 188743737, Text4 = 188743740), nu luate din constanta exportatorului
 
 // ── utilitare de test ──
 const cpmDin = (activitati, legaturi) => {
@@ -370,15 +371,92 @@ describe('export MSPDI', () => {
     expect(t[1]).toMatch(/<WBS>J1<\/WBS>.*<Start>2027-03-01T08:00:00<\/Start>/)
   })
   it('executantul ca resursă, subcontractantul în câmpul text „Subcontractant”, articolul în „Articol deviz”', () => {
-    expect(xml).toContain(`<FieldID>${CAMPURI_TEXT[0].id}</FieldID><FieldName>Text1</FieldName><Alias>Subcontractant</Alias>`)
+    expect(xml).toContain(`<FieldID>188743731</FieldID><FieldName>Text1</FieldName><Alias>Subcontractant</Alias>`)
     expect(xml).toMatch(/<Resource><UID>\d+<\/UID><ID>\d+<\/ID><Name>SubX<\/Name><Type>1<\/Type><IsNull>0<\/IsNull><Group>Subcontractant<\/Group>/)
     expect(xml).toMatch(/<Resource><UID>\d+<\/UID><ID>\d+<\/ID><Name>Gazpet<\/Name><Type>1<\/Type><IsNull>0<\/IsNull><Group>Gazpet<\/Group>/)
     const a2 = xml.split('\n').find(l => l.includes('<WBS>A2</WBS>'))
-    expect(a2).toContain(`<ExtendedAttribute><FieldID>${CAMPURI_TEXT[0].id}</FieldID><Value>SubX</Value></ExtendedAttribute>`)
-    expect(a2).toContain(`<ExtendedAttribute><FieldID>${CAMPURI_TEXT[2].id}</FieldID><Value>ART2</Value></ExtendedAttribute>`)
+    expect(a2).toContain(`<ExtendedAttribute><FieldID>188743731</FieldID><Value>SubX</Value></ExtendedAttribute>`)
+    expect(a2).toContain(`<ExtendedAttribute><FieldID>188743737</FieldID><Value>ART2</Value></ExtendedAttribute>`)
     const a1 = xml.split('\n').find(l => l.includes('<WBS>A1</WBS>'))
-    expect(a1).not.toContain(`<FieldID>${CAMPURI_TEXT[0].id}</FieldID><Value>`) // Gazpet nu e subcontractant
+    expect(a1).not.toContain(`<FieldID>188743731</FieldID><Value>`) // Gazpet nu e subcontractant
     expect((xml.match(/<Assignment>/g) || []).length).toBe(2) // doar activitățile cu durată
     expect(xml).toMatch(/<Calendar><UID>101<\/UID><Name>Gazpet<\/Name><IsBaseCalendar>0<\/IsBaseCalendar><IsBaselineCalendar>0<\/IsBaselineCalendar><BaseCalendarUID>1<\/BaseCalendarUID>/)
+  })
+})
+
+describe('runda r1 Jakarinos — căile de ocolire închise', () => {
+  it('PRESUPUS pe un jalon blochează și el GO (orice PRESUPUS, §5.3 / §10.5)', () => {
+    const r = calculeazaGrafic(cuActivitate(graficBun(), 'J2', { sursa_durata: 'PRESUPUS' }))
+    expect(coduri(r, 'eroare')).toEqual(['DURATA_PRESUPUSA'])
+    expect(r.poate_fi_go).toBe(false)
+    // jalonul fără nicio sursă rămâne permis (n-are durată de justificat)
+    expect(calculeazaGrafic(cuActivitate(graficBun(), 'J2', { sursa_durata: undefined })).probleme).toEqual([])
+  })
+  it('categoria „jalon” ⇔ jalon: o activitate cu durată nu scapă de echipă / articol prin categorie', () => {
+    const g = { ...cuActivitate(graficBun(), 'A1', { categorie: 'jalon', tip_echipa: undefined }), parametri: { ...graficBun().parametri, echipe: {} } }
+    expect(coduri(calculeazaGrafic(g), 'eroare')).toContain('CATEGORIE_JALON_NECONCORDANTA')
+    expect(calculeazaGrafic(g).poate_fi_go).toBe(false)
+    expect(coduri(calculeazaGrafic(cuActivitate(graficBun(), 'J2', { categorie: 'organizare' })), 'eroare')).toEqual(['CATEGORIE_JALON_NECONCORDANTA'])
+  })
+  it('forme greșite ale listelor = eroare, nu „nu cere nimic”', () => {
+    const fara = { ...graficBun().parametri }; delete fara.utilaje
+    const g = { ...cuActivitate(graficBun(), 'A1', { utilaje: 'macara' }), parametri: fara }
+    expect(coduri(calculeazaGrafic(g), 'eroare')).toEqual(['UTILAJE_INVALIDE'])
+    expect(coduri(calculeazaGrafic(cuActivitate(graficBun(), 'A1', { utilaje: [{ numar: 1 }] })), 'eroare')).toEqual(['UTILAJE_INVALIDE'])
+    expect(coduri(calculeazaGrafic(cuActivitate(graficBun(), 'A1', { utilaje: [{ tip: 'macara', numar: 1.5 }] })), 'eroare')).toEqual(['UTILAJE_INVALIDE'])
+    expect(coduri(calculeazaGrafic(cuActivitate(graficBun(), 'A1', { articole_deviz: 'ART1' })), 'eroare')).toContain('ARTICOLE_INVALIDE')
+    expect(coduri(calculeazaGrafic(cuActivitate(graficBun(), 'A1', { tip_echipa: 7 })), 'eroare')).toContain('TIP_ECHIPA_INVALID')
+  })
+  it('legătura de punct de control cere motiv cu sursă (control:true sau capăt „verificare_receptie”)', () => {
+    const cuVer = (motiv, extra = {}) => {
+      const g = graficBun()
+      g.activitati.push({ cod: 'V1', parinte: 'R0', denumire: 'Verificare izolație (PCC 4.9)', categorie: 'verificare_receptie', executant: 'Gazpet', durata_zile_lucratoare: 1, sursa_durata: 'document:12#p4' })
+      g.legaturi = [L('J1', 'A1'), L('A1', 'A2'), { ...L('A2', 'V1'), motiv }, L('V1', 'J2')]
+      return { ...g, ...extra }
+    }
+    const r = calculeazaGrafic(cuVer(null))
+    // A2 → V1 fără motiv și V1 → J2 fără motiv
+    expect(coduri(r, 'eroare')).toEqual(['LEGATURA_CONTROL_FARA_MOTIV', 'LEGATURA_CONTROL_FARA_MOTIV'])
+    const g2 = cuVer('izolația se verifică după izolare — document:31#p12')
+    g2.legaturi = g2.legaturi.map(l => (l.la === 'J2' ? { ...l, motiv: 'regula:receptie-dupa-verificari' } : l))
+    expect(calculeazaGrafic(g2).probleme).toEqual([])
+    expect(coduri(calculeazaGrafic({ ...cuVer(null), mod: 'schita' }), 'eroare')).toEqual([])
+    // marcajul explicit al generatorului
+    const g3 = graficBun(); g3.legaturi = [L('J1', 'A1'), { ...L('A1', 'A2'), control: true, motiv: 'fără sursă' }, L('A2', 'J2')]
+    expect(coduri(calculeazaGrafic(g3), 'eroare')).toEqual(['LEGATURA_CONTROL_FARA_MOTIV'])
+  })
+  it('drumul critic: legătura dintre două activități critice care NU conduce nu intră; ramificațiile sunt listate', () => {
+    // A → B → C (lanț critic 5 zile) + A → C direct: C.es = 4, EF_A = 2 → legătura A→C are 2 zile rezervă
+    const c = cpmDin([act('A', 2), act('B', 2), act('C', 1)], [L('A', 'B'), L('B', 'C'), L('A', 'C')])
+    expect(c.drumCritic.lista).toEqual(['A', 'B', 'C'])
+    expect(c.drumCritic.legaturi).toEqual([{ de: 'A', la: 'B', tip: 'FS', lag: 0 }, { de: 'B', la: 'C', tip: 'FS', lag: 0 }])
+    expect(c.drumCritic.ramificatii).toEqual([])
+    const d = cpmDin([act('A', 2), act('B', 3), act('C', 3), jal('F')], [L('A', 'B'), L('A', 'C'), L('B', 'F'), L('C', 'F')])
+    expect(d.drumCritic.ramificatii).toEqual([{ de: 'A', spre: ['B', 'C'] }])
+  })
+  it('rezumat care începe cu un jalon: și LS calendaristic coincide cu ES când marja e 0', () => {
+    const r = calculeazaGrafic({ mod: 'schita', data_start: '2027-03-01', activitati: [
+      act('A', 2, { categorie: 'organizare', executant: 'Gazpet', sursa_durata: 'parametru:x' }), { cod: 'R', rezumat: true },
+      jal('J', { parinte: 'R', executant: 'beneficiar' }), act('B', 1, { parinte: 'R', categorie: 'organizare', executant: 'Gazpet', sursa_durata: 'parametru:x' }), jal('F', { executant: 'beneficiar' })],
+      legaturi: [L('A', 'J'), L('J', 'B'), L('B', 'F')] })
+    const t = tabelPERT(r).find(x => x.cod === 'R')
+    expect(t).toMatchObject({ ES: '2027-03-02', LS: '2027-03-02', EF: '2027-03-03', LF: '2027-03-03', marja: 0 })
+  })
+  it('rădăcinile nu primesc „nu mai devreme de” (doar activitățile limitate de un decalaj negativ)', () => {
+    const r = calculeazaGrafic(graficBun())
+    expect(r.pozitii.find(p => p.cod === 'J1').limitat_la_start).toBe(false)
+    expect(genereazaMSPDI(r)).not.toContain('<ConstraintType>4</ConstraintType>')
+  })
+  it('exportul unui grafic care se termină în 2099 nu iese din domeniul calendarului', () => {
+    const r = calculeazaGrafic({ ...graficBun(), data_start: '2099-12-01', mod: 'schita' })
+    expect(r.calculat).toBe(true)
+    expect(() => genereazaMSPDI(r)).not.toThrow()
+  })
+  it('subcontractanții pentru export vin din rezultatul calculat (fără să mai fie retrimiși)', () => {
+    const xml = genereazaMSPDI(calculeazaGrafic(graficBun()))
+    expect(xml.split('\n').find(l => l.includes('<WBS>A2</WBS>'))).toContain('<ExtendedAttribute><FieldID>188743731</FieldID><Value>SubX</Value></ExtendedAttribute>')
+  })
+  it('ID-urile câmpurilor Text1–Text4 sunt cele din MS Project', () => {
+    expect(CAMPURI_TEXT.map(c => [c.nume, c.id])).toEqual([['Text1', 188743731], ['Text2', 188743734], ['Text3', 188743737], ['Text4', 188743740]])
   })
 })

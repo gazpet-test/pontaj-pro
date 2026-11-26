@@ -46,8 +46,9 @@ export function genereazaMSPDI(rez, { titlu = 'Grafic de execuție', fisier = 'g
   if (!rez?.calculat) throw new Error('graficul nu e calculat (are erori de structură) — nu se exportă')
   // același calendar cu care s-a calculat (rez.calendar.parametri), ca datele din fișier să coincidă cu cele calculate
   const calendar = creeazaCalendar(rez.calendar?.parametri || {})
-  const propriu = String(parametri.executant_propriu || 'Gazpet').trim()
-  const subcontractanti = new Set((parametri.subcontractanti || []).map(s => String(s).trim()))
+  // implicit din rezultatul calculat (aceiași parametri ca la calcul); `parametri` explicit doar suprascrie
+  const propriu = String(parametri.executant_propriu || rez.export?.executant_propriu || 'Gazpet').trim()
+  const subcontractanti = new Set((parametri.subcontractanti || rez.export?.subcontractanti || []).map(s => String(s).trim()))
 
   // ordinea de schiță (outline): părinte, apoi copiii lui, în ordinea din grafic
   const copii = new Map()
@@ -93,7 +94,8 @@ export function genereazaMSPDI(rez, { titlu = 'Grafic de execuție', fisier = 'g
       `${linkuri}${atribute}<Active>1</Active><Manual>0</Manual></Task>`
   })
 
-  const anStart = Number(rez.data_start.slice(0, 4)), anFinal = Number(rez.data_final.slice(0, 4)) + 1
+  // excepțiile acoperă și anul de după final (editări ulterioare în MS Project), dar nu ies din 1900–2099 (r1 Jak P2)
+  const anStart = Number(rez.data_start.slice(0, 4)), anFinal = Math.min(2099, Number(rez.data_final.slice(0, 4)) + 1)
   const exceptii = exceptiiCalendar(calendar, `${anStart}-01-01`, `${anFinal}-12-31`)
   const xmlExceptii = exceptii.map(e => `<Exception><EnteredByOccurrences>0</EnteredByOccurrences><TimePeriod><FromDate>${e.de}T00:00:00</FromDate><ToDate>${e.pana}T23:59:00</ToDate></TimePeriod>` +
     `<Occurrences>1</Occurrences><Name>${esc(e.nume)}</Name><Type>1</Type><DayWorking>${e.lucratoare ? 1 : 0}</DayWorking>${e.lucratoare ? PROGRAM : ''}</Exception>`).join('')

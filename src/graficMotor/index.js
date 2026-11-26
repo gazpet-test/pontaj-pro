@@ -72,17 +72,24 @@ export function calculeazaGrafic(intrare = {}) {
   // Rezumatul ia cel mai devreme început și cel mai târziu sfârșit al copiilor, deci un rezumat care începe cu un jalon
   // începe în ziua jalonului (verificat cu planificatorul MPXJ pe graficul Y: 6.2, 7.2) — nu în ziua ES.
   const dupaCod = new Map(pozitii.map(p => [p.cod, p]))
+  // Aceeași regulă și pentru datele târzii (LS/LF), ca ES și LS ale aceluiași rezumat să rămână coerente (r1 Jak P2).
+  const moment = (data, idx, sf) => `${data}T${sf && idx > 0 ? '17:00:00' : '08:00:00'}`
   for (const p of pozitii) {
     if (p.rezumat) continue
     const sf = p.jalon || p.durata === 0
-    p.start_moment = `${p.start}T${sf && p.es > 0 ? '17:00:00' : '08:00:00'}`
+    p.start_moment = moment(p.start, p.es, sf)
     p.final_moment = sf ? p.start_moment : `${p.final}T17:00:00`
+    p.ls_moment = moment(p.ls_data, p.ls, sf)
+    p.lf_moment = sf ? p.ls_moment : `${p.lf_data}T17:00:00`
   }
   for (const n of [...st.noduri].filter(n => n.rezumat).sort((a, b) => dupaCod.get(b.cod).nivel - dupaCod.get(a.cod).nivel || a.ordine - b.ordine)) {
     const p = dupaCod.get(n.cod), cs = st.copii.get(n.cod).map(c => dupaCod.get(c))
     p.start_moment = cs.map(c => c.start_moment).sort()[0]
     p.final_moment = cs.map(c => c.final_moment).sort().at(-1)
+    p.ls_moment = cs.map(c => c.ls_moment).sort()[0]
+    p.lf_moment = cs.map(c => c.lf_moment).sort().at(-1)
     p.start = p.start_moment.slice(0, 10); p.final = p.final_moment.slice(0, 10)
+    p.ls_data = p.ls_moment.slice(0, 10); p.lf_data = p.lf_moment.slice(0, 10)
   }
   const erori = probleme.filter(x => x.gravitate === 'eroare').length
   return {
@@ -90,6 +97,8 @@ export function calculeazaGrafic(intrare = {}) {
     durata_zile_lucratoare: cpm.durata, data_final: dataFinal, jalon_final: ver.jalonFinal,
     drum_critic: cpm.drumCritic, termen: ver.termen, capacitate: ver.capacitate,
     trece_verificarile: erori === 0,
+    // ce folosește exportul MSPDI, luat din aceeași intrare (r1 Jak: exportul nu mai depinde de apelant să retrimită lista)
+    export: { executant_propriu: String(parametri.executant_propriu || 'Gazpet').trim(), subcontractanti: Array.isArray(parametri.subcontractanti) ? parametri.subcontractanti.map(s => String(s).trim()) : [] },
     // GO se poate da doar pe un grafic în modul „depunere” fără nicio eroare (spec §5.3, §7 regula GO). Schița nu e niciodată GO.
     poate_fi_go: mod === 'depunere' && erori === 0,
   }

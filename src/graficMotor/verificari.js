@@ -75,12 +75,20 @@ export function verificaStructura({ noduri, legaturi, cpm, mod, articoleValidate
     const cat = n.categorie == null ? (n.jalon ? 'jalon' : null) : String(n.categorie)
     if (!cat) err('CATEGORIE_LIPSA', `${n.cod}: lipsește categoria (${CATEGORII.join(' / ')})`, { activitate: n.cod })
     else if (!CATEGORII.includes(cat)) err('CATEGORIE_INVALIDA', `${n.cod}: categorie necunoscută „${cat}”`, { activitate: n.cod })
+    // r1 (Jak) P1: categoria „jalon” doar pe jaloane și invers — altfel o activitate cu durată scapă de obligațiile de execuție (echipă, articol)
+    else if ((cat === 'jalon') !== n.jalon) err('CATEGORIE_JALON_NECONCORDANTA', `${n.cod}: ${n.jalon ? 'jalonul are categoria „' + cat + '”' : 'activitatea cu durată are categoria „jalon”'} (categoria „jalon” ⇔ jalon)`, { activitate: n.cod })
     n._cat = cat
-    if (!n.jalon) {
-      const s = n.sursa_durata
-      if (ePresupus(s)) dupaMod(!schita)('DURATA_PRESUPUSA', `${n.cod}: durata e PRESUPUS — fără normă validată, document sau răspuns`, { activitate: n.cod })
-      else if (!RE_SURSA.test(String(s ?? ''))) dupaMod(!schita)('SURSA_DURATA_INVALIDA', `${n.cod}: sursa duratei lipsește sau nu e norma:/document:/raspuns:/parametru: (are ${JSON.stringify(s ?? null)})`, { activitate: n.cod })
-    }
+    // r1 (Jak) P1: ORICE marcaj PRESUPUS (și pe un jalon) interzice GO (spec §5.3, §10.5); lipsa sursei e cerută doar unde există durată
+    const s = n.sursa_durata
+    if (ePresupus(s)) dupaMod(!schita)('DURATA_PRESUPUSA', `${n.cod}: ${n.jalon ? 'jalonul e marcat' : 'durata e'} PRESUPUS — fără normă validată, document sau răspuns`, { activitate: n.cod })
+    else if (!n.jalon && !RE_SURSA.test(String(s ?? ''))) dupaMod(!schita)('SURSA_DURATA_INVALIDA', `${n.cod}: sursa duratei lipsește sau nu e norma:/document:/raspuns:/parametru: (are ${JSON.stringify(s ?? null)})`, { activitate: n.cod })
+    // r1 (Jak) P1: contractul câmpurilor de listă — o formă greșită e eroare, nu „nu cere nimic” (L12/L18)
+    if (n.utilaje != null && !(Array.isArray(n.utilaje) && n.utilaje.every(u => (typeof u === 'string' && u.trim()) || (u && typeof u === 'object' && typeof u.tip === 'string' && u.tip.trim() && (u.numar == null || (Number.isInteger(u.numar) && u.numar > 0))))))
+      err('UTILAJE_INVALIDE', `${n.cod}: utilaje trebuie să fie o listă de tipuri sau {tip, numar întreg > 0} (are ${JSON.stringify(n.utilaje)})`, { activitate: n.cod })
+    if (n.articole_deviz != null && !(Array.isArray(n.articole_deviz) && n.articole_deviz.every(a => typeof a === 'string' && a.trim())))
+      err('ARTICOLE_INVALIDE', `${n.cod}: articole_deviz trebuie să fie o listă de coduri (are ${JSON.stringify(n.articole_deviz)})`, { activitate: n.cod })
+    if (n.tip_echipa != null && !(typeof n.tip_echipa === 'string' && n.tip_echipa.trim()))
+      err('TIP_ECHIPA_INVALID', `${n.cod}: tip_echipa trebuie să fie un text nevid (are ${JSON.stringify(n.tip_echipa)})`, { activitate: n.cod })
     const ex = String(n.executant ?? '').trim()
     if (!ex || ePresupus(ex)) dupaMod(depunere)('EXECUTANT_PRESUPUS', `${n.cod}: executantul lipsește sau e presupus`, { activitate: n.cod })
   }
@@ -92,6 +100,17 @@ export function verificaStructura({ noduri, legaturi, cpm, mod, articoleValidate
   const final = jaloaneTerminale.sort((a, b) => r.get(b.cod).ef - r.get(a.cod).ef || b.ordine - a.ordine)[0] || null
   if (!final) err('JALON_FINAL_LIPSA', 'graficul nu se termină într-un jalon final (ex. PV de recepție la terminarea lucrărilor)')
   for (const n of terminale) if (n !== final) err('FARA_SUCCESOR', `${n.cod}: activitate fără succesor (doar jalonul final poate închide rețeaua)`, { activitate: n.cod })
+
+  // ── legăturile de punct de control au motiv cu sursă (spec §5.2; r1 Jak P2) ──
+  // Determinist: legătura marcată control:true de generator SAU care atinge o activitate „verificare_receptie” (PCC, probe,
+  // verificare izolație, lucrări ascunse). Motivul trebuie să citeze sursa: document:<id…>, raspuns:<id> sau regula:<nume>.
+  const RE_MOTIV = /(document|raspuns|regula):\S/
+  const catDe = new Map(frunze.map(n => [n.cod, n._cat]))
+  for (const l of legaturi) {
+    const deControl = l.control || catDe.get(l.de) === 'verificare_receptie' || catDe.get(l.la) === 'verificare_receptie'
+    if (deControl && !RE_MOTIV.test(String(l.motiv ?? '')))
+      dupaMod(!schita)('LEGATURA_CONTROL_FARA_MOTIV', `legătura ${l.de} → ${l.la} ține de un punct de control, dar motivul nu citează sursa (document:/raspuns:/regula:) — are ${JSON.stringify(l.motiv)}`, { de: l.de, la: l.la })
+  }
 
   // ── corespondența cu devizul (C3) ──
   const validate = new Map()
@@ -126,7 +145,7 @@ export function verificaStructura({ noduri, legaturi, cpm, mod, articoleValidate
       if (!tip) continue
       const k = `u\u0000${tip}`
       if (!grupuri.has(k)) grupuri.set(k, { fel: 'utilaj', tip: String(tip), activitati: [] })
-      grupuri.get(k).activitati.push({ cod: n.cod, numar: Number.isFinite(numar) && numar > 0 ? numar : 1 })
+      grupuri.get(k).activitati.push({ cod: n.cod, numar: Number.isInteger(numar) && numar > 0 ? numar : 1 }) // forma invalidă e deja UTILAJE_INVALIDE
     }
   }
   for (const g of grupuri.values()) {
