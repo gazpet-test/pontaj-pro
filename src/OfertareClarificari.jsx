@@ -18,6 +18,9 @@ import { formatCitare, tabelLipsa, motivNeexportabil } from './ofertareTemeiuri.
 import { mesajFaraText, citesteCuAi, avertismentCitire } from './ofertareCitireDoc.js'
 // R5 runda 9: baza cifrelor ciornelor automate (amprenta de la generare vs acum) — afișare, reconfirmare, export verificat în backend
 import { eCiornaAutomata, stareBazaCiorna, textDiferente, poateAcceptaExceptieIdentitate } from './ofertareClarificariBaza.js'
+// TKT-2026-0329 A (PR-UI Task 10): ciornele auto_surse_* (semnale de cantități între documente) și „răspuns posibil relevant” (spec §3.6) —
+// potrivire textuală pe text_extras DEJA existent, fără niciun apel AI; omul alege valoarea reținută și confirmă legarea (fn_ofertare_semnal_raspuns_leaga)
+import { poateStergeCiorna, mesajEroareClarificare, textDiferenteSemnal, propuneRaspunsRelevant, incarcaSemnale, eNeactiv } from './ofertareSemnale.js'
 import { primiteVizibile, rezumatExtrase } from './ofertareExtrase.js'
 import { poateCheltuiUI } from './ofertareResponsabili.js'
 
@@ -78,6 +81,10 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
   const [baza, setBaza] = useState({ peId: new Map(), eroare: null })
   const [dreptDecizie, setDreptDecizie] = useState(null)
   const [exceptieInCurs, setExceptieInCurs] = useState(null)
+  // TKT-0329 A: semnalele licitației (fn_ofertare_semnale_lista) pentru „răspuns posibil relevant”; eroare = „nu putem citi” (nu listă goală, L18)
+  const [semnale, setSemnale] = useState({ randuri: [], eroare: null })
+  const [valRetinuta, setValRetinuta] = useState({})   // semnal_id → textul câmpului „valoarea reținută” (completat de om sau de „ia A” / „ia B”)
+  const [legareSemnal, setLegareSemnal] = useState(null) // semnal_id în curs de legare
   // Poarta serverului include owner, responsabil și admin Ofertare. Un răspuns vechi nu dă drepturi pe altă licitație.
   useEffect(() => {
     let activ = true
@@ -113,7 +120,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
 
   const load = async () => {
     if (!licId) return
-    const [{ data: q }, { data: pr }, { data: dr }, rB] = await Promise.all([
+    const [{ data: q }, { data: pr }, { data: dr }, rB, rS] = await Promise.all([
       supabase.from('ofertare_clarificari').select('*').eq('licitatie_id', licId).order('nr'),
       supabase.from('profiles').select('id, name'),
       // PDF-urile de raspuns ale autoritatii, ca sa se poata lega de intrebarea careia ii raspund
@@ -125,6 +132,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
       supabase.from('ofertare_documente_atribuire').select('id, nume_original, tip, seap_meta, text_extras, fisier_path, created_at, analiza, analiza_la, status_procesare, eroare')
         .eq('licitatie_id', licId).eq('aparut_ulterior', true).order('id'),
       supabase.from('v_ofertare_clarificari_baza').select('id, status, stare, mod_ciorna, mod_curent, amprenta_curenta, marcaj_planse, text, detalii').eq('licitatie_id', licId),
+      incarcaSemnale(supabase, licId),
     ])
     // Notificarea rulează separat; eșecul ei nu afectează salvarea sau controlul final.
     void supabase.rpc('ofertare_clarificari_notifica', { p_licitatie_id: licId }).then(({ error, data }) => {
@@ -132,6 +140,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
     }).catch(() => showToast('Notificarea de review nu a fost emisă; controlul final rămâne activ.', 'warn'))
     setClar(q || []); setProfiles(pr || []); setDocRasp(dr || [])
     setBaza(rB?.error ? { peId: null, eroare: rB.error.message || 'eroare' } : { peId: new Map((rB?.data || []).map(r => [r.id, r])), eroare: null })
+    setSemnale(rS?.error ? { randuri: [], eroare: eNeactiv(rS.error) ? 'semnalele nu sunt încă active pe server (migrare neaplicată)' : mesajEroareClarificare(rS.error) } : { randuri: rS?.data || [], eroare: null })
   }
   useEffect(() => { load(); setLegare(null) }, [licId])
 
@@ -208,10 +217,12 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
     const nr = (clar?.length ? Math.max(...clar.map(q => q.nr || 0)) : 0) + 1
     // origine explicită: implicitul din BD e „platforma”, rezervat serverului (fn_ofertare_surse_valideaza refuză inserarea de la utilizator)
     const { error } = await supabase.from('ofertare_clarificari').insert({ licitatie_id: licId, nr, intrebare: '', status: 'de_trimis', origine: 'manual' })
-    if (error) { showToast('Eroare: ' + error.message, 'err'); return }
+    // UNIQUE (licitatie_id, nr) (20270112a): o coliziune cu generatorul / publicarea semnalelor = 23505 → „reîncearcă”, nu două întrebări cu același număr
+    if (error) { showToast('Eroare: ' + mesajEroareClarificare(error), 'err'); return }
     await load()
   }
   const delQ = async (q) => {
+    if (!poateStergeCiorna(q)) return showToast('Ciornele automate nu se șterg — se retrag (status „retrasă”).', 'warn')
     if (!window.confirm(`Ștergi întrebarea ${q.nr}?`)) return
     await supabase.from('ofertare_clarificari').delete().eq('id', q.id)
     await load()
@@ -449,6 +460,22 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
     showToast(`✓ ${ok} întrebări legate de „${d?.nume_original || 'document'}” și marcate răspunse — verifică textul răspunsurilor.`)
     await load()
   }
+  // TKT-0329 A (spec §3.6): legarea unui semnal de răspunsul Autorității, cu valoarea reținută aleasă de om — RPC-ul verifică dreptul de decizie,
+  // documentul (raspuns_clarificare al aceleiași licitații) și valoarea; ciorna needitată se retrage pe server (rezolvat_de_raspuns)
+  const semnaleDeschise = (semnale.randuri || []).filter(r => r?.rezolvat !== true)
+  const leagaSemnal = async (semnalId, docId) => {
+    const brut = String(valRetinuta[semnalId] ?? '').trim().replace(',', '.')
+    const v = Number(brut)
+    if (!brut || !Number.isFinite(v) || v < 0) return showToast('Scrie valoarea reținută (număr ≥ 0) sau alege „ia A” / „ia B”.', 'err')
+    setLegareSemnal(semnalId)
+    try {
+      const { data, error } = await supabase.rpc('fn_ofertare_semnal_raspuns_leaga', { p_semnal_id: semnalId, p_document_id: docId, p_valoare: v })
+      if (error || data?.ok !== true) { showToast('Legarea semnalului a fost refuzată: ' + mesajEroareClarificare(error || { message: 'răspuns neconfirmat' }), 'err'); return }
+      showToast(`✓ Semnalul #${semnalId} a fost legat de răspuns cu valoarea ${v.toLocaleString('ro-RO')}${data.clarificare === 'retrasa' ? ' — ciorna needitată a fost retrasă' : ''}.`)
+      await load()
+    } catch (e) { showToast('Legarea semnalului nu s-a putut face: ' + (e?.message || e), 'err') }
+    finally { setLegareSemnal(null) }
+  }
 
   return (
     <div>
@@ -566,6 +593,43 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
                       <button style={{ ...S.btnP, padding:'5px 14px', fontSize:12 }} disabled={!!busy || !cand.length} onClick={leaga}>🔗 Leagă ({Object.values(legare.bife).filter(Boolean).length})</button>
                       <button style={{ ...S.btnS, padding:'5px 12px', fontSize:12 }} onClick={() => setLegare(null)}>Renunță</button>
                     </div>
+                    {/* TKT-0329 A (spec §3.6): semnalele de cantități DESCHISE care se potrivesc textual cu răspunsul (element + obiect, pe text_extras
+                        deja existent, fără AI) — doar PROPUNERE; omul scrie / alege valoarea reținută și confirmă („✓ leagă” → RPC pe server) */}
+                    {(() => {
+                      const textDoc = (d?.text_extras || '').trim()
+                      const propuneri = semnale.eroare || !textDoc ? [] : propuneRaspunsRelevant(semnaleDeschise, textDoc)
+                      const peId = new Map(semnaleDeschise.map(r => [r.semnal?.id, r.semnal]))
+                      const fmt = v => (v == null ? '—' : Number(v).toLocaleString('ro-RO', { maximumFractionDigits: 6 }))
+                      return (
+                        <div data-semnale-relevante="1" style={{ marginTop:10, paddingTop:8, borderTop:`1px dashed ${G.border}` }}>
+                          <div style={{ fontWeight:800, fontSize:12.5 }}>📏 Semnale posibil relevante (cantități între documente)</div>
+                          <div style={{ fontSize:11, color:G.dim, marginBottom:4 }}>potrivire pe textul răspunsului, fără AI — nimic nu se leagă singur; valoarea reținută o alegi tu</div>
+                          {semnale.eroare ? <div style={{ fontSize:12, color:G.red }}>⚠ nu putem citi semnalele ({semnale.eroare}) — nu putem propune nimic</div>
+                            : !textDoc ? <div style={{ fontSize:12, color:G.yellow }}>răspunsul nu e citit — nimic de propus (citește-l întâi cu AI sau așteaptă textul)</div>
+                            : !propuneri.length ? <div style={{ fontSize:12, color:G.dim }}>niciun semnal deschis nu se potrivește cu textul răspunsului</div>
+                            : propuneri.map(p => {
+                              const s = peId.get(p.semnal_id)
+                              const val = valRetinuta[p.semnal_id] ?? ''
+                              const gata = String(val).trim() !== '' && Number.isFinite(Number(String(val).replace(',', '.')))
+                              return (
+                                <div key={p.semnal_id} data-semnal-propus={String(p.semnal_id)} style={{ padding:'6px 8px', background:G.bg, borderRadius:7, border:`1px solid ${G.border2}`, marginTop:5, fontSize:12 }}>
+                                  <div><b>semnal #{p.semnal_id}</b> · {s?.element} · {s?.obiect_cheie === '*' || !s?.obiect_cheie ? 'toată lucrarea' : s.obiect_cheie}{s?.lot_nr != null ? ` · lot ${s.lot_nr}` : ''} · A {fmt(s?.valoare_a)} / B {fmt(s?.valoare_b)} {s?.um_canonica || ''}{s?.clarificare_id ? ` · ciorna #${s.clarificare_id}` : ''}</div>
+                                  <div style={{ color:G.green, fontSize:11.5 }}>↳ {p.motiv}</div>
+                                  <div style={{ display:'flex', gap:6, alignItems:'center', marginTop:5, flexWrap:'wrap' }}>
+                                    <span style={{ color:G.muted }}>valoarea reținută:</span>
+                                    <input type="number" min="0" step="any" style={{ ...S.input, width:110 }} value={val} placeholder="număr" disabled={legareSemnal === p.semnal_id}
+                                      onChange={e => setValRetinuta(m => ({ ...m, [p.semnal_id]: e.target.value }))} />
+                                    <button style={{ ...S.btnS, padding:'3px 8px', fontSize:11 }} disabled={s?.valoare_a == null} onClick={() => setValRetinuta(m => ({ ...m, [p.semnal_id]: String(s.valoare_a) }))}>ia A</button>
+                                    <button style={{ ...S.btnS, padding:'3px 8px', fontSize:11 }} disabled={s?.valoare_b == null} onClick={() => setValRetinuta(m => ({ ...m, [p.semnal_id]: String(s.valoare_b) }))}>ia B</button>
+                                    <button style={{ ...S.btnP, padding:'3px 10px', fontSize:11 }} disabled={!gata || legareSemnal != null || !!busy} onClick={() => leagaSemnal(p.semnal_id, d.id)}
+                                      title="Confirmă că acest răspuns rezolvă semnalul, cu valoarea reținută (serverul verifică dreptul de decizie)">✓ leagă</button>
+                                  </div>
+                                </div>
+                              )
+                            })}
+                        </div>
+                      )
+                    })()}
                   </div>
                 )}
               </div>
@@ -611,7 +675,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
           {(clar || []).map(q => {
             const [lbl, col] = CLAR_STATUS[q.status] || CLAR_STATUS.de_trimis
             return (
-              <div key={q.id} style={{ padding:'10px 12px', background:G.bg, borderRadius:8, border:`1px solid ${G.border2}`, borderLeft:`3px solid ${col}` }}>
+              <div key={q.id} data-clarificare={String(q.id)} style={{ padding:'10px 12px', background:G.bg, borderRadius:8, border:`1px solid ${G.border2}`, borderLeft:`3px solid ${col}` }}>
                 <div style={{ display:'flex', gap:10, alignItems:'flex-start' }}>
                   <span style={{ fontWeight:800, color:G.muted, paddingTop:8 }}>{q.nr}.</span>
                   <div style={{ flex:1 }}>
@@ -642,7 +706,8 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
                       const st = stareBazaCiorna(q, baza.peId, baza.eroare)
                       if (st.nivel === 'na') return null
                       const transmisa = q.status === 'trimisa' || q.status === 'raspunsa'
-                      const dif = textDiferente(st.rand?.detalii)
+                      // auto_surse_*: diferențele evaluării (verdict / A / B / prag); auto_planse_*: diferențele pozițiilor F3
+                      const dif = st.rand?.detalii?.evaluare === 'surse_v1' ? textDiferenteSemnal(st.rand.detalii) : textDiferente(st.rand?.detalii)
                       const col = st.nivel === 'ok' ? G.green : st.nivel === 'ok_identitate_limitata' ? G.orange : st.nivel === 'luat_act' ? G.muted : G.red
                       return (
                         <div style={{ marginTop:6, padding:'7px 10px', background:G.surface, borderRadius:7, borderLeft:`3px solid ${col}`, fontSize:12 }}>
@@ -728,7 +793,8 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
                     <select style={{ ...S.input, fontSize:11.5 }} value={q.status} onChange={e => { setQ(q.id, 'status', e.target.value); }} onBlur={() => saveQ(q)}>
                       {Object.entries(CLAR_STATUS).map(([k, [l]]) => <option key={k} value={k}>{l}</option>)}
                     </select>
-                    <button onClick={() => delQ(q)} style={{ ...S.btnS, padding:'3px 8px', fontSize:11, color:G.red, borderColor:G.red + '66' }}>✕</button>
+                    {/* inventar #11: ciornele automate (auto_planse_* / auto_surse_*) nu se șterg din client — triggerul refuză; se retrag din status */}
+                    {poateStergeCiorna(q) && <button data-actiune="sterge" onClick={() => delQ(q)} title="Șterge întrebarea" style={{ ...S.btnS, padding:'3px 8px', fontSize:11, color:G.red, borderColor:G.red + '66' }}>✕</button>}
                   </div>
                 </div>
               </div>

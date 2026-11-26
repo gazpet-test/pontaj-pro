@@ -4,6 +4,24 @@
 import { eCiornaAutomata } from './ofertareClarificariBaza.js'
 
 export const CULORI = { verde: '#3FB950', rosu: '#F85149', portocaliu: '#F0883E', gri: '#8B949E' }
+
+const PAGINA = 1000
+const PAGINI_MAX = 200   // 200 × 1000 rânduri: gardă împotriva unui server care nu avansează range-ul
+// migrarea neaplicată: tabel / funcție inexistente (PostgREST: PGRST202 pentru RPC, PGRST205 / 42P01 pentru tabel, 42883 funcție)
+export const eNeactiv = e => ['42P01', 'PGRST202', '42883', 'PGRST205'].includes(String(e?.code || '')) || /does not exist|Could not find the (function|table)/i.test(String(e?.message || ''))
+// toate rândurile fn_ofertare_semnale_lista, pagină cu pagină (range pe rezultatul funcției), până la pagina goală — nu „length < pagină” (L23)
+export async function incarcaSemnale(sb, licitatieId) {
+  const randuri = []
+  for (let p = 0; p < PAGINI_MAX; p++) {
+    const de = p * PAGINA
+    const { data, error } = await sb.rpc('fn_ofertare_semnale_lista', { p_licitatie_id: licitatieId }).range(de, de + PAGINA - 1)
+    if (error) return { error }
+    if (!Array.isArray(data)) return { error: { message: 'răspuns neașteptat de la server (nu e listă)' } }
+    if (!data.length) return { data: randuri }
+    for (const r of data) randuri.push(r)   // nu push(...data): RangeError la liste mari
+  }
+  return { error: { message: `prea multe rânduri (peste ${PAGINI_MAX * PAGINA}) — lista nu e completă` } }
+}
 const ORDINE_VERDICT = { diferenta: 0, de_verificat: 1, neverificat: 2, in_regula: 3 }
 const NUME_VERDICT = { in_regula: 'în regulă', diferenta: 'diferență', de_verificat: 'de verificat', neverificat: 'neverificat' }
 const cuMotiv = (t, motiv) => (motiv != null && String(motiv).trim() ? `${t}: ${String(motiv).trim()}` : t)

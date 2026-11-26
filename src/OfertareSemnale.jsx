@@ -7,7 +7,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
 import { eticheta, etichetaActualitate, descriereDovada, grupeazaPeMasura, eroareSetari, pragDinProcent, documenteNecitite, sha256Text,
-  mesajEroareClarificare, CULORI } from './ofertareSemnale.js'
+  mesajEroareClarificare, CULORI, incarcaSemnale, eNeactiv } from './ofertareSemnale.js'
+export { incarcaSemnale, eNeactiv }
 
 const G = { bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D', text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
   ofertare:'#3FB6E2', green:'#3FB950', orange:'#F0883E', yellow:'#E3B341', red:'#F85149' }
@@ -19,26 +20,8 @@ const S = {
   th: { textAlign:'left', padding:'6px 8px', fontSize:11, color:G.dim, textTransform:'uppercase', letterSpacing:.4, borderBottom:`1px solid ${G.border}`, whiteSpace:'nowrap' },
   td: { padding:'7px 8px', fontSize:12.5, borderBottom:`1px solid ${G.border2}`, verticalAlign:'top' },
 }
-const PAGINA = 1000
-const PAGINI_MAX = 200   // 200 × 1000 rânduri: gardă împotriva unui server care nu avansează range-ul
 export const MESAJ_NEACTIV = 'Semnalele de cantități nu sunt încă active pe server (migrarea 20270112a neaplicată) — nimic de verificat încă.'
 export const MESAJ_EROARE = 'Nu putem verifica semnalele'
-// migrarea neaplicată: tabel / funcție inexistente (PostgREST: PGRST202 pentru RPC, 42P01 pentru tabel, 42883 funcție)
-export const eNeactiv = e => ['42P01', 'PGRST202', '42883', 'PGRST205'].includes(String(e?.code || '')) || /does not exist|Could not find the (function|table)/i.test(String(e?.message || ''))
-
-// toate rândurile fn_ofertare_semnale_lista, pagină cu pagină (range pe rezultatul funcției), până la pagina goală — nu „length < pagină” (L23)
-export async function incarcaSemnale(sb, licitatieId) {
-  const randuri = []
-  for (let p = 0; p < PAGINI_MAX; p++) {
-    const de = p * PAGINA
-    const { data, error } = await sb.rpc('fn_ofertare_semnale_lista', { p_licitatie_id: licitatieId }).range(de, de + PAGINA - 1)
-    if (error) return { error }
-    if (!Array.isArray(data)) return { error: { message: 'răspuns neașteptat de la server (nu e listă)' } }
-    if (!data.length) return { data: randuri }
-    for (const r of data) randuri.push(r)   // nu push(...data): RangeError la liste mari
-  }
-  return { error: { message: `prea multe rânduri (peste ${PAGINI_MAX * PAGINA}) — lista nu e completă` } }
-}
 
 const fmtNr = v => (v == null || !Number.isFinite(Number(v)) ? '—' : Number(v).toLocaleString('ro-RO', { maximumFractionDigits: 6 }))
 const fmtData = d => (d ? new Date(d).toLocaleString('ro-RO', { dateStyle: 'short', timeStyle: 'short' }) : '—')
