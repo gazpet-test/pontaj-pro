@@ -15,6 +15,7 @@ import { MODEL_A, MODEL_S, OVERHEAD_A, PROMPT_A, tarifA, tarifS } from './extrac
 import { type PoartaFelie, poartaFelie } from './poartaB1.ts'
 import { eFotografie, limitaPagini, paginiInterval } from '../_shared/cantMasura.ts'
 import { comparaSurse, type RaportMasuratori } from './masuratori.ts'
+import { ultimeleVersiuni } from './versiuni.ts'
 
 export const EXTRACTOR = { model: 'gpt-5-mini', prompt: 'p3', normalizator: 'n7', feliere: 'f2' }   // n5 (20.10): coduri cu „%” + coloana „[ n]”; n6 (21.10): antetul „<cod> pag N” sub marcaj; n7 (21.10): „<n> COD <cod>” = continuare
 export const EXTRACTOR_ID = `${EXTRACTOR.model}@${EXTRACTOR.prompt}@${EXTRACTOR.normalizator}@${EXTRACTOR.feliere}`
@@ -101,11 +102,8 @@ export function sumaRezervata(prompt: string, ex: Extractor = EXTRACTOARE.B): nu
 // familia „parte”: un PDF împărțit în p01 / p02 … e un singur document pentru convenția numerică
 export const radacinaParte = (nume: string) => nume.replace(/\s+—\s+p\d{2}_pag\d+-\d+\.pdf$/i, '').trim()
 
-// ultimele versiuni: un document pe care altul îl înlocuiește (seap_meta.inlocuieste_id) nu se mai extrage (folosită și de handler la eligibilitate)
-export function ultimeleVersiuni<T extends { id: number; seap_meta: any }>(docs: T[]): T[] {
-  const inlocuite = new Set(docs.map((d) => Number(d?.seap_meta?.inlocuieste_id)).filter((x) => Number.isFinite(x) && x > 0))
-  return docs.filter((d) => !inlocuite.has(d.id))
-}
+// ultimele versiuni: versiuni.ts (aceeași definiție și la eligibilitatea comparației)
+export { ultimeleVersiuni } from './versiuni.ts'
 
 // identitatea extractorului = codul + contextul care schimbă rezultatul normalizării: convenția și manifestul (document:sha) al părților
 // VALIDE din grup + deciziile de rol active pe acest document și sha. Alt context = altă muncă, alt cache.

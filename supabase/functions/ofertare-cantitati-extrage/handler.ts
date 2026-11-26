@@ -34,7 +34,8 @@ import { eligibilitateLicitatie, esteEligibil, mesajLot } from '../_shared/eligi
 import { coloaneLot, lotDinNumeFisier } from '../_shared/lot.ts'
 import { poateCheltui } from '../_shared/poartaCheltuiala.ts'   // poarta unică pe cheltuială (20261124a)
 import { feliiDocument, type TipLista } from './sectiuni.ts'
-import { extrageStructurat, MAX_IESIRE, ultimeleVersiuni } from './structurat.ts'
+import { extrageStructurat, MAX_IESIRE } from './structurat.ts'
+import { eligibilitateDocumenteDb } from './masuratori.ts'
 import { raspunsCuPuls } from './puls.ts'
 import { cheamaA, MODEL_A, MODEL_S } from './extractorA.ts'
 
@@ -558,23 +559,8 @@ async function ruleazaStructurat(req: Request, deps: Deps, bodyBrut: string): Pr
       return x.eroare ? { txt: '', inF: x.inF, outF: x.outF, eroare: x.eroare } : { txt: x.txt, inF: x.inF, outF: x.outF, necunoscut: x.stop !== 'completed' }
     },
     acum: () => Date.now(),
-    // TKT-0329 A (PR-extragere, review r1 P1): eligibilitatea pentru EXACT documentele fotografiei, citită DUPĂ ea — poarta pe loturi
-    // proaspătă (fn_ofertare_eligibilitate, paginată) + ultima versiune (seap_meta.inlocuieste_id) din rândurile cerute, în bucăți de 200
-    // (fără plafonul PostgREST). Orice eroare, rând lipsă sau id străin = null (comparația tratează totul ca necitit, conservator).
-    eligibilitateDocumente: async (l, ids) => {
-      try {
-        const e = await eligibilitateLicitatie(db, l)
-        if (!e.ok) return null
-        const randuri: { id: number; seap_meta: any }[] = []
-        for (let i = 0; i < ids.length; i += 200) {
-          const felie = ids.slice(i, i + 200)
-          const { data, error } = await db.from('ofertare_documente_atribuire').select('id, seap_meta').eq('licitatie_id', l).in('id', felie)
-          if (error || !Array.isArray(data) || data.length !== felie.length) return null
-          for (const d of data) { const id = Number(d?.id); if (!felie.includes(id)) return null; randuri.push({ id, seap_meta: d.seap_meta }) }
-        }
-        const ultime = new Set(ultimeleVersiuni(randuri).map((d) => d.id))
-        return new Map(randuri.map((d) => [d.id, ultime.has(d.id) && esteEligibil(e.harta, d.id)]))
-      } catch (_) { return null }
-    },
+    // TKT-0329 A (PR-extragere, review r1 / r2 P1): eligibilitatea pentru EXACT documentele fotografiei, citită DUPĂ ea — funcția testată
+    // separat (masuratori_test): poarta pe loturi proaspătă cu acoperirea tuturor id-urilor cerute + ultima versiune; necunoscut = null
+    eligibilitateDocumente: (l, ids) => eligibilitateDocumenteDb(db, l, ids),
   }, { licitatie_id: licId, cerere_id: cerereId, max_felii: Number(body.max_felii) || 0, extractor }), CORS)
 }

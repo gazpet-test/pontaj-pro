@@ -5,7 +5,7 @@ import { assert, assertEquals, assertMatch } from 'jsr:@std/assert@1'
 import { sha256Hex } from '../_shared/cantNormalizare.ts'
 import { type Context, type FelieServita, type Fotografie, type FotoDocument, numarPagini } from '../_shared/cantMasura.ts'
 import { interpretari, tokeniNumerici, valoareInDocument } from '../_shared/cantNumar.ts'
-import { comparaSurse, type DepsMasuratori, LIMITA_FELII, type ParametriComparatie } from './masuratori.ts'
+import { comparaSurse, type DepsMasuratori, eligibilitateDocumenteDb, LIMITA_FELII, type ParametriComparatie } from './masuratori.ts'
 
 const F3 = '⟦PAGINA 1⟧\nFormularul F3\nLista cu cantitatile de lucrari\nObiect 3 Str. A\n= NR. SIMBOL ART. CANTITATE UM =\n002 GD11A1 [ 1] M.C. 174.000\nDRENAJ\n0.000 0 Total=\n003 SA11G1 [ 2] M 6.400\nTEAVA PE100 DN160\n0.000 0 Total=\n'
 const ATR = '⟦PAGINA 1⟧\nAVIZ TEHNIC DE RACORDARE\nconducta Dn 160, in lungime totala de 3.995 m\n'
@@ -187,14 +187,72 @@ Deno.test('r1 P1: eligibilitatea se stabilește pe documentele FOTOGRAFIEI, dup�
   assertEquals([re.ok, re.eroare, e.fn('fn_ofertare_masuratori_propune').length], [false, 'exceptie: citire picată', 0])
 })
 
-Deno.test('r1 P2: răspunsul publicării / propunerii se verifică pe contract — formă străină = eroare explicită, nu succes', async () => {
-  for (const rau of [{}, [], null, 'x', { evaluare_id: 12, semnale: [], n: 0 }, { evaluare_id: 11 }, { evaluare_id: 11, semnale: [{}], n: 0 }, { evaluare_id: 11, semnale: 'x', n: 1 }]) {
+// baza falsă pentru eligibilitateDocumenteDb: poarta (rpc fn_ofertare_eligibilitate) + citirea versiunilor (from().select().eq().in())
+type RandPoarta = { document_id: number; eligibil: boolean; motiv: string }
+function bazaFalsa(poarta: RandPoarta[] | { error: string }, randuri: { id: number; seap_meta: unknown }[] | { error: string }, opt: { dubleaza?: boolean; strain?: boolean } = {}) {
+  const cereriIn: number[][] = []
+  return {
+    cereriIn,
+    rpc: (_fn: string, _args: Record<string, unknown>) => Promise.resolve('error' in poarta ? { data: null, error: { message: poarta.error } } : { data: poarta, error: null }),
+    from: (_t: string) => ({ select: (_c: string) => ({ eq: (_k: string, _v: unknown) => ({ in: (_k2: string, ids: number[]) => {
+      cereriIn.push(ids)
+      if ('error' in randuri) return Promise.resolve({ data: null, error: { message: randuri.error } })
+      let data = randuri.filter((r) => ids.includes(r.id))
+      if (opt.dubleaza && data.length) data = [data[0], ...data]
+      if (opt.strain && data.length) data = [{ ...data[0], id: 777777 }, ...data.slice(1)]
+      return Promise.resolve({ data, error: null })
+    } }) }) }),
+  }
+}
+const POARTA: RandPoarta[] = [{ document_id: 1, eligibil: true, motiv: 'comun' }, { document_id: 2, eligibil: false, motiv: 'in_afara_loturilor' }, { document_id: 3, eligibil: false, motiv: 'de_triat' },
+  { document_id: 6, eligibil: true, motiv: 'lot_participam' }, { document_id: 7, eligibil: true, motiv: 'lot_participam' }]
+const RANDURI = [{ id: 1, seap_meta: null }, { id: 2, seap_meta: {} }, { id: 3, seap_meta: null }, { id: 6, seap_meta: null }, { id: 7, seap_meta: { inlocuieste_id: 6 } }]
+
+Deno.test('r2 P1: eligibilitateDocumenteDb — extractibil = ultima versiune ȘI nu „în afara loturilor”; de_triat rămâne extractibil (necitit, conservator)', async () => {
+  const db = bazaFalsa(POARTA, RANDURI)
+  const m = await eligibilitateDocumenteDb(db, 900001, [1, 2, 3, 6, 7])
+  assertEquals(m, new Map([[1, true], [2, false], [3, true], [6, false], [7, true]]))   // 6 e înlocuit de 7; 2 e doar pe alte loturi
+  assertEquals(db.cereriIn, [[1, 2, 3, 6, 7]])
+})
+
+Deno.test('r2 P1: un document cerut LIPSĂ din răspunsul porții (hartă parțială / trunchiată) = null, nu „neeligibil”; poarta picată / document_inexistent / eroare_poarta = null', async () => {
+  // poarta nu-l are pe 5 (apărut între timp sau răspuns trunchiat), deși citirea versiunilor îl are
+  const randuri = [...RANDURI, { id: 5, seap_meta: null }]
+  assertEquals(await eligibilitateDocumenteDb(bazaFalsa(POARTA, randuri), 900001, [1, 2, 3, 5, 6, 7]), null)
+  assertEquals(await eligibilitateDocumenteDb(bazaFalsa([], randuri), 900001, [1]), null)
+  assertEquals(await eligibilitateDocumenteDb(bazaFalsa({ error: 'poarta picata' }, randuri), 900001, [1]), null)
+  assertEquals(await eligibilitateDocumenteDb(bazaFalsa([{ document_id: 1, eligibil: false, motiv: 'document_inexistent' }], randuri), 900001, [1]), null)
+  assertEquals(await eligibilitateDocumenteDb(bazaFalsa([{ document_id: 1, eligibil: false, motiv: 'eroare_poarta' }], randuri), 900001, [1]), null)
+  // cu toate id-urile în poartă, același set e OK
+  assertEquals((await eligibilitateDocumenteDb(bazaFalsa([...POARTA, { document_id: 5, eligibil: true, motiv: 'comun' }], randuri), 900001, [1, 5]))?.get(5), true)
+})
+
+Deno.test('r2 P1: citirea versiunilor picată / incompletă / cu dubluri / cu id străin = null; id-uri invalide = null; bucăți de 200', async () => {
+  assertEquals(await eligibilitateDocumenteDb(bazaFalsa(POARTA, { error: 'timeout' }), 900001, [1]), null)
+  assertEquals(await eligibilitateDocumenteDb(bazaFalsa(POARTA, RANDURI.filter((r) => r.id !== 3)), 900001, [1, 3]), null)   // rând lipsă
+  assertEquals(await eligibilitateDocumenteDb(bazaFalsa(POARTA, RANDURI, { dubleaza: true }), 900001, [1, 2]), null)
+  assertEquals(await eligibilitateDocumenteDb(bazaFalsa(POARTA, RANDURI, { strain: true }), 900001, [1, 2]), null)
+  for (const ids of [[0], [1.5], [-1], [NaN], [1, 0]]) assertEquals(await eligibilitateDocumenteDb(bazaFalsa(POARTA, RANDURI), 900001, ids), null, JSON.stringify(ids))
+  // 450 de documente → 3 cereri (200 + 200 + 50), fiecare cu exact id-urile ei; toate în poartă
+  const multe = Array.from({ length: 450 }, (_, i) => i + 1000)
+  const db = bazaFalsa(multe.map((id) => ({ document_id: id, eligibil: true, motiv: 'comun' })), multe.map((id) => ({ id, seap_meta: null })))
+  const m = await eligibilitateDocumenteDb(db, 900001, multe)
+  assertEquals([m?.size, db.cereriIn.map((x) => x.length)], [450, [200, 200, 50]])
+  assertEquals([...new Set(db.cereriIn.flat())].length, 450)
+})
+
+Deno.test('r1 P2 / r2 P2: răspunsul publicării / propunerii se verifică pe TIP (fără conversii) — formă străină = eroare explicită, nu succes', async () => {
+  for (const rau of [{}, [], null, 'x', { evaluare_id: 12, semnale: [], n: 0 }, { evaluare_id: 11 }, { evaluare_id: 11, semnale: [{}], n: 0 }, { evaluare_id: 11, semnale: 'x', n: 1 },
+    { evaluare_id: 11, semnale: [], n: null }, { evaluare_id: 11, semnale: [], n: false }, { evaluare_id: 11, semnale: [], n: '' }, { evaluare_id: 11, semnale: [], n: [] }, { evaluare_id: 11, semnale: [], n: '0' },
+    { evaluare_id: 11, semnale: [{}], n: 1.0000001 }, { evaluare_id: '11', semnale: [], n: 0 }, { evaluare_id: 11.5, semnale: [], n: 0 }, { evaluare_id: true, semnale: [], n: 0 }, { evaluare_id: 0, semnale: [], n: 0 }]) {
     const f = await fals({ docs: [DOC_F3, DOC_ATR], felii: FELII_TICHET(), publicaRaspuns: rau })
     const r = await RULEAZA(f)
     assertEquals([r.ok, r.eroare, r.semnale, f.fn('fn_ofertare_semnale_publica').length], [false, 'publica: răspuns neconform', undefined, 1], JSON.stringify(rau))
     assert(String(r.detalii).includes('necunoscută'), JSON.stringify(rau))
   }
-  for (const rau of [{}, [], null, { evaluare_id: 11 }, { evaluare_id: 11, semnale: [] }, { evaluare_id: 'x', semnale: [], ignorate: [] }]) {
+  for (const rau of [{}, [], null, { evaluare_id: 11 }, { evaluare_id: 11, semnale: [] }, { evaluare_id: 'x', semnale: [], ignorate: [] },
+    { evaluare_id: null, semnale: [], ignorate: [] }, { evaluare_id: 0, semnale: [], ignorate: [] }, { evaluare_id: '11', semnale: [], ignorate: [] }, { evaluare_id: 1.5, semnale: [], ignorate: [] },
+    { evaluare_id: -3, semnale: [], ignorate: [] }, { evaluare_id: true, semnale: [], ignorate: [] }, { evaluare_id: 11, semnale: null, ignorate: [] }]) {
     const f = await fals({ docs: [DOC_F3, DOC_ATR], felii: FELII_TICHET(), propuneRaspuns: rau })
     const r = await RULEAZA(f)
     assertEquals([r.ok, r.eroare, f.fn('fn_ofertare_semnale_publica').length], [false, 'propune: răspuns neconform', 0], JSON.stringify(rau))
