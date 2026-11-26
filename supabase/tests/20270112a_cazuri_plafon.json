@@ -1,0 +1,41 @@
+{
+  "_descriere": "Tabelul COMUN de cazuri al plafonului de pagini (decizia 18 a planului TKT-2026-0329): documentele (ordinea id, inclusiv cele din cache) + plafonul -> ultima pagina permisa pe document, plafon_atins, si feliile (pagina_de_la..pagina_pana_la) permise sau nu (permisa <=> pagina_pana_la <= ultima_pagina_permisa a documentului). Folosit de PGlite (fn_ofertare_masura_pagini_permise) si de Deno (plafonFelii), L19.",
+  "cazuri": [
+    {
+      "nume": "3 documente x 100 pagini, plafon 200: documentul 3 nepermis",
+      "documente": [ { "id": 1, "pagini": 100 }, { "id": 2, "pagini": 100 }, { "id": 3, "pagini": 100 } ], "plafon": 200,
+      "limita": [ { "document_id": 1, "ultima_pagina_permisa": 100 }, { "document_id": 2, "ultima_pagina_permisa": 100 }, { "document_id": 3, "ultima_pagina_permisa": 0 } ],
+      "plafon_atins": true,
+      "felii": [ { "document_id": 2, "pagina_de_la": 98, "pagina_pana_la": 100, "permisa": true }, { "document_id": 3, "pagina_de_la": 1, "pagina_pana_la": 3, "permisa": false } ]
+    },
+    {
+      "nume": "felia 198-203 traverseaza limita la plafon 200: exclusa intreaga",
+      "documente": [ { "id": 1, "pagini": 250 } ], "plafon": 200,
+      "limita": [ { "document_id": 1, "ultima_pagina_permisa": 200 } ], "plafon_atins": true,
+      "felii": [ { "document_id": 1, "pagina_de_la": 198, "pagina_pana_la": 203, "permisa": false }, { "document_id": 1, "pagina_de_la": 190, "pagina_pana_la": 200, "permisa": true },
+                 { "document_id": 1, "pagina_de_la": 201, "pagina_pana_la": 205, "permisa": false } ]
+    },
+    {
+      "nume": "aceeasi felie la plafon 250: permisa",
+      "documente": [ { "id": 1, "pagini": 250 } ], "plafon": 250,
+      "limita": [ { "document_id": 1, "ultima_pagina_permisa": 250 } ], "plafon_atins": false,
+      "felii": [ { "document_id": 1, "pagina_de_la": 198, "pagina_pana_la": 203, "permisa": true } ]
+    },
+    {
+      "nume": "documentul servit din cache (id mic) numara la fel ca unul nou",
+      "documente": [ { "id": 5, "pagini": 150, "cache": true }, { "id": 9, "pagini": 100 } ], "plafon": 200,
+      "limita": [ { "document_id": 5, "ultima_pagina_permisa": 150 }, { "document_id": 9, "ultima_pagina_permisa": 50 } ], "plafon_atins": true,
+      "felii": [ { "document_id": 9, "pagina_de_la": 1, "pagina_pana_la": 50, "permisa": true }, { "document_id": 9, "pagina_de_la": 50, "pagina_pana_la": 51, "permisa": false } ]
+    },
+    {
+      "nume": "sub plafon",
+      "documente": [ { "id": 1, "pagini": 10 }, { "id": 2, "pagini": 0 } ], "plafon": 200,
+      "limita": [ { "document_id": 1, "ultima_pagina_permisa": 10 }, { "document_id": 2, "ultima_pagina_permisa": 0 } ], "plafon_atins": false,
+      "felii": [ { "document_id": 1, "pagina_de_la": 1, "pagina_pana_la": 10, "permisa": true } ]
+    },
+    {
+      "nume": "fara documente",
+      "documente": [], "plafon": 200, "limita": [], "plafon_atins": false, "felii": []
+    }
+  ]
+}
