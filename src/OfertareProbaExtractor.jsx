@@ -92,7 +92,10 @@ export default function OfertareProbaExtractor({ licitatie: l, onRulare = null }
     jurnalAici(`■ ${extractor}: ${r.motiv} — ${tot.felii} felii, ${tot.cost.toFixed(4)} USD, deficit B1 ${tot.deficit}, escaladate ${tot.escaladate}, erori ${tot.erori}${r.pasi.find(p => p.extractor)?.extractor ? ` (${r.pasi.find(p => p.extractor).extractor})` : ''}`)
     } catch (e) { if (aici()) setErr('Rulare întreruptă: ' + (e?.message || String(e))) }
     finally { setBusy(false) }
-    if (aici()) { await load(); if (typeof onRulare === 'function') onRulare(idRulare) }
+    // review r3 P2: contextul se reverifică și DUPĂ recitirea bugetului (omul poate trece pe altă licitație cât timp ea durează), iar
+    // notificarea semnalelor nu depinde de reușita tehnică a recitirii (serverul a publicat evaluarea indiferent de ea)
+    if (aici()) { try { await load() } catch (e) { if (aici()) setErr('Recitirea bugetului a eșuat: ' + (e?.message || String(e))) } }
+    if (aici() && typeof onRulare === 'function') onRulare(idRulare)
   }
 
   return (

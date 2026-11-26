@@ -57,6 +57,9 @@ const dom = JSDOM ? describe : describe.skip
 const LIC = { id: 900001, nr_anunt: 'CN-TEST', obiect: 'Obiect de test', status: 'in_lucru', termen_depunere: '2027-01-15' }
 const LIC_B = { id: 900002, nr_anunt: 'CN-TEST-B', obiect: 'A doua licitație', status: 'in_lucru', termen_depunere: '2027-02-15' }
 const CLAR_B = [{ id: 9, licitatie_id: LIC_B.id, nr: 1, intrebare: 'Întrebarea licitației B', status: 'de_trimis', origine: 'manual', cheie: null, fisier_path: null, raspuns: null }]
+const DOC_RASP_B = 401
+const DOCS_B = [{ id: DOC_RASP_B, licitatie_id: LIC_B.id, nume_original: 'Raspuns B.pdf', tip: 'raspuns_clarificare', aparut_ulterior: true, fisier_path: 'x/b.pdf', created_at: '2026-11-27T13:00:00Z',
+  status_procesare: 'procesat', text_extras: '⟦PAGINA 1⟧ Pentru DN 160 lungimea este 500 m.', analiza: null }]
 const DOC_RASP = 301, DOC_RASP_NECITIT = 302, DOC_RASP2 = 303
 const CLAR = [
   { id: 1, licitatie_id: LIC.id, nr: 1, intrebare: 'Întrebare scrisă de mână', status: 'trimisa', origine: 'manual', cheie: null, fisier_path: null, raspuns: null },
@@ -92,7 +95,7 @@ function stareImplicita() {
   st.tabele = { ofertare_clarificari: CLAR, profiles: [{ id: 'u1', name: 'Test' }], ofertare_documente_atribuire: DOCS, v_ofertare_clarificari_baza: BAZA }
 }
 async function monteaza({ licitatii = [LIC] } = {}) {
-  const j = new JSDOM('<!doctype html><div id="r"></div>', { pretendToBeVisual: true })
+  const j = new JSDOM('<!doctype html><div id="r"></div>', { pretendToBeVisual: true, url: 'http://localhost/' })
   const vechi = { window: globalThis.window, document: globalThis.document }
   Object.assign(globalThis, { window: j.window, document: j.window.document })
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
@@ -231,7 +234,8 @@ dom('Clarificări — ciornele auto_surse_* și „răspuns posibil relevant” 
     stareImplicita()
     st.tabele.ofertare_clarificari = [...CLAR.map(q => ({ ...q })), ...CLAR_B]
     const pend = []
-    st.amana.ofertare_clarificari = rows => new Promise(res => { pend.push(() => res({ data: rows, error: null })) })
+    // răspunsul suspendat păstrează o COPIE a rândurilor din clipa cererii (review r3 P3): A1 rămâne cu textul v1 chiar dacă fixture-ul e mutat după
+    st.amana.ofertare_clarificari = rows => { const copie = JSON.parse(JSON.stringify(rows)); return new Promise(res => { pend.push(() => res({ data: copie, error: null })) }) }
     const { alegeLicitatia, asteapta, act, text, notificari, demonteaza } = await monteaza({ licitatii: [LIC, LIC_B] })
     expect(pend.length).toBe(1); expect(text()).not.toContain('Întrebare scrisă de mână'); expect(notificari()).toEqual([])
     await alegeLicitatia(LIC_B.id); expect(pend.length).toBe(2)
@@ -251,6 +255,49 @@ dom('Clarificări — ciornele auto_surse_* și „răspuns posibil relevant” 
     demonteaza()
     pend[3](); for (let i = 0; i < 80; i++) await Promise.resolve()
     expect(notificari()).toEqual([LIC_B.id, LIC.id])
+  })
+  it('review r3 P2: RPC-ul legării pe A RESPINS după trecerea pe B → nicio eroare afișată pe B; cât e în zbor, legarea pe B rămâne disponibilă; A → B → A nu reactivează acțiunea veche', async () => {
+    stareImplicita()
+    st.tabele.ofertare_clarificari = [...CLAR, ...CLAR_B]
+    st.tabele.ofertare_documente_atribuire = [...DOCS, ...DOCS_B]
+    let respingeLegarea = null
+    const apeluri = []
+    st.rpc.fn_ofertare_semnal_raspuns_leaga = (args) => { apeluri.push(args); return apeluri.length === 1 ? new Promise((_, rej) => { respingeLegarea = rej }) : { data: { ok: true, semnal_id: 50, clarificare: 'retrasa' }, error: null } }
+    const { d, apasa, buton, butoane, alegeLicitatia, asteapta, act, text, toast } = await monteaza({ licitatii: [LIC, LIC_B] })
+    await apasa(butoane('La ce întrebări răspunde?')[0]); await apasa(buton('ia B')); await apasa(buton('✓ leagă'))   // A: RPC în zbor
+    await alegeLicitatia(LIC_B.id)
+    expect(text()).toContain('Raspuns B.pdf')
+    // pe B legarea e disponibilă deși RPC-ul lui A e încă în zbor (starea „în curs” s-a resetat la schimbare)
+    await apasa(butoane('La ce întrebări răspunde?')[0]); await apasa(buton('ia B'))
+    expect(buton('✓ leagă').disabled).toBe(false)
+    // RPC-ul lui A pică acum: nimic pe ecranul B
+    await act(async () => { respingeLegarea(new TypeError('Failed to fetch')) }); await asteapta()
+    expect(toast.mock.calls.some(c => String(c[0]).includes('nu s-a putut face'))).toBe(false)
+    expect(buton('✓ leagă').disabled).toBe(false)
+    // legarea pe B merge și trimite documentul B
+    await apasa(buton('✓ leagă'))
+    expect(apeluri[1]).toEqual({ p_semnal_id: 50, p_document_id: DOC_RASP_B, p_valoare: 3995 })
+    expect(toast.mock.calls.some(c => String(c[0]).includes('legat de răspuns'))).toBe(true)
+    // panoul lui B rămâne deschis după reîncărcare (se închide doar din „Renunță”), cu secțiunea semnalelor la loc
+    expect(d.querySelector('[data-semnale-relevante]')).not.toBeNull()
+  })
+  it('review r3 P2: A → B → A — RPC-ul vechi al lui A terminat după revenirea pe A NU anunță și NU curăță starea nouă (contextul e generația, nu id-ul)', async () => {
+    stareImplicita()
+    st.tabele.ofertare_clarificari = [...CLAR, ...CLAR_B]
+    let rezolvaVeche = null
+    const apeluri = []
+    st.rpc.fn_ofertare_semnal_raspuns_leaga = (args) => { apeluri.push(args); return apeluri.length === 1 ? new Promise(res => { rezolvaVeche = res }) : new Promise(() => {}) }
+    const { apasa, buton, butoane, alegeLicitatia, asteapta, act, toast } = await monteaza({ licitatii: [LIC, LIC_B] })
+    await apasa(butoane('La ce întrebări răspunde?')[0]); await apasa(buton('ia B')); await apasa(buton('✓ leagă'))   // A, context 1: în zbor
+    await alegeLicitatia(LIC_B.id)
+    await alegeLicitatia(LIC.id)                                                                                      // A, context 2
+    await apasa(butoane('La ce întrebări răspunde?')[0]); await apasa(buton('ia A')); await apasa(buton('✓ leagă'))   // operație NOUĂ, în zbor (nu se rezolvă)
+    expect(buton('✓ leagă').disabled).toBe(true)                                                                       // „în curs” pe operația nouă
+    await act(async () => { rezolvaVeche({ data: { ok: true, semnal_id: 50, clarificare: 'retrasa' }, error: null }) }); await asteapta()
+    // acțiunea veche (același id de licitație, alt context) nu anunță și nu scoate starea „în curs” a operației noi
+    expect(toast.mock.calls.some(c => String(c[0]).includes('legat de răspuns'))).toBe(false)
+    expect(buton('✓ leagă').disabled).toBe(true)
+    expect(apeluri.length).toBe(2)
   })
   it('legarea refuzată de server (CM_FARA_DREPT) → mesajul fără cod, nimic marcat ca legat', async () => {
     stareImplicita()

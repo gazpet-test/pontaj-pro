@@ -123,6 +123,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
   // aceleiași licitații terminate invers aplică doar pe ultima; demontarea invalidează tot.
   const licCurenta = useRef(null)
   const genIncarcare = useRef(0)
+  const genContext = useRef(0)   // review r3 P2: contextul ACȚIUNILOR (legarea) — crește doar la schimbarea licitației / demontare, nu la fiecare încărcare
   const load = async () => {
     const idCerut = licId
     if (!idCerut || licCurenta.current !== idCerut) return
@@ -151,10 +152,10 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
     setSemnale(rS?.error ? { randuri: [], eroare: eNeactiv(rS.error) ? 'semnalele nu sunt încă active pe server (migrare neaplicată)' : mesajEroareClarificare(rS.error) } : { randuri: rS?.data || [], eroare: null })
   }
   useEffect(() => {
-    licCurenta.current = licId; genIncarcare.current++
-    setLegare(null); setValRetinuta({}); setSemnale({ randuri: [], eroare: null })
+    licCurenta.current = licId; genIncarcare.current++; genContext.current++
+    setLegare(null); setValRetinuta({}); setSemnale({ randuri: [], eroare: null }); setLegareSemnal(null)
     load()
-    return () => { licCurenta.current = null; genIncarcare.current++ }   // schimbare de licitație / demontare: rezultatele în zbor se aruncă
+    return () => { licCurenta.current = null; genIncarcare.current++; genContext.current++ }   // schimbare de licitație / demontare: rezultatele în zbor se aruncă
   }, [licId])
 
   const lic = active.find(l => l.id === licId)
@@ -482,17 +483,19 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
     const brut = String(valRetinuta[cheieVal(docId, semnalId)] ?? '').trim().replace(',', '.')
     const v = Number(brut)
     if (!brut || !Number.isFinite(v) || v < 0) return showToast('Scrie valoarea reținută (număr ≥ 0) sau alege „ia A” / „ia B”.', 'err')
-    const idCerut = licId
+    // review r2 / r3 P2: tokenul contextului (licitația + generația ei) se verifică pe TOATE ieșirile acțiunii — succes, refuz, excepție, finally —
+    // o acțiune pornită pe alt context (A → B, sau A → B → A) nu anunță nimic și nu curăță starea unei operații noi
+    const ctx = genContext.current, idCerut = licId
+    const valid = () => genContext.current === ctx && licCurenta.current === idCerut
     setLegareSemnal(semnalId)
     try {
       const { data, error } = await supabase.rpc('fn_ofertare_semnal_raspuns_leaga', { p_semnal_id: semnalId, p_document_id: docId, p_valoare: v })
-      // review r2: acțiunea pornită pe altă licitație nu mai anunță nimic pe ecranul curent (serverul a scris sau nu; se vede la reîncărcarea ei)
-      if (licCurenta.current !== idCerut) return
+      if (!valid()) return
       if (error || data?.ok !== true) { showToast('Legarea semnalului a fost refuzată: ' + mesajEroareClarificare(error || { message: 'răspuns neconfirmat' }), 'err'); return }
       showToast(`✓ Semnalul #${semnalId} a fost legat de răspuns cu valoarea ${v.toLocaleString('ro-RO')}${data.clarificare === 'retrasa' ? ' — ciorna needitată a fost retrasă' : ''}.`)
       await load()
-    } catch (e) { showToast('Legarea semnalului nu s-a putut face: ' + (e?.message || e), 'err') }
-    finally { setLegareSemnal(null) }
+    } catch (e) { if (valid()) showToast('Legarea semnalului nu s-a putut face: ' + (e?.message || e), 'err') }
+    finally { if (valid()) setLegareSemnal(null) }
   }
 
   return (
