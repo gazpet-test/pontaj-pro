@@ -10,7 +10,7 @@
 import { conventieDocument, type Conventie } from '../_shared/cantNumar.ts'
 import { CAMPURI_RAND, normalizeazaRand, randDinTablou, sha256Hex } from '../_shared/cantNormalizare.ts'
 import { feliiCuPozitie } from './sectiuni.ts'
-import { type Rol, type SectiuneRol, aplicaDecizii, cheieSectiune, sectiuniRol } from './roluri.ts'
+import { type Rol, type SectiuneRol, aplicaDecizii, cheieSectiune, ROLURI_EXTRASE, sectiuniRol } from './roluri.ts'
 import { MODEL_A, MODEL_S, OVERHEAD_A, PROMPT_A, tarifA, tarifS } from './extractorA.ts'
 import { type PoartaFelie, poartaFelie } from './poartaB1.ts'
 import { eFotografie, limitaPagini, paginiInterval } from '../_shared/cantMasura.ts'
@@ -42,9 +42,8 @@ export const EXTRACTOARE: Record<'A' | 'B', Extractor> = {
 // Separatorul e „/” (fix 20.10, bug în producție): „>” nu e permis de CHECK-ul ofertare_cant_extrageri.extractor_id
 // ^[A-Za-z0-9._:@/-]{3,200}$ — orice id nou se verifică în idExtractor_test.ts contra regex-ului citit din migrare
 export const idExtractor = (e: Extractor) => `${e.model}${e.escaladare ? '/' + e.escaladare.model + (e.escaladare.politica ? ':' + e.escaladare.politica : '') : ''}@${e.prompt}@${e.normalizator}@${e.feliere}`
-// review Jakarinos #757 r1 (P1): 'lista_alt' rămâne extrasă — eticheta e euristică (o pagină F3 / un memoriu pot moșteni lista_alt), deci
-// excluderea ei poate tăia lungimi reale; rândurile C7 / C8 întoarse ca obiecte sunt acum normalizabile (n4)
-const ROLURI_EXTRASE: Rol[] = ['f3', 'c6', 'lista_alt', 'atr', 'cs', 'fisa_date', 'memoriu', 'plansa', 'raspuns']
+// ROLURI_EXTRASE (rolurile trimise la AI; 'lista_alt' rămâne extrasă — review #757 r1) stă în roluri.ts: aceeași listă decide și „documentul are ce
+// extrage” în comparația cantităților (_shared/cantMasura.ts, L19); rândurile C7 / C8 întoarse ca obiecte sunt normalizabile (n4)
 // TKT-0329 A (PR-extragere, decizia 14 / întrebarea (f), aprobată de owner): și `formular` — F3-ul stă deseori acolo; costul intră în aceeași
 // cerere și sub același plafon de pagini al licitației. `plansa` rămâne în afara extragerii structurate (textul planșelor vine din fluxul separat)
 export const TIPURI_ELIGIBILE = ['lista_cantitati', 'formular', 'cs_volum', 'fisa_date', 'alta', 'raspuns_clarificare']

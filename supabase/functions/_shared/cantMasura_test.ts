@@ -3,7 +3,7 @@
 // supabase/tests/20270112a_cazuri_plafon.json (L19).
 import { assert, assertEquals } from 'jsr:@std/assert@1'
 import { sha256Hex } from './cantNormalizare.ts'
-import { cheieFelie, completitudineFelii, type Context, type FelieServita, type Fotografie, type FotoDocument, eFotografie, exclusDeOm, limitaPagini,
+import { arePartiDeExtras, cheieFelie, completitudineFelii, type Context, type FelieServita, type Fotografie, type FotoDocument, eFotografie, limitaPagini,
   numarPagini, paginaText, paginiInterval, paginiRulare, plafonFelii, rezumatSemnale, rolFelie, segmentePagini, verificaContext } from './cantMasura.ts'
 
 const CAZURI = JSON.parse(await Deno.readTextFile(new URL('../../tests/20270112a_cazuri_plafon.json', import.meta.url)))
@@ -63,8 +63,8 @@ Deno.test('pagini: paritate cu SQL pe tabelul comun 20270112a_cazuri_pagini.json
     for (const [p, asteptat] of Object.entries(c.pagina)) assertEquals(paginaText(c.text, Number(p)), asteptat, c.nume + ': pagina ' + p)
     for (const i of c.intervale) assertEquals(paginiInterval(c.text, i.de_la, i.pana_la), { pagina_de_la: i.pagina_de_la, pagina_pana_la: i.pagina_pana_la }, c.nume + ': interval ' + i.de_la + '-' + i.pana_la)
   }
-  // textul null din BD = textul gol
-  assertEquals([numarPagini(null), numarPagini(undefined), paginaText(null, 1)], [0, 0, ''])
+  // textul NULL din BD: zero pagini, nicio pagină (fn_ofertare_masura_pagina(NULL, 1) = NULL; textul gol '' rămâne '' la pagina 1)
+  assertEquals([numarPagini(null), numarPagini(undefined), paginaText(null, 1), paginaText(undefined, 1), paginaText('', 1)], [0, 0, null, null, ''])
 })
 
 Deno.test('paginiInterval / segmentePagini: paginile atinse de o felie (offseturi de caractere); fără marcaje = pagina 1; preambulul = prima pagină marcată; tab-ul nu e marcaj', () => {
@@ -82,13 +82,29 @@ Deno.test('paginiInterval / segmentePagini: paginile atinse de o felie (offsetur
   assertEquals(numarPagini('⟦PAGINA 7⟧\nx\n⟦PAGINA 2⟧\ny'), 7)   // maximul, ca în SQL
 })
 
-Deno.test('exclusDeOm: doar decizia activă nu_e_sursa_cantitativa pe tot documentul („*”) scoate documentul; pe o secțiune / rol_confirmat / fără decizii → nu', () => {
-  const c = (decizii: Context['decizii']): Context => ({ document_id: 1, text_extras: 'x', nume_original: 'A.pdf', tip: 'alta', sha: 's', decizii, decizii_sha: 'd' })
-  assertEquals(exclusDeOm(c([{ id: 1, rol: null, sectiune: '*', decizie: 'nu_e_sursa_cantitativa' }])), true)
-  assertEquals(exclusDeOm(c([{ id: 1, rol: null, sectiune: '1-2', decizie: 'nu_e_sursa_cantitativa' }])), false)
-  assertEquals(exclusDeOm(c([{ id: 1, rol: 'atr', sectiune: '*', decizie: 'rol_confirmat' }])), false)
-  assertEquals(exclusDeOm(c([])), false)
-  assertEquals(exclusDeOm({ ...c([]), decizii: null as unknown as Context['decizii'] }), false)
+Deno.test('arePartiDeExtras (r4 P1): EXACT regula extragerii pe secțiunile efective — rol_confirmat pe o secțiune bate nu_e_sursa_cantitativa pe „*”; doar „alt” = nimic de extras; fără text = necitit dacă omul nu l-a scos', () => {
+  const c = (text: string | null, decizii: Context['decizii'], tip = 'cs_volum', nume = 'Caiet de sarcini.pdf'): Context => ({ document_id: 1, text_extras: text, nume_original: nume, tip, sha: 's', decizii, decizii_sha: 'd' })
+  const CS = '⟦PAGINA 1⟧\nCaiet de sarcini\nconducta Dn 160, lungime 250 m\n⟦PAGINA 2⟧\nalte conditii\n'
+  assertEquals(arePartiDeExtras(c(CS, [])), true)
+  assertEquals(arePartiDeExtras(c(CS, [{ id: 1, rol: null, sectiune: '*', decizie: 'nu_e_sursa_cantitativa' }])), false)
+  // cazul r4 P1: „*” nu e sursă + rol_confirmat cs pe pagina 1 → pagina 1 rămâne cantitativă pentru extractor → documentul ARE ce extrage
+  assertEquals(arePartiDeExtras(c(CS, [{ id: 1, rol: null, sectiune: '*', decizie: 'nu_e_sursa_cantitativa' }, { id: 2, rol: 'cs', sectiune: '1-2', decizie: 'rol_confirmat' }])), true)
+  // același caz cu două secțiuni (pagina 2 = ATR prin marcaj): rol_confirmat cs pe „1-1” bate „*” pe pagina 1 → are ce extrage; doar „*” → nu
+  const CS2 = '⟦PAGINA 1⟧\nCaiet de sarcini\nconducta Dn 160, lungime 250 m\n⟦PAGINA 2⟧\nAVIZ TEHNIC DE RACORDARE\nlungime totala 3.995 m\n'
+  assertEquals(arePartiDeExtras(c(CS2, [{ id: 1, rol: null, sectiune: '*', decizie: 'nu_e_sursa_cantitativa' }, { id: 2, rol: 'cs', sectiune: '1-1', decizie: 'rol_confirmat' }])), true)
+  assertEquals(arePartiDeExtras(c(CS2, [{ id: 1, rol: null, sectiune: '*', decizie: 'nu_e_sursa_cantitativa' }])), false)
+  // decizia pe o secțiune care NU există („9-9”) nu schimbă nimic; nu_e_sursa pe secțiunea întreagă („1-2”) = la fel ca „*”
+  assertEquals(arePartiDeExtras(c(CS, [{ id: 1, rol: null, sectiune: '*', decizie: 'nu_e_sursa_cantitativa' }, { id: 2, rol: 'cs', sectiune: '9-9', decizie: 'rol_confirmat' }])), false)
+  assertEquals(arePartiDeExtras(c(CS, [{ id: 1, rol: null, sectiune: '1-2', decizie: 'nu_e_sursa_cantitativa' }])), false)
+  assertEquals(arePartiDeExtras(c(CS, [{ id: 1, rol: 'atr', sectiune: '*', decizie: 'rol_confirmat' }])), true)
+  // un document `alta` fără marcaj ATR și fără titlu cantitativ → rol „alt” → extragerea nu-l atinge → nu poate fi „necitit”
+  assertEquals(arePartiDeExtras(c('Certificat de urbanism nr. 1\ntext', [], 'alta', 'C.U. retea.pdf')), false)
+  assertEquals(arePartiDeExtras(c('AVIZ TEHNIC DE RACORDARE\nlungime 250 m', [], 'alta', 'ATR.pdf')), true)
+  // fără text (încă necitit OCR): nu știm ce conține → are ce extrage (și la „alt”), dacă omul nu l-a scos
+  assertEquals(arePartiDeExtras(c('', [], 'alta', 'Scan.pdf')), true)
+  assertEquals(arePartiDeExtras(c(null, [], 'alta', 'Scan.pdf')), true)
+  assertEquals(arePartiDeExtras(c('', [{ id: 1, rol: null, sectiune: '*', decizie: 'nu_e_sursa_cantitativa' }], 'alta', 'Scan.pdf')), false)
+  assertEquals(arePartiDeExtras({ ...c(CS, []), decizii: null as unknown as Context['decizii'] }), true)
 })
 
 // ─── rolul pe felie din contextul legat de fotografie (decizia 17) ───

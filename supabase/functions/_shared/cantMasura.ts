@@ -8,7 +8,7 @@
 //   - inventarul paginilor rulării (ofertare_cantitati_evaluari.pagini) și rezumatul semnalelor pentru raport.
 // Importurile din folderul extragerii sunt intenționate: rolul și poarta sunt ale extragerii, iar comparația trebuie să le folosească EXACT
 // (o copie ar putea diverge).
-import { type Rol, aplicaDecizii, sectiuniRol } from '../ofertare-cantitati-extrage/roluri.ts'
+import { type Rol, aplicaDecizii, ROLURI_EXTRASE, sectiuniRol } from '../ofertare-cantitati-extrage/roluri.ts'
 import { type ObsPentruPoarta, poartaFelie, ROLURI_POARTA } from '../ofertare-cantitati-extrage/poartaB1.ts'
 import { sha256Hex } from './cantNormalizare.ts'
 
@@ -123,7 +123,8 @@ export function numarPagini(text: string | null | undefined): number {
 // textul paginii n = fn_ofertare_masura_pagina: fără prefixul de marcaj în text → pagina 1 = tot textul, altfel null; cu prefix → de DUPĂ primul marcaj
 // cu numărul n până la următorul marcaj (orice număr), null dacă n nu apare. Preambulul nu e pagină. (Folosită în proba de paritate.)
 export function paginaText(text: string | null | undefined, n: number): string | null {
-  const t = text ?? ''
+  if (text === null || text === undefined) return null   // p_text IS NULL → NULL (textul gol '' rămâne '' la pagina 1)
+  const t = text
   if (!t.includes(PREFIX_PAGINA)) return n === 1 ? t : null
   const re = new RegExp('⟦PAGINA[ ]*' + String(n) + '⟧')
   const m = re.exec(t)
@@ -152,16 +153,25 @@ export function paginiInterval(text: string, de_la: number, pana_la: number): { 
 // ─── rolul unei felii din contextul legat de fotografie (decizia 17) ───
 // EXACT calculul rulării: aplicaDecizii(sectiuniRol(text, nume, tip), deciziile active) → secțiunea care conține începutul feliei
 export function rolFelie(ctx: Context, felie: { de_la: number; pana_la: number }): Rol | null {
-  const sectiuni = aplicaDecizii(sectiuniRol(ctx.text_extras ?? '', ctx.nume_original, ctx.tip), (ctx.decizii ?? []).map((d) => ({ rol: d.rol ?? '', sectiune: d.sectiune ?? '', decizie: d.decizie })))
-  const s = sectiuni.find((x) => x.de <= felie.de_la && felie.de_la < x.pana)
+  const s = sectiuniEfective(ctx).find((x) => x.de <= felie.de_la && felie.de_la < x.pana)
   return s ? s.rol : null
 }
 
-// documentul scos de om din sursele cantitative: decizia activă `nu_e_sursa_cantitativa` pe TOT documentul („*”), din contextul legat de fotografie
-// (decizii_sha intră în fotografie → o schimbare a deciziei schimbă fotografia; review r3 P1: singura excludere a unui document fără extragere
-// din „necitit” e o decizie a omului înregistrată în fotografie, nu o stare citită separat — lot / versiune)
-export function exclusDeOm(ctx: Context): boolean {
-  return Array.isArray(ctx?.decizii) && ctx.decizii.some((d) => d?.decizie === 'nu_e_sursa_cantitativa' && d?.sectiune === '*')
+// secțiunile EFECTIVE ale unui document = exact ce vede extragerea (sectiuniRol + aplicaDecizii: decizia pe secțiune are prioritate față de „*”)
+export function sectiuniEfective(ctx: Context) {
+  return aplicaDecizii(sectiuniRol(ctx.text_extras ?? '', ctx.nume_original, ctx.tip), (ctx.decizii ?? []).map((d) => ({ rol: d.rol ?? '', sectiune: d.sectiune ?? '', decizie: d.decizie })))
+}
+// „documentul are ce extrage” — decide dacă un document fără extragere `gata` e NECITIT (decizia 15), DOAR din contextul legat de fotografie
+// (text, nume, tip, deciziile active acoperite de decizii_sha; review r3 / r4 P1): cu text, EXACT regula extragerii — cel puțin o secțiune efectivă
+// cu rol extractibil (o `rol_confirmat` pe o secțiune bate `nu_e_sursa_cantitativa` pe „*”, ca în aplicaDecizii); fără text (încă necitit OCR), nu
+// știm ce conține → are ce extrage dacă omul nu l-a scos cu `nu_e_sursa_cantitativa` (orice rol ≠ null). Un document cu toate secțiunile `alt` /
+// null nu e extras niciodată, deci nu poate fi „necitit”.
+export function arePartiDeExtras(ctx: Context): boolean {
+  if ((ctx.text_extras ?? '') === '') {
+    // fără text nu există secțiuni (sectiuniRol dă []): nu știm ce conține → are ce extrage, dacă omul nu l-a scos pe tot documentul („*”)
+    return !(ctx.decizii ?? []).some((d) => d?.decizie === 'nu_e_sursa_cantitativa' && d?.sectiune === '*')
+  }
+  return sectiuniEfective(ctx).some((x) => x.rol !== null && ROLURI_EXTRASE.includes(x.rol))
 }
 
 // contextul primit e EXACT versiunea din fotografie: textul (sha256), deciziile (decizii_sha), numele, tipul, documentul
@@ -212,7 +222,7 @@ export type PaginiRulare = {
   felii_incomplete: FelieIncompleta[]
 }
 // `eligibile` = documentele care pot fi „necitite” (decizia 15: extragere lipsă / neterminată), stabilite de apelant DOAR din date legate de fotografie
-// (tipul din fotografie ∈ tipurile extractibile și fără decizia omului `nu_e_sursa_cantitativa`); `null` = toate documentele fotografiei (conservator).
+// (tipul din fotografie ∈ tipurile extractibile și `arePartiDeExtras` pe contextul verificat); `null` = toate documentele fotografiei (conservator).
 export function paginiRulare(foto: Fotografie, stareExtrageri: Map<number, string>, feliiIncomplete: FelieIncompleta[], paginiPestePlafon: PaginiDocument[],
   eligibile: Set<number> | null = null): PaginiRulare {
   const docs = [...(foto.documente ?? [])].sort((a, b) => Number(a.id) - Number(b.id))

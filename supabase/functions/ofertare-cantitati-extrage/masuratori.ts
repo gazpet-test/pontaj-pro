@@ -4,16 +4,17 @@
 //   (1) citește fotografia surselor (fn_ofertare_semnale_fotografie);
 //   (2) cere contextul FIECĂRUI document din fotografie (fn_ofertare_semnale_context, legat de sha-ul fotografiei) și îl verifică local (sha text,
 //       decizii_sha, nume, tip) — orice nepotrivire = `context_nepotrivit`, nimic propus;
-//   (2b) „necitit” (decizia 15) DOAR din date legate de fotografie (review r1–r3 P1): documentul e de tip extractibil (tipul din fotografie) și nu
-//       are decizia omului `nu_e_sursa_cantitativa` pe tot documentul (din context, acoperit de decizii_sha); lotul și versiunile NU intră în
-//       fotografie, deci nu exclud nimic (un document doar pe alte loturi se scoate de om prin decizie, până la o fotografie extinsă);
+//   (2b) „necitit” (decizia 15) DOAR din date legate de fotografie (review r1–r4 P1): documentul e de tip extractibil (tipul din fotografie) și
+//       „are ce extrage” după EXACT regula extragerii pe contextul verificat (secțiuni efective cu rol extractibil, cu deciziile omului aplicate ca
+//       în aplicaDecizii; fără text = necitit dacă omul nu l-a scos); lotul și versiunile NU intră în fotografie, deci nu exclud nimic (un
+//       document doar pe alte loturi se scoate de om prin decizie, până la o fotografie extinsă);
 //   (3) citește feliile logice ale extragerilor din fotografie (fn_ofertare_semnale_felii, keyset, ≤ 200 / pagină) până la pagina goală
 //       și verifică numărul primit = Σ felii_distincte (altfel `felii_trunchiate`, L23); completitudineFelii pe TOATE (inclusiv cache);
 //   (4) inventarul paginilor rulării (paginiRulare); (5) fn_ofertare_masuratori_propune cu un token nou; (6) fn_ofertare_semnale_publica,
 //       cu răspunsurile verificate pe contract, pe TIP (review r1 / r2 P2).
 // Nicio reîncercare; orice eroare / refuz / răspuns neconform = raport cu `eroare` (L05: nu se reia singur; o evaluare rămasă `in_curs` e
 // marcată `depasita` de următoarea propunere). Contextul rulării (deps.documente / deciziiRol, citite mai devreme) NU se folosește aici.
-import { completitudineFelii, type Context, eFotografie, exclusDeOm, type FelieIncompleta, type FelieServita, type Fotografie, type PaginiDocument,
+import { arePartiDeExtras, completitudineFelii, type Context, eFotografie, type FelieIncompleta, type FelieServita, type Fotografie, type PaginiDocument,
   type PaginiRulare, paginiRulare, rezumatSemnale, type RezumatSemnale, verificaContext } from '../_shared/cantMasura.ts'
 
 export type DepsMasuratori = { rpc: (fn: string, args: Record<string, unknown>) => Promise<{ data: any; error: any }> }
@@ -69,9 +70,9 @@ export async function comparaSurse(deps: DepsMasuratori, p: ParametriComparatie)
       if (!(await verificaContext(cx.data as Context, d))) return { ...r, eroare: 'context_nepotrivit', detalii: `document ${d.id}: textul / deciziile / numele / tipul nu sunt cele din fotografie` }
       contexte.set(Number(d.id), cx.data as Context)
     }
-    // (2b) ce poate fi „necitit”: tip extractibil (din fotografie) și fără decizia omului „nu e sursă cantitativă” (din contextul verificat)
+    // (2b) ce poate fi „necitit”: tip extractibil (din fotografie) și „are ce extrage” (regula extragerii pe contextul verificat, deciziile omului incluse)
     const eligibile = p.tipuriEligibile
-      ? new Set(documente.filter((d) => p.tipuriEligibile!.includes(d.tip) && !exclusDeOm(contexte.get(Number(d.id))!)).map((d) => Number(d.id)))
+      ? new Set(documente.filter((d) => p.tipuriEligibile!.includes(d.tip) && arePartiDeExtras(contexte.get(Number(d.id))!)).map((d) => Number(d.id)))
       : null
     // (3) feliile logice ale extragerilor din fotografie, keyset până la pagina goală
     const citite = documente.filter((d) => d.extragere_id !== null && d.extragere_id !== undefined)

@@ -9,6 +9,10 @@
 import { sectiuniLista } from './sectiuni.ts'
 
 export type Rol = 'f3' | 'c6' | 'lista_alt' | 'atr' | 'cs' | 'fisa_date' | 'memoriu' | 'plansa' | 'raspuns' | 'alt'
+// rolurile pe care extragerea structurată le trimite la AI (din structurat.ts; aici ca aceeași listă să decidă și „documentul are ce extrage” în
+// comparația cantităților — _shared/cantMasura.ts, L19). review Jakarinos #757 r1 (P1): 'lista_alt' rămâne extrasă — eticheta e euristică
+// (o pagină F3 / un memoriu pot moșteni lista_alt), deci excluderea ei poate tăia lungimi reale
+export const ROLURI_EXTRASE: Rol[] = ['f3', 'c6', 'lista_alt', 'atr', 'cs', 'fisa_date', 'memoriu', 'plansa', 'raspuns']
 export type DecisDe = 'antet' | 'marcaj' | 'titlu' | 'model' | 'om'
 export type SectiuneRol = { de: number; pana: number; pagini: [number, number] | null; rol: Rol; decis_de: DecisDe }
 

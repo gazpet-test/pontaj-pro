@@ -7,6 +7,7 @@
     { "nume": "fara marcaje: o pagina", "text": "fara marcaje", "pagini": 1, "pagina": { "1": "fara marcaje", "2": null },
       "intervale": [ { "de_la": 0, "pana_la": 5, "pagina_de_la": 1, "pagina_pana_la": 1 } ] },
     { "nume": "text gol: zero pagini (pagina 1 = textul gol, ca in SQL)", "text": "", "pagini": 0, "pagina": { "1": "", "2": null }, "intervale": [] },
+    { "nume": "text NULL (coloana goala in BD): zero pagini, nicio pagina (review r4 P3)", "text": null, "pagini": 0, "pagina": { "1": null }, "intervale": [] },
     { "nume": "PAGINA 0 (review r3 P2): numarul se ia ca atare, nicio pagina permisa", "text": "⟦PAGINA 0⟧\nBODY", "pagini": 0, "pagina": { "0": "\nBODY", "1": null },
       "intervale": [ { "de_la": 0, "pana_la": 16, "pagina_de_la": 0, "pagina_pana_la": 0 } ] },
     { "nume": "tab in marcaj: nu e marcaj (SQL accepta doar spatii); textul are prefixul, deci pagina 1 e null", "text": "⟦PAGINA\t2⟧\nBODY", "pagini": 1, "pagina": { "1": null, "2": null },

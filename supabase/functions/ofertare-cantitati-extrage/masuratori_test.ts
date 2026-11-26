@@ -158,7 +158,7 @@ Deno.test('m_extragere_intrerupta / m_cost_necunoscut: document fără extragere
   assertEquals((k2.propune()!.p_pagini as any).documente_necitite, [3, 4])
 })
 
-Deno.test('r1–r3 P1: „necitit” DOAR din date legate de fotografie — orice document extractibil fără extragere e necitit; îl scoate numai decizia omului nu_e_sursa_cantitativa pe „*” (în decizii_sha); lotul / versiunea nu exclud nimic', async () => {
+Deno.test('r1–r4 P1: „necitit” DOAR din date legate de fotografie — un document extractibil fără extragere e necitit cât are ce extrage după regula extragerii (deciziile ca în aplicaDecizii); lotul / versiunea nu exclud nimic', async () => {
   const aparut: DocFals = { id: 5, tip: 'cs_volum', nume: 'Caiet nou.pdf', text: '', extragere_id: null }
   const plansa: DocFals = { id: 3, tip: 'plansa', nume: 'Plan.pdf', text: '[PLANSA]', extragere_id: null }
   // document apărut (în fotografie, fără extragere, de tip extractibil) → necitit; contextul e cerut pentru EXACT documentele fotografiei
@@ -172,14 +172,24 @@ Deno.test('r1–r3 P1: „necitit” DOAR din date legate de fotografie — oric
   await RULEAZA(b)
   assertEquals((b.propune()!.p_pagini as any).documente_necitite, [])
   assert(a.foto.documente[3].decizii_sha !== b.foto.documente[3].decizii_sha && a.foto.sha !== b.foto.sha)
-  // decizia doar pe o secțiune („1-2”) sau rol_confirmat → documentul rămâne necitit
-  for (const dec of [{ id: 9, rol: null, sectiune: '1-2', decizie: 'nu_e_sursa_cantitativa' }, { id: 9, rol: 'atr', sectiune: '*', decizie: 'rol_confirmat' }]) {
-    const c = await fals({ docs: [DOC_F3, DOC_ATR, plansa, { ...aparut, decizii: [dec] }], felii: FELII_TICHET() })
-    await RULEAZA(c)
-    assertEquals((c.propune()!.p_pagini as any).documente_necitite, [5], JSON.stringify(dec))
-  }
+  // rol_confirmat pe „*” → documentul rămâne necitit
+  const c1 = await fals({ docs: [DOC_F3, DOC_ATR, plansa, { ...aparut, decizii: [{ id: 9, rol: 'atr', sectiune: '*', decizie: 'rol_confirmat' }] }], felii: FELII_TICHET() })
+  await RULEAZA(c1)
+  assertEquals((c1.propune()!.p_pagini as any).documente_necitite, [5])
+  // r4 P1: „*” nu e sursă + rol_confirmat cs pe pagina 1 a unui caiet CU text, fără extragere → pagina 1 e cantitativă pentru extractor → NECITIT
+  // (pagina 2 e o secțiune separată — marcaj ATR —, altfel paginile 1–2 cu același rol s-ar comasa într-o singură secțiune „1-2”)
+  const CS = '⟦PAGINA 1⟧\nCaiet de sarcini\nconducta Dn 160, lungime 250 m\n⟦PAGINA 2⟧\nAVIZ TEHNIC DE RACORDARE\nlungime totala 3.995 m\n'
+  const caiet: DocFals = { id: 8, tip: 'cs_volum', nume: 'Caiet.pdf', text: CS, extragere_id: null,
+    decizii: [{ id: 9, rol: null, sectiune: '*', decizie: 'nu_e_sursa_cantitativa' }, { id: 10, rol: 'cs', sectiune: '1-1', decizie: 'rol_confirmat' }] }
+  const c2 = await fals({ docs: [DOC_F3, DOC_ATR, caiet], felii: FELII_TICHET() })
+  await RULEAZA(c2)
+  assertEquals((c2.propune()!.p_pagini as any).documente_necitite, [8])
+  // același caiet DOAR cu „*” nu e sursă → scos; și un document `alta` cu rol „alt” (nimic de extras, ca la extractor) nu e necitit
+  const c3 = await fals({ docs: [DOC_F3, DOC_ATR, { ...caiet, decizii: [caiet.decizii![0]] }, { id: 9, tip: 'alta', nume: 'C.U. retea.pdf', text: 'Certificat de urbanism nr. 1', extragere_id: null }], felii: FELII_TICHET() })
+  await RULEAZA(c3)
+  assertEquals((c3.propune()!.p_pagini as any).documente_necitite, [])
   // o versiune veche / un document al altui lot (informații care NU sunt în fotografie) rămân necitite până la decizia omului — conservator
-  const vechi: DocFals = { id: 6, tip: 'alta', nume: 'ATR v1.pdf', text: 'vechi', extragere_id: null }
+  const vechi: DocFals = { id: 6, tip: 'alta', nume: 'ATR v1.pdf', text: 'AVIZ TEHNIC DE RACORDARE\nversiunea veche, lungime 3.900 m', extragere_id: null }
   const d = await fals({ docs: [DOC_F3, DOC_ATR, vechi, aparut], felii: FELII_TICHET() })
   await RULEAZA(d)
   assertEquals((d.propune()!.p_pagini as any).documente_necitite, [5, 6])
