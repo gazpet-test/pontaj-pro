@@ -66,6 +66,9 @@ export type DepsStructurat = {
   feliiGata: (extragereId: number) => Promise<{ gata: number; total: number } | null>
   ai: (prompt: string, cine?: 'principal' | 'escaladare') => Promise<RezultatAI>
   acum: () => number
+  // TKT-0329 A (PR-extragere, review r1 P1): pentru EXACT documentele fotografiei (citite DUPĂ ea): Map(id → extractibil = ultima versiune ȘI
+  // eligibil pe lot); null = citire picată / incompletă (comparația tratează toate documentele fără extragere ca necitite). Lipsă = la fel.
+  eligibilitateDocumente?: (licitatieId: number, ids: number[]) => Promise<Map<number, boolean> | null>
 }
 
 export const PROMPT_STRUCTURAT = (nume: string, rol: string) => `Ești inginer de devize. Din bucata de mai jos a documentului "${nume}" (secțiune cu rolul: ${rol}), extrage FIECARE RÂND cantitativ (lungimi de conductă, branșamente, tuburi de protecție, lucrări cu cantitate).
@@ -98,7 +101,8 @@ export function sumaRezervata(prompt: string, ex: Extractor = EXTRACTOARE.B): nu
 // familia „parte”: un PDF împărțit în p01 / p02 … e un singur document pentru convenția numerică
 export const radacinaParte = (nume: string) => nume.replace(/\s+—\s+p\d{2}_pag\d+-\d+\.pdf$/i, '').trim()
 
-function ultimeleVersiuni(docs: Document[]): Document[] {
+// ultimele versiuni: un document pe care altul îl înlocuiește (seap_meta.inlocuieste_id) nu se mai extrage (folosită și de handler la eligibilitate)
+export function ultimeleVersiuni<T extends { id: number; seap_meta: any }>(docs: T[]): T[] {
   const inlocuite = new Set(docs.map((d) => Number(d?.seap_meta?.inlocuieste_id)).filter((x) => Number.isFinite(x) && x > 0))
   return docs.filter((d) => !inlocuite.has(d.id))
 }
@@ -396,8 +400,10 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
   // TKT-0329 A (PR-extragere): comparația surselor — ÎNTOTDEAUNA după bucla documentelor, și la `oprit` (decizia 15): zero apeluri AI,
   // serverul decide (fn_ofertare_masuratori_propune / fn_ofertare_semnale_publica); documentele fără extragere gata intră în documente_necitite
   const paginiPestePlafon = [...pestePlafon].map(([document_id, e]) => ({ document_id, pagini: [...e.pagini].sort((a, b) => a - b) }))
+  // eligibilitatea documentelor se stabilește în comparaSurse pe documentele FOTOGRAFIEI (review r1 P1): tipul din fotografie + ultima versiune /
+  // lotul citite după ea; lista `docs` de mai sus (citită înaintea fotografiei) NU se folosește pentru „necitit”
   const masuratori = await comparaSurse({ rpc: deps.rpc }, { licitatie_id: p.licitatie_id, cerere_id: c.id, stareExtrageri: stareDoc, paginiPestePlafon,
-    eligibile: new Set(eligibileToate.map((d) => d.id)) })
+    tipuriEligibile: TIPURI_ELIGIBILE, eligibilitate: deps.eligibilitateDocumente ? (ids) => deps.eligibilitateDocumente!(p.licitatie_id, ids) : async () => null })
   return { status: 200, body: { ok: true, mod: 'structurat', extractor: idExtractor(xt), felii_apelate: feliiApelate, felii_cu_deficit_b1: feliiCuDeficit, felii_escaladate: feliiEscaladate,
     cost_usd: Math.round(cost * 1e4) / 1e4, oprit, raport,
     plafon: { plafon: foto0.data.plafon, plafon_atins: limita.plafon_atins },

@@ -5,7 +5,7 @@ import { assert, assertEquals, assertMatch } from 'jsr:@std/assert@1'
 import { sha256Hex } from '../_shared/cantNormalizare.ts'
 import { type Context, type FelieServita, type Fotografie, type FotoDocument, numarPagini } from '../_shared/cantMasura.ts'
 import { interpretari, tokeniNumerici, valoareInDocument } from '../_shared/cantNumar.ts'
-import { comparaSurse, type DepsMasuratori, LIMITA_FELII } from './masuratori.ts'
+import { comparaSurse, type DepsMasuratori, LIMITA_FELII, type ParametriComparatie } from './masuratori.ts'
 
 const F3 = '⟦PAGINA 1⟧\nFormularul F3\nLista cu cantitatile de lucrari\nObiect 3 Str. A\n= NR. SIMBOL ART. CANTITATE UM =\n002 GD11A1 [ 1] M.C. 174.000\nDRENAJ\n0.000 0 Total=\n003 SA11G1 [ 2] M 6.400\nTEAVA PE100 DN160\n0.000 0 Total=\n'
 const ATR = '⟦PAGINA 1⟧\nAVIZ TEHNIC DE RACORDARE\nconducta Dn 160, in lungime totala de 3.995 m\n'
@@ -27,7 +27,7 @@ const felieS = (document_id: number, extragere_id: number, text: string, x: Part
 
 type Opt = { docs: DocFals[]; felii?: FelieServita[]; plafon?: number; limita?: number; propuneDepasita?: boolean; publicaRefuz?: string; semnale?: unknown[]
   aruncaLa?: string; eroareLa?: string; contextRefuz?: boolean; contextText?: (d: DocFals) => string; contextNume?: string; feliiLipsa?: boolean; feliiDezordonate?: boolean
-  fotoStricata?: unknown }
+  fotoStricata?: unknown; propuneRaspuns?: unknown; publicaRaspuns?: unknown; feliiStraine?: boolean }
 async function fals(opt: Opt) {
   const foto = await fotografie(opt.docs, opt.plafon)
   const apeluri: { fn: string; args: Record<string, unknown> }[] = []
@@ -52,10 +52,15 @@ async function fals(opt: Opt) {
           let r = toate.filter((f) => ex.has(f.extragere_id) && (f.extragere_id > dE || (f.extragere_id === dE && f.felie_nr > dF)))
           r = r.slice(0, Math.min(Number(args.p_limita) || 200, 200))
           if (opt.feliiDezordonate && r.length > 1) r = [r[1], r[0], ...r.slice(2)]
+          if (opt.feliiStraine && r.length) r = [{ ...r[0], extragere_id: 99 }, ...r.slice(1)]
           return { data: r, error: null }
         }
-        case 'fn_ofertare_masuratori_propune': return { data: opt.propuneDepasita ? { refuz: 'evaluare_depasita', sha_acum: 'alt' } : { evaluare_id: 11, semnale: [{ id: 1, identitate: 'i' }], ignorate: [] }, error: null }
-        case 'fn_ofertare_semnale_publica': return { data: opt.publicaRefuz ? { refuz: opt.publicaRefuz } : { evaluare_id: 11, semnale: opt.semnale ?? [{ id: 1, identitate: 'i', verdict: 'diferenta', motiv: 'A 6400 m, B 3995 m', a: 6400, b: 3995, clarificare: 'creata' }], n: 1 }, error: null }
+        case 'fn_ofertare_masuratori_propune': return { data: opt.propuneRaspuns !== undefined ? opt.propuneRaspuns : opt.propuneDepasita ? { refuz: 'evaluare_depasita', sha_acum: 'alt' } : { evaluare_id: 11, semnale: [{ id: 1, identitate: 'i' }], ignorate: [] }, error: null }
+        case 'fn_ofertare_semnale_publica': {
+          if (opt.publicaRaspuns !== undefined) return { data: opt.publicaRaspuns, error: null }
+          const semnale = opt.semnale ?? [{ id: 1, identitate: 'i', verdict: 'diferenta', motiv: 'A 6400 m, B 3995 m', a: 6400, b: 3995, clarificare: 'creata' }]
+          return { data: opt.publicaRefuz ? { refuz: opt.publicaRefuz } : { evaluare_id: 11, semnale, n: semnale.length }, error: null }
+        }
         default: return { data: null, error: { message: 'RPC necunoscut ' + fn } }
       }
     },
@@ -63,8 +68,11 @@ async function fals(opt: Opt) {
   const fn = (nume: string) => apeluri.filter((a) => a.fn === nume)
   return { deps, foto, apeluri, fn, propune: () => fn('fn_ofertare_masuratori_propune')[0]?.args, publica: () => fn('fn_ofertare_semnale_publica')[0]?.args }
 }
-const RULEAZA = (f: Awaited<ReturnType<typeof fals>>, p: Partial<Parameters<typeof comparaSurse>[1]> = {}) =>
-  comparaSurse(f.deps, { licitatie_id: 900001, cerere_id: 5, stareExtrageri: new Map(), paginiPestePlafon: [], limita_felii: p.limita_felii, ...p })
+// tipurile extractibile (ca TIPURI_ELIGIBILE din structurat.ts) și eligibilitatea implicită: toate documentele cerute sunt ultima versiune, în lot
+const TIPURI = ['lista_cantitati', 'formular', 'cs_volum', 'fisa_date', 'alta', 'raspuns_clarificare']
+const toateEligibile = async (ids: number[]) => new Map(ids.map((i) => [i, true]))
+const RULEAZA = (f: Awaited<ReturnType<typeof fals>>, p: Partial<ParametriComparatie> = {}) =>
+  comparaSurse(f.deps, { licitatie_id: 900001, cerere_id: 5, stareExtrageri: new Map(), paginiPestePlafon: [], tipuriEligibile: TIPURI, eligibilitate: toateEligibile, ...p })
 const DOC_F3: DocFals = { id: 1, tip: 'formular', nume: 'Formulare.pdf', text: F3, extragere_id: 7 }
 const DOC_ATR: DocFals = { id: 2, tip: 'alta', nume: 'ATR.pdf', text: ATR, extragere_id: 8 }
 const FELII_TICHET = () => [felieS(1, 7, F3, { obs: [obs(F3, '174.000', 1), obs(F3, '6.400', 2)] }), felieS(2, 8, ATR, { obs: [obs(ATR, '3.995', 3)] })]
@@ -135,18 +143,70 @@ Deno.test('m_extragere_intrerupta / m_cost_necunoscut: document fără extragere
   const rh = await RULEAZA(h)
   assertEquals([rh.ok, h.apeluri.map((a) => a.fn)], [true, ['fn_ofertare_semnale_fotografie', 'fn_ofertare_masuratori_propune', 'fn_ofertare_semnale_publica']])
   assertEquals((h.propune()!.p_pagini as any).documente_necitite, [1, 2])
-  // eligibilitatea (decizia 15 / abaterea (g)): o planșă fără extragere NU e „necitită”; un document extractibil FĂRĂ text (pagini 0) ESTE
+  // eligibilitatea (decizia 15 / abaterea (g)): o planșă fără extragere NU e „necitită” (tipul din fotografie nu e extractibil); un document
+  // extractibil FĂRĂ text (pagini 0) ESTE
   const plansa: DocFals = { id: 3, tip: 'plansa', nume: 'Plan.pdf', text: '[PLANSA: plan de situatie]', extragere_id: null }
   const faraText: DocFals = { id: 4, tip: 'alta', nume: 'Scan.pdf', text: '', extragere_id: null }
   const k = await fals({ docs: [DOC_F3, DOC_ATR, plansa, faraText], felii: FELII_TICHET() })
-  await RULEAZA(k, { eligibile: new Set([1, 2, 4]), stareExtrageri: new Map([[4, 'sarit:fara_text']]) })
+  await RULEAZA(k, { stareExtrageri: new Map([[4, 'sarit:fara_text']]) })
   const pk = k.propune()!.p_pagini as any
   assertEquals([pk.documente_necitite, pk.documente_necitite_stare], [[4], [{ document_id: 4, stare: 'sarit:fara_text' }]])
   assertEquals(k.fn('fn_ofertare_semnale_context').map((a) => a.args.p_document_id), [1, 2])
-  // fără lista eligibilelor: conservator, toate documentele fără extragere sunt necitite
+  // fără tipurile extractibile: conservator, toate documentele fără extragere sunt necitite
   const k2 = await fals({ docs: [DOC_F3, DOC_ATR, plansa, faraText], felii: FELII_TICHET() })
-  await RULEAZA(k2)
+  await RULEAZA(k2, { tipuriEligibile: undefined, eligibilitate: undefined })
   assertEquals((k2.propune()!.p_pagini as any).documente_necitite, [3, 4])
+})
+
+Deno.test('r1 P1: eligibilitatea se stabilește pe documentele FOTOGRAFIEI, după ea — document apărut între citiri = necitit; citire picată = toate necitite; versiune înlocuită / lot străin = nu', async () => {
+  const aparut: DocFals = { id: 5, tip: 'cs_volum', nume: 'Caiet nou.pdf', text: '', extragere_id: null }
+  const plansa: DocFals = { id: 3, tip: 'plansa', nume: 'Plan.pdf', text: '[PLANSA]', extragere_id: null }
+  // eligibilitatea citită ÎNAINTEA fotografiei (lista veche: 1, 2, 3) nu-l cunoaște pe 5 → eligibil (necitit), nu dispare
+  const a = await fals({ docs: [DOC_F3, DOC_ATR, plansa, aparut], felii: FELII_TICHET() })
+  const ceruti: number[][] = []
+  const ra = await RULEAZA(a, { eligibilitate: async (ids) => { ceruti.push(ids); return new Map([[1, true], [2, true], [3, true]]) } })
+  assertEquals([ra.ok, ceruti], [true, [[1, 2, 3, 5]]])   // cerute EXACT documentele fotografiei
+  assertEquals((a.propune()!.p_pagini as any).documente_necitite, [5])
+  // eligibilitatea goală (ex. citirea întoarce `data || []`): documentele necunoscute = eligibile → necitite
+  const b = await fals({ docs: [DOC_F3, DOC_ATR, plansa, aparut], felii: FELII_TICHET() })
+  await RULEAZA(b, { eligibilitate: async () => new Map() })
+  assertEquals((b.propune()!.p_pagini as any).documente_necitite, [5])
+  // citirea picată (null): TOATE documentele fără extragere sunt necitite (și planșa), cu nota în raport
+  const c = await fals({ docs: [DOC_F3, DOC_ATR, plansa, aparut], felii: FELII_TICHET() })
+  const rc = await RULEAZA(c, { eligibilitate: async () => null })
+  assertEquals([rc.ok, (c.propune()!.p_pagini as any).documente_necitite], [true, [3, 5]])
+  assert(String(rc.nota).includes('eligibilitatea documentelor nu a putut fi citită'))
+  // versiune înlocuită sau în afara loturilor noastre (false) fără extragere → nu e necitită; eligibilă fără extragere → este
+  const vechi: DocFals = { id: 6, tip: 'alta', nume: 'ATR v1.pdf', text: 'vechi', extragere_id: null }
+  const d = await fals({ docs: [DOC_F3, DOC_ATR, vechi, aparut], felii: FELII_TICHET() })
+  await RULEAZA(d, { eligibilitate: async (ids) => new Map(ids.map((i) => [i, i !== 6])) })
+  assertEquals((d.propune()!.p_pagini as any).documente_necitite, [5])
+  // eligibilitatea picată NU oprește comparația (serverul decide verdictul conservator), dar o excepție în ea = raport, nimic propus
+  const e = await fals({ docs: [DOC_F3], felii: [FELII_TICHET()[0]] })
+  const re = await RULEAZA(e, { eligibilitate: async () => { throw new Error('citire picată') } })
+  assertEquals([re.ok, re.eroare, e.fn('fn_ofertare_masuratori_propune').length], [false, 'exceptie: citire picată', 0])
+})
+
+Deno.test('r1 P2: răspunsul publicării / propunerii se verifică pe contract — formă străină = eroare explicită, nu succes', async () => {
+  for (const rau of [{}, [], null, 'x', { evaluare_id: 12, semnale: [], n: 0 }, { evaluare_id: 11 }, { evaluare_id: 11, semnale: [{}], n: 0 }, { evaluare_id: 11, semnale: 'x', n: 1 }]) {
+    const f = await fals({ docs: [DOC_F3, DOC_ATR], felii: FELII_TICHET(), publicaRaspuns: rau })
+    const r = await RULEAZA(f)
+    assertEquals([r.ok, r.eroare, r.semnale, f.fn('fn_ofertare_semnale_publica').length], [false, 'publica: răspuns neconform', undefined, 1], JSON.stringify(rau))
+    assert(String(r.detalii).includes('necunoscută'), JSON.stringify(rau))
+  }
+  for (const rau of [{}, [], null, { evaluare_id: 11 }, { evaluare_id: 11, semnale: [] }, { evaluare_id: 'x', semnale: [], ignorate: [] }]) {
+    const f = await fals({ docs: [DOC_F3, DOC_ATR], felii: FELII_TICHET(), propuneRaspuns: rau })
+    const r = await RULEAZA(f)
+    assertEquals([r.ok, r.eroare, f.fn('fn_ofertare_semnale_publica').length], [false, 'propune: răspuns neconform', 0], JSON.stringify(rau))
+  }
+  // contractul respectat: ok, cu rezumatul din semnalele publicate
+  const g = await fals({ docs: [DOC_F3, DOC_ATR], felii: FELII_TICHET(), semnale: [{ verdict: 'in_regula' }, { verdict: 'diferenta' }] })
+  const rg = await RULEAZA(g)
+  assertEquals([rg.ok, rg.rezumat?.total, rg.rezumat?.diferente, rg.rezumat?.in_regula], [true, 2, 1, 1])
+  // felii ale unei extrageri care nu e în fotografie → felii_straine, nimic propus
+  const h = await fals({ docs: [DOC_F3, DOC_ATR], felii: FELII_TICHET(), feliiStraine: true })
+  const rh = await RULEAZA(h)
+  assertEquals([rh.ok, rh.eroare, h.fn('fn_ofertare_masuratori_propune').length], [false, 'felii_straine', 0])
 })
 
 const SAPTE = () => {
