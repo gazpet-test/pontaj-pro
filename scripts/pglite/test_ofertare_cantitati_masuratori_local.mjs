@@ -1178,8 +1178,11 @@ async function aproba(db, ab, clarId, cont = 'RESP') {
     // view: ciorna auto_surse_* apare cu stare, amprenta_curenta, text, detalii.evaluare = surse_v1; fără acces Ofertare → 0 rânduri
     let v = await vedere(db, 'OF', c.id)
     ast(ab, v && v.stare === 'necesita_review' && /^[0-9a-f]{32}$/.test(v.amprenta_curenta) && v.detalii.evaluare === 'surse_v1' && v.mod_ciorna === 'surse' && v.marcaj_planse === false && v.text, 'view: ' + JSON.stringify(v && [v.stare, v.mod_ciorna, v.detalii.evaluare]))
+    // regula EXISTENTĂ pe producție: orice cont logat citește clarificările (clar_all_sel); view-ul (security_invoker) o moștenește — 20270112a
+    // nu o schimbă (restrângerea e o decizie separată, la Răzvan). Tabelele NOI (semnale, măsurători) rămân stricte (t1_rls).
     const v0 = await ca(db, 'STRAIN', `SELECT count(*)::int n FROM public.v_ofertare_clarificari_baza`)
-    ast(ab, !v0.code && v0.rows[0].n === 0, 'view fără acces Ofertare: 0 rânduri: ' + JSON.stringify(v0))
+    const vOf = await ca(db, 'OF', `SELECT count(*)::int n FROM public.v_ofertare_clarificari_baza`)
+    ast(ab, !v0.code && !vOf.code && vOf.rows[0].n > 0 && v0.rows[0].n === vOf.rows[0].n, 'view: orice cont logat vede aceleași rânduri ca Ofertare (regula existentă clar_all_sel): ' + JSON.stringify([v0.rows, vOf.rows]))
     ast(ab, v && JSON.stringify(Object.keys(v).sort()) === JSON.stringify(['amprenta_curenta', 'detalii', 'id', 'licitatie_id', 'marcaj_planse', 'mod_ciorna', 'mod_curent', 'nr', 'stare', 'status', 'text']), 'coloanele vechi ale view-ului: ' + Object.keys(v || {}).sort().join(','))
     // de_trimis fără reconfirmare → refuz; fără drept de decizie → refuz
     asteptMesaj(await upd(db, 'RESP', c.id, `status = 'de_trimis'`), /Clarificare blocată: necesită review/, 'de_trimis fără reconfirmare', ab)

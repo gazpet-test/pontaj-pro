@@ -312,12 +312,16 @@ END $t$;
 
 -- ── t_acces ──
 DO $t$
-DECLARE v int; s record; v_doc2 bigint; v_ev bigint;
+DECLARE v int; v_pg int; s record; v_doc2 bigint; v_ev bigint;
 BEGIN
+  -- ofertare_clarificari: pe productie SELECT e permis oricarui cont logat (clar_all_sel = auth.uid() IS NOT NULL) — regula EXISTENTA, nu
+  -- schimbata de 20270112a; view-ul (security_invoker) o mosteneste. Restrangerea e o decizie separata (Razvan). Tabelele NOI raman stricte.
+  SELECT count(*) INTO v_pg FROM public.ofertare_clarificari WHERE licitatie_id = pg_temp.rd_lic(1);
   PERFORM pg_temp.rd_ca('nimic');
   SELECT count(*) INTO v FROM public.ofertare_cantitati_semnale; IF v <> 0 THEN RAISE EXCEPTION 't_acces FAIL: fara Ofertare vede % semnale', v; END IF;
   SELECT count(*) INTO v FROM public.ofertare_cantitati_masuratori; IF v <> 0 THEN RAISE EXCEPTION 't_acces FAIL: fara Ofertare vede % masuratori', v; END IF;
-  SELECT count(*) INTO v FROM public.v_ofertare_clarificari_baza; IF v <> 0 THEN RAISE EXCEPTION 't_acces FAIL: fara Ofertare vede % randuri in view', v; END IF;
+  SELECT count(*) INTO v FROM public.v_ofertare_clarificari_baza WHERE licitatie_id = pg_temp.rd_lic(1);
+  IF v_pg = 0 OR v <> v_pg THEN RAISE EXCEPTION 't_acces FAIL: view-ul nu urmeaza regula existenta (orice cont logat citeste clarificarile): % din %', v, v_pg; END IF;
   BEGIN PERFORM 1 FROM public.fn_ofertare_semnale_lista(pg_temp.rd_lic(1)); RAISE EXCEPTION 't_acces FAIL: lista fara Ofertare';
   EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   BEGIN PERFORM public.fn_ofertare_semnale_fotografie(pg_temp.rd_lic(1)); RAISE EXCEPTION 't_acces FAIL: fotografia ca authenticated';

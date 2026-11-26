@@ -159,7 +159,11 @@ CREATE TABLE public.ofertare_cantitati (
     WHEN lot_domeniu = 'lista' THEN coalesce(cardinality(lot_nr), 0) > 0 ELSE lot_nr IS NULL END)
 );
 ALTER TABLE public.ofertare_cantitati ENABLE ROW LEVEL SECURITY;
-CREATE POLICY cant_all ON public.ofertare_cantitati TO authenticated USING (auth.uid() IS NOT NULL) WITH CHECK (auth.uid() IS NOT NULL);
+-- politicile ca pe producție (citite 26.11.2026): citirea pentru orice cont logat, scrierea doar cu acces Ofertare
+CREATE POLICY cant_all_sel ON public.ofertare_cantitati FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL);
+CREATE POLICY cant_all_ins ON public.ofertare_cantitati FOR INSERT TO authenticated WITH CHECK ((SELECT public.fn_are_acces_ofertare()));
+CREATE POLICY cant_all_upd ON public.ofertare_cantitati FOR UPDATE TO authenticated USING ((SELECT public.fn_are_acces_ofertare())) WITH CHECK ((SELECT public.fn_are_acces_ofertare()));
+CREATE POLICY cant_all_del ON public.ofertare_cantitati FOR DELETE TO authenticated USING ((SELECT public.fn_are_acces_ofertare()));
 -- ── aprobarea cantităților (ca pe producție, proba pe clona 176, 26.11.2026): un rând VALIDAT a cărui cantitate se schimbă trece pe
 --    „diferenta” (triggerul trg_zz_ofertare_cantitati_aprobare); revenirea cifrei NU reface validarea — o reface omul. Corpurile de mai
 --    jos sunt textul EXACT de pe producție (pg_get_functiondef, citit 26.11.2026), ca proba PGlite să vadă același comportament.
@@ -434,7 +438,12 @@ CREATE TABLE public.ofertare_clarificari (
 -- unicitatea (licitatie_id, cheie) ca pe producție și pe clona 176: INDEX unic, nu constrângere (proba pe clonă 26.11.2026)
 CREATE UNIQUE INDEX ofertare_clarificari_cheie_uq ON public.ofertare_clarificari USING btree (licitatie_id, cheie);
 ALTER TABLE public.ofertare_clarificari ENABLE ROW LEVEL SECURITY;
-CREATE POLICY clar_acces ON public.ofertare_clarificari FOR ALL TO authenticated USING (public.fn_are_acces_ofertare()) WITH CHECK (public.fn_are_acces_ofertare());
+-- politicile ca pe producție (citite 26.11.2026): SELECT pentru orice cont logat (clar_all_sel — regula existentă; restrângerea e o decizie
+-- separată, la Răzvan), scrierea doar cu acces Ofertare
+CREATE POLICY clar_all_sel ON public.ofertare_clarificari FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL);
+CREATE POLICY clar_all_ins ON public.ofertare_clarificari FOR INSERT TO authenticated WITH CHECK ((SELECT public.fn_are_acces_ofertare()));
+CREATE POLICY clar_all_upd ON public.ofertare_clarificari FOR UPDATE TO authenticated USING ((SELECT public.fn_are_acces_ofertare())) WITH CHECK ((SELECT public.fn_are_acces_ofertare()));
+CREATE POLICY clar_all_del ON public.ofertare_clarificari FOR DELETE TO authenticated USING ((SELECT public.fn_are_acces_ofertare()));
 
 -- ── 20261031a: textele, cheltuiala, deciziile, extragerile, feliile, observațiile, jurnalele ──
 CREATE FUNCTION public.fn_ofertare_cb_lot_canonic(p integer[])
