@@ -618,10 +618,12 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
                     <textarea style={{ ...S.input, minHeight:54, resize:'vertical' }} value={q.intrebare || ''} placeholder="Textul întrebării..."
                       onChange={e => setQ(q.id, 'intrebare', e.target.value)} onBlur={() => saveQ(q)} />
                     <div style={{ display:'flex', gap:10, alignItems:'center', marginTop:3, flexWrap:'wrap' }}>
-                      {q.origine === 'manual'
+                      {q.origine === 'manual' && !q.fisier_path
+                        ? <span title="Întrebare scrisă de mână în platformă" style={{ fontSize:10.5, fontWeight:700, color:G.muted, background:G.surface, border:`1px solid ${G.border}`, borderRadius:5, padding:'1px 7px' }}>👤 scrisă manual</span>
+                        : q.origine === 'manual'
                         ? <span title="PDF încărcat de un coleg (depus direct în SEAP)" style={{ fontSize:10.5, fontWeight:700, color:G.orange, background:G.orange + '1A', border:`1px solid ${G.orange}55`, borderRadius:5, padding:'1px 7px' }}>👤 încărcată manual{q.creat_de ? ` · ${numeProfil(q.creat_de)}` : ''}</span>
                         : <span title="Generată de platformă din analiza documentației" style={{ fontSize:10.5, fontWeight:700, color:G.blue, background:G.blue + '1A', border:`1px solid ${G.blue}55`, borderRadius:5, padding:'1px 7px' }}>🤖 generată de platformă</span>}
-                      {q.origine === 'manual' && (q.citita_la
+                      {q.origine === 'manual' && q.fisier_path && (q.citita_la
                         ? <span title={q.citita_rezumat || ''} style={{ fontSize:10.5, fontWeight:700, color:G.green }}>✓ citită de platformă {new Date(q.citita_la).toLocaleString('ro-RO', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' })}</span>
                         : <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.yellow, borderColor:G.yellow + '66' }} disabled={citind === q.id} onClick={() => citesteClarificare(q)}>{citind === q.id ? '⏳ citesc…' : '⚠ necitită — 🤖 citește PDF-ul'}</button>)}
                       {q.status === 'propunere' && <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.green, borderColor:G.green + '66' }}
