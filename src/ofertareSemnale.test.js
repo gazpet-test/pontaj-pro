@@ -203,6 +203,8 @@ describe('documenteNecitite (din inventarul semnalelor: id-urile documentelor ne
       { id: 12, nume: 'Memoriu.pdf', fara_text: false },
     ])
     expect(documenteNecitite(r, [])).toEqual([{ id: 7, nume: '#7', fara_text: null }, { id: 12, nume: '#12', fara_text: null }])
+    // lista fără coloana text_extras → necunoscut, nu „fără text”
+    expect(documenteNecitite(r, [{ id: 7, nume_original: 'ATR lot 2.pdf' }])[0]).toEqual({ id: 7, nume: 'ATR lot 2.pdf', fara_text: null })
   })
   it('sha-ul textului gol e cel al șirului vid (doc fără text → decizia „nu e sursă cantitativă” pe acest sha)', () => {
     expect(SHA256_TEXT_GOL).toBe('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855')

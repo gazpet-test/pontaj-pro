@@ -24,6 +24,7 @@ import OfertareTermene from './OfertareTermene.jsx'
 import { rcNecitite, etichetaRc } from './ofertareRcNecitit.js'
 import { numeResponsabili, esteResponsabil } from './ofertareResponsabili.js'
 import OfertareProbaExtractor from './OfertareProbaExtractor.jsx'
+import OfertareSemnale from './OfertareSemnale.jsx'   // TKT-2026-0329 A: semnalele „aceeași cantitate, documente diferite” (lângă proba extractorului)
 import OfertareTipareDeclansate from './OfertareTipareDeclansate.jsx'
 import OfertareNomenclatoare from './OfertareNomenclatoare.jsx'
 import CantitatiPanel from './OfertareCantitati.jsx'
@@ -4012,6 +4013,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
               <SourcePackSection licitatie={l} profile={profile} onImported={() => { setPackImportKey(k => k + 1); onChanged?.() }} />
               <InventarIndependentSection licitatie={l} profile={profile} />
               <OfertareProbaExtractor licitatie={l} />
+              <OfertareSemnale licitatie={l} profile={profile} showToast={showToast} onDeschideClarificari={() => setTab('clarificari')} />
               <J02bComutator licitatie={l} profile={profile} onChanged={onChanged} />
               <AcoperireSection licitatie={l} profile={profile} sel={selCerinte} />
             </>}

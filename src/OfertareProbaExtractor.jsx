@@ -7,6 +7,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
 import { consumBuget, cerereActiva, cereriPeLot, ruleazaPanaLaCapat, totalPasi } from './ofertareProbaExtractor.js'
+import { textRezumatSemnale } from './ofertareSemnale.js'
 
 const G = { surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D', text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
   ofertare:'#3FB6E2', green:'#3FB950', orange:'#F0883E', yellow:'#E3B341', red:'#F85149' }
@@ -82,7 +83,9 @@ export default function OfertareProbaExtractor({ licitatie: l }) {
       (body) => supabase.functions.invoke('ofertare-cantitati-extrage', { body }),
       { mod: 'structurat', licitatie_id: l.id, cerere_id: st.cerere.id, extractor },
       { laPas: (i, p) => { jurnalAici(p.eroare ? `pas ${i + 1}: eroare — ${p.eroare}`
-          : `pas ${i + 1}: ${p.felii_apelate} felii · ${p.cost_usd.toFixed(4)} USD${p.felii_cu_deficit_b1 != null ? ` · deficit B1 ${p.felii_cu_deficit_b1}` : ''}${p.felii_escaladate != null ? ` · escaladate ${p.felii_escaladate}` : ''}${p.erori ? ` · ${p.erori} cu erori` : ''}${p.oprit ? ` · ${p.oprit}` : ''}`); (p.probleme || []).forEach(x => jurnalAici(`   ⚠ ${x}`)) },
+          : `pas ${i + 1}: ${p.felii_apelate} felii · ${p.cost_usd.toFixed(4)} USD${p.felii_cu_deficit_b1 != null ? ` · deficit B1 ${p.felii_cu_deficit_b1}` : ''}${p.felii_escaladate != null ? ` · escaladate ${p.felii_escaladate}` : ''}${p.erori ? ` · ${p.erori} cu erori` : ''}${p.oprit ? ` · ${p.oprit}` : ''}`); (p.probleme || []).forEach(x => jurnalAici(`   ⚠ ${x}`))
+          // TKT-2026-0329 A: comparația cantităților între documente rulează la finalul fiecărui pas (PR-extragere) — rezumatul ei, sau de ce n-a rulat
+          const sem = textRezumatSemnale(p.masuratori); if (sem) jurnalAici(`   📏 ${sem}`) },
         trebuieOprit: () => opreste.current })
     const tot = totalPasi(r.pasi)
     jurnalAici(`■ ${extractor}: ${r.motiv} — ${tot.felii} felii, ${tot.cost.toFixed(4)} USD, deficit B1 ${tot.deficit}, escaladate ${tot.escaladate}, erori ${tot.erori}${r.pasi.find(p => p.extractor)?.extractor ? ` (${r.pasi.find(p => p.extractor).extractor})` : ''}`)

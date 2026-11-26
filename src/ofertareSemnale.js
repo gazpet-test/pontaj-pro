@@ -153,7 +153,9 @@ export function documenteNecitite(randuri, documente) {
   const peId = new Map((Array.isArray(documente) ? documente : []).map(d => [Number(d?.id), d]))
   return [...ids].sort((a, b) => a - b).map(id => {
     const d = peId.get(id)
-    return { id, nume: d?.nume_original ? String(d.nume_original) : `#${id}`, fara_text: d ? !String(d.text_extras ?? '').length : null }
+    // fara_text doar dacă lista documentelor a adus text_extras; altfel necunoscut (null), nu „fără text” (L18)
+    const areCamp = d && Object.prototype.hasOwnProperty.call(d, 'text_extras')
+    return { id, nume: d?.nume_original ? String(d.nume_original) : `#${id}`, fara_text: areCamp ? !String(d.text_extras ?? '').length : null }
   })
 }
 export async function sha256Text(text) {
