@@ -1,0 +1,5 @@
+# L15 v2 - manifestul diferentelor pentru 20270113a_ofertare_clarificari_citire (AMPRENTA_GLOBALA v2); familie TAB eticheta TAB operatie TAB amprenta
+# generat pe clona cu scripts/livrare_l15_manifest.sh (ROLLBACK, nimic comis); migrarea sha256 3fa5d8c7854f1f26be9d14d1f00ee2fa6974f106e37f258b8146cb8b5c2214b2
+# clona: server_version_num 170006, rol postgres
+# clona: GLOBAL inainte b6fa8e2247a34cad5780e099497b5231 (27302 randuri), dupa 345ca1720217c1cd036732a2c5365a17 (27302 randuri); 1 obiecte
+politica	politica public.ofertare_clarificari.clar_all_sel	schimbat	c2423e9fa8e3efbedce3f140423a6d25

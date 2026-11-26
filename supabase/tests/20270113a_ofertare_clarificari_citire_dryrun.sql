@@ -30,7 +30,9 @@ BEGIN
   v_alt := coalesce(v_alt, 'logistica');
   -- un sub-modul ofertare_* existent pe clona (cheia modulului e exacta: nu trebuie sa dea acces); fara niciunul = 'ofertare_clarificari'
   SELECT module INTO v_sub FROM public.user_module_access WHERE module LIKE 'ofertare\_%' GROUP BY module ORDER BY count(*) DESC, module LIMIT 1;
-  v_sub := coalesce(v_sub, 'ofertare_clarificari');
+  -- fara atribuiri: o cheie ofertare_* existenta in app_modules (user_module_access.module are FK spre app_modules.key — proba pe clona 176)
+  IF v_sub IS NULL THEN SELECT key INTO v_sub FROM public.app_modules WHERE key LIKE 'ofertare\_%' ORDER BY key LIMIT 1; END IF;
+  IF v_sub IS NULL THEN RAISE EXCEPTION 'fixturi: nu exista niciun sub-modul ofertare_* in app_modules'; END IF;
   PERFORM set_config('dry.alt', v_alt, true);
   PERFORM set_config('dry.sub', v_sub, true);
   FOR u, m, v_owner IN SELECT * FROM (VALUES ('f0000000-0000-4000-8000-0000000113a1'::uuid, NULL, true), ('f0000000-0000-4000-8000-0000000113a2'::uuid, 'ofertare', false),
@@ -169,7 +171,7 @@ BEGIN
   END LOOP;
   -- scrierea cu acces Ofertare merge ca inainte si randul scris e vazut de acelasi cont
   PERFORM pg_temp.rd_ca('of');
-  INSERT INTO public.ofertare_clarificari (licitatie_id, nr, intrebare, status) VALUES (pg_temp.rd_lic(), 3, 'DRY intrebare scrisa de of', 'propunere');
+  INSERT INTO public.ofertare_clarificari (licitatie_id, nr, intrebare, status, origine) VALUES (pg_temp.rd_lic(), 3, 'DRY intrebare scrisa de of', 'propunere', 'manual');  -- origine implicita = platforma, rezervata serverului (fn_ofertare_surse_valideaza)
   SELECT count(*) INTO v FROM public.ofertare_clarificari WHERE licitatie_id = pg_temp.rd_lic();
   IF v <> v_lic_pg + 1 THEN RAISE EXCEPTION 't_cu_acces FAIL: dupa scriere u_of vede % (astept %)', v, v_lic_pg + 1; END IF;
   PERFORM pg_temp.rd_postgres();
