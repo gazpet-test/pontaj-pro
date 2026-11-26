@@ -8,7 +8,7 @@
 // Adresa de clarificări se generează pe antet Gazpet (PDF) — se depune în SEAP. Antetul e OK;
 // numele firmei nu are voie doar în TEXTUL întrebărilor, fiindcă SEAP le publică tuturor ofertanților.
 // ════════════════════════════════════════════════════════════════
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
 import { poatePorniProcesarea, MOTIV_POARTA } from './OfertareTriere.jsx'
 import { imageToPdf } from './CitesteOricePanel.jsx'
@@ -118,8 +118,11 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
     }
   }, [licitatii])
 
+  const licCurenta = useRef(null)   // L24: rezultatul unei încărcări pentru licitația veche nu se aplică peste cea aleasă între timp
   const load = async () => {
     if (!licId) return
+    const idCerut = licId
+    licCurenta.current = idCerut
     const [{ data: q }, { data: pr }, { data: dr }, rB, rS] = await Promise.all([
       supabase.from('ofertare_clarificari').select('*').eq('licitatie_id', licId).order('nr'),
       supabase.from('profiles').select('id, name'),
@@ -134,6 +137,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
       supabase.from('v_ofertare_clarificari_baza').select('id, status, stare, mod_ciorna, mod_curent, amprenta_curenta, marcaj_planse, text, detalii').eq('licitatie_id', licId),
       incarcaSemnale(supabase, licId),
     ])
+    if (licCurenta.current !== idCerut) return
     // Notificarea rulează separat; eșecul ei nu afectează salvarea sau controlul final.
     void supabase.rpc('ofertare_clarificari_notifica', { p_licitatie_id: licId }).then(({ error, data }) => {
       if (error || data?.error) showToast('Notificarea de review nu a fost emisă; controlul final rămâne activ.', 'warn')

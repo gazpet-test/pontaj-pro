@@ -102,7 +102,7 @@ export default function OfertareSemnale({ licitatie: l, profile, showToast, onDe
     finally { setBusy(false) }
   }
 
-  const rez = st ? st.grupuri.reduce((a, g) => { a[g.semnal.verdict in a ? g.semnal.verdict : 'altele']++; return a }, { diferenta: 0, de_verificat: 0, neverificat: 0, in_regula: 0, altele: 0 }) : null
+  const rez = st ? st.grupuri.reduce((a, g) => { const v = g.semnal.verdict; a[Object.prototype.hasOwnProperty.call(a, v) ? v : 'altele']++; return a }, { diferenta: 0, de_verificat: 0, neverificat: 0, in_regula: 0, altele: 0 }) : null
   const plafonAtins = st?.evaluare?.pagini?.plafon_atins === true
 
   return (
