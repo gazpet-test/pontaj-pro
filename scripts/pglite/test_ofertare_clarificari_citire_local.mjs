@@ -208,7 +208,11 @@ console.log('0. validatorul runnerului, forma fișierelor, amprenta dependenței
   // amprenta dependenței: md5 din migrare și revenire = corpul din 20260912 = corpul din schelet
   const corp = t => { const i = t.indexOf('FUNCTION public.fn_are_acces_ofertare()'); const a = t.indexOf('AS $fn$', i) + 7; return t.slice(a, t.indexOf('$fn$;', a)) }
   const m0912 = md5(corp(citeste('supabase/migrations/20260912_ofertare_acces_fara_parametru.sql'))), mSch = md5(corp(SCHELET))
-  ok(m0912 === mSch && MIGc.split(m0912).length === 3 && REVc.split(m0912).length === 2, `amprenta fn_are_acces_ofertare (${m0912}) = textul 20260912 = scheletul; în migrare (condiție + mesaj) și în revenire (condiție)`)
+  ok(m0912 === mSch && MIGc.split(m0912).length === 3 && REVc.split(m0912).length === 3, `amprenta fn_are_acces_ofertare (${m0912}) = textul 20260912 = scheletul; în migrare și în revenire (condiție + mesaj)`)
+  // r1 Jakarinos P2: revenirea verifică dependențele cu ACELEAȘI condiții ca aplicarea (textual: drepturile exacte ale funcției, dependența vederii)
+  const ACL_FN = "= 'authenticated:EXECUTE, postgres:EXECUTE, service_role:EXECUTE')", DEP_VEDERE = "AND d.refobjid = 'public.ofertare_clarificari'::regclass) THEN"
+  ok(MIGc.includes(ACL_FN) && REVc.includes(ACL_FN) && MIGc.split(DEP_VEDERE).length === 2 && REVc.split(DEP_VEDERE).length === 2,
+    'revenirea cere aceleași drepturi exacte ale funcției și aceeași dependență a vederii de tabel ca migrarea')
   // blocurile POLITICI: migrarea pornește de la cele de azi și ajunge la cele noi; revenirea invers (textual identic, încrucișat)
   const bloc = (t, et) => t.slice(t.indexOf(`-- >>> ${et}`), t.indexOf(`-- <<< ${et}`))
   ok(bloc(MIG, 'POLITICI 26.11.2026') === bloc(REV, 'POLITICI 26.11.2026') && bloc(MIG, 'POLITICI 20270113a') === bloc(REV, 'POLITICI 20270113a')
@@ -377,7 +381,11 @@ for (const [nume, pregatire, re] of [
   ['politica SELECT schimbată altfel', 'ALTER POLICY clar_all_sel ON public.ofertare_clarificari USING (true)', /\(politicile ofertare_clarificari\): clar_all_sel: r\|permisiva\|\{authenticated\}\|true\|-/],
   ['o politică în plus', 'CREATE POLICY zz_sel ON public.ofertare_clarificari FOR SELECT TO anon USING (true)', /\(politicile ofertare_clarificari\): \+zz_sel/],
   ['funcția schimbată', `CREATE OR REPLACE FUNCTION public.fn_are_acces_ofertare() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ SELECT true $f$`, /fn_are_acces_ofertare\(\) nu e cea din 20260912/],
-  ['vederea fără security_invoker', 'ALTER VIEW public.v_ofertare_clarificari_baza RESET (security_invoker)', /v_ofertare_clarificari_baza lipseste sau nu e security_invoker/],
+  // r1 Jakarinos P2: revenirea verifică ACELEAȘI câmpuri ca aplicarea (drepturile exacte ale funcției, dependența vederii de tabel)
+  ['funcția cu EXECUTE pentru anon', 'GRANT EXECUTE ON FUNCTION public.fn_are_acces_ofertare() TO anon', /fn_are_acces_ofertare\(\) nu e cea din 20260912 .*drepturi exacte/],
+  ['funcția fără EXECUTE pentru authenticated', 'REVOKE EXECUTE ON FUNCTION public.fn_are_acces_ofertare() FROM authenticated', /fn_are_acces_ofertare\(\) nu e cea din 20260912 .*drepturi exacte/],
+  ['vederea fără security_invoker', 'ALTER VIEW public.v_ofertare_clarificari_baza RESET (security_invoker)', /v_ofertare_clarificari_baza lipseste, nu e vedere security_invoker/],
+  ['vederea ștearsă', 'DROP VIEW public.v_ofertare_clarificari_baza', /v_ofertare_clarificari_baza lipseste/],
   ['RLS oprit', 'ALTER TABLE public.ofertare_clarificari DISABLE ROW LEVEL SECURITY', /RLS pe ofertare_clarificari nu e activ/],
 ]) {
   const db = await bazaNoua()
@@ -460,8 +468,8 @@ for (const [nume, fisier, inl, scenariu] of [
   ['P3 migrare: fără verificarea vederii', 'mig', [["    RAISE EXCEPTION '20270113a: v_ofertare_clarificari_baza lipseste, nu e vedere security_invoker = on sau nu citeste ofertare_clarificari';\n", '    NULL;\n']], 'vedereFara'],
   ['P4 migrare: fără verificarea RLS', 'mig', [["    RAISE EXCEPTION '20270113a: RLS pe ofertare_clarificari nu e activ (sau e fortat)';\n", '    NULL;\n']], 'rlsOprit'],
   ['R1 revenire: fără verificarea exactă a politicilor', 'rev', [["  IF v_rau IS NOT NULL THEN RAISE EXCEPTION '20270113a revenire: starea nu e cea din 20270113a (politicile ofertare_clarificari): %', v_rau; END IF;\n", '']], 'revVeche'],
-  ['R2 revenire: fără verificarea funcției', 'rev', [["    RAISE EXCEPTION '20270113a revenire: fn_are_acces_ofertare() nu e cea din 20260912 (corp / DEFINER / cale / proprietar)';\n", '    NULL;\n']], 'revFnDeriva'],
-  ['R3 revenire: fără verificarea vederii', 'rev', [["    RAISE EXCEPTION '20270113a revenire: v_ofertare_clarificari_baza lipseste sau nu e security_invoker = on';\n", '    NULL;\n']], 'revVedereFara'],
+  ['R2 revenire: fără verificarea funcției', 'rev', [["    RAISE EXCEPTION '20270113a revenire: fn_are_acces_ofertare() nu e cea din 20260912 (corp md5 429d28e2a61fb24c8009d67050c16c85, sql STABLE DEFINER, cale, proprietar, drepturi exacte sau supraincarcari)';\n", '    NULL;\n']], 'revFnDeriva'],
+  ['R3 revenire: fără verificarea vederii', 'rev', [["    RAISE EXCEPTION '20270113a revenire: v_ofertare_clarificari_baza lipseste, nu e vedere security_invoker = on sau nu citeste ofertare_clarificari';\n", '    NULL;\n']], 'revVedereFara'],
 ]) {
   const orig = fisier === 'mig' ? MIG : REV
   let ro, rm

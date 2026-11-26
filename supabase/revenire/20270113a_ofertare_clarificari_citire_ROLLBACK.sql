@@ -61,14 +61,24 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = 'public.ofertare_clarificari'::regclass AND c.relrowsecurity AND NOT c.relforcerowsecurity) THEN
     RAISE EXCEPTION '20270113a revenire: RLS pe ofertare_clarificari nu e activ (sau e fortat)';
   END IF;
-  -- dependenta pe care o chema politica (neschimbata fata de 20260912) si vederea care mosteneste regula
+  -- dependenta pe care o chema politica (neschimbata fata de 20260912: ACELEASI campuri ca la aplicare, inclusiv drepturile EXACTE si unicitatea numelui)
   IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.oid = to_regprocedure('public.fn_are_acces_ofertare()')
-                   AND md5(replace(p.prosrc, chr(13), '')) = '429d28e2a61fb24c8009d67050c16c85' AND l.lanname = 'sql' AND p.prosecdef AND p.provolatile = 's'
-                   AND p.proconfig = ARRAY['search_path=public, pg_temp'] AND pg_get_userbyid(p.proowner) = 'postgres') THEN
-    RAISE EXCEPTION '20270113a revenire: fn_are_acces_ofertare() nu e cea din 20260912 (corp / DEFINER / cale / proprietar)';
+                   AND md5(replace(p.prosrc, chr(13), '')) = '429d28e2a61fb24c8009d67050c16c85' AND l.lanname = 'sql' AND p.prokind = 'f'
+                   AND p.prosecdef AND p.provolatile = 's' AND NOT p.proretset AND pg_get_function_result(p.oid) = 'boolean'
+                   AND p.proconfig = ARRAY['search_path=public, pg_temp'] AND pg_get_userbyid(p.proowner) = 'postgres'
+                   AND NOT EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a WHERE a.grantee = 0)
+                   AND (SELECT string_agg(a.d, ', ' ORDER BY a.d COLLATE "C") FROM (
+                          SELECT pg_get_userbyid(e.grantee) || ':' || e.privilege_type || CASE WHEN e.is_grantable THEN '*' ELSE '' END AS d
+                            FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) e) a) = 'authenticated:EXECUTE, postgres:EXECUTE, service_role:EXECUTE')
+     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'fn_are_acces_ofertare') <> 1 THEN
+    RAISE EXCEPTION '20270113a revenire: fn_are_acces_ofertare() nu e cea din 20260912 (corp md5 429d28e2a61fb24c8009d67050c16c85, sql STABLE DEFINER, cale, proprietar, drepturi exacte sau supraincarcari)';
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = to_regclass('public.v_ofertare_clarificari_baza') AND c.relkind = 'v' AND 'security_invoker=on' = ANY (c.reloptions)) THEN
-    RAISE EXCEPTION '20270113a revenire: v_ofertare_clarificari_baza lipseste sau nu e security_invoker = on';
+  -- vederea care mosteneste regula: vedere, security_invoker = on, depinde de tabel (aceleasi conditii ca la aplicare)
+  IF NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = to_regclass('public.v_ofertare_clarificari_baza') AND c.relkind = 'v' AND 'security_invoker=on' = ANY (c.reloptions))
+     OR NOT EXISTS (SELECT 1 FROM pg_depend d JOIN pg_rewrite rw ON rw.oid = d.objid AND d.classid = 'pg_rewrite'::regclass
+                      WHERE rw.ev_class = to_regclass('public.v_ofertare_clarificari_baza') AND d.refclassid = 'pg_class'::regclass
+                        AND d.refobjid = 'public.ofertare_clarificari'::regclass) THEN
+    RAISE EXCEPTION '20270113a revenire: v_ofertare_clarificari_baza lipseste, nu e vedere security_invoker = on sau nu citeste ofertare_clarificari';
   END IF;
   -- fotografia a ceea ce NU se schimba (comparata in $post$)
   CREATE TEMP TABLE cc_foto ON COMMIT DROP AS
