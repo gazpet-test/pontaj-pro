@@ -2,28 +2,25 @@
 // (spec §3.8, planul 2026-11-25-ofertare-cantitati-intre-surse, deciziile 2, 8, 15, 17, 18). Zero apeluri AI (DepsMasuratori nu are `ai`);
 // edge-ul nu clasifică, nu alege observații, nu verifică dovezi — totul e în SQL (20270112a, L19). Edge-ul doar:
 //   (1) citește fotografia surselor (fn_ofertare_semnale_fotografie);
-//   (1b) stabilește eligibilitatea documentelor DUPĂ fotografie, pe lista EI de documente (review r1 P1): tipul din fotografie + ultima
-//        versiune / lotul citite acum prin `eligibilitate`; document necunoscut citirii = eligibil (necitit dacă n-are extragere); citire
-//        picată / incompletă = TOATE documentele fără extragere sunt necitite (conservator, L12 / L18);
-//   (2) cere contextul fiecărui document CITIT (fn_ofertare_semnale_context, legat de sha-ul fotografiei) și îl verifică local (sha text,
+//   (2) cere contextul FIECĂRUI document din fotografie (fn_ofertare_semnale_context, legat de sha-ul fotografiei) și îl verifică local (sha text,
 //       decizii_sha, nume, tip) — orice nepotrivire = `context_nepotrivit`, nimic propus;
+//   (2b) „necitit” (decizia 15) DOAR din date legate de fotografie (review r1–r3 P1): documentul e de tip extractibil (tipul din fotografie) și nu
+//       are decizia omului `nu_e_sursa_cantitativa` pe tot documentul (din context, acoperit de decizii_sha); lotul și versiunile NU intră în
+//       fotografie, deci nu exclud nimic (un document doar pe alte loturi se scoate de om prin decizie, până la o fotografie extinsă);
 //   (3) citește feliile logice ale extragerilor din fotografie (fn_ofertare_semnale_felii, keyset, ≤ 200 / pagină) până la pagina goală
 //       și verifică numărul primit = Σ felii_distincte (altfel `felii_trunchiate`, L23); completitudineFelii pe TOATE (inclusiv cache);
 //   (4) inventarul paginilor rulării (paginiRulare); (5) fn_ofertare_masuratori_propune cu un token nou; (6) fn_ofertare_semnale_publica,
-//       cu răspunsul verificat pe contract ({evaluare_id = al evaluării, semnale[], n = numărul lor}; review r1 P2).
+//       cu răspunsurile verificate pe contract, pe TIP (review r1 / r2 P2).
 // Nicio reîncercare; orice eroare / refuz / răspuns neconform = raport cu `eroare` (L05: nu se reia singur; o evaluare rămasă `in_curs` e
 // marcată `depasita` de următoarea propunere). Contextul rulării (deps.documente / deciziiRol, citite mai devreme) NU se folosește aici.
-import { completitudineFelii, type Context, eFotografie, type FelieIncompleta, type FelieServita, type Fotografie, type PaginiDocument, type PaginiRulare,
-  paginiRulare, rezumatSemnale, type RezumatSemnale, verificaContext } from '../_shared/cantMasura.ts'
-import { eligibilitateLicitatie } from '../_shared/eligibilLot.ts'
-import { ultimeleVersiuni } from './versiuni.ts'
+import { completitudineFelii, type Context, eFotografie, exclusDeOm, type FelieIncompleta, type FelieServita, type Fotografie, type PaginiDocument,
+  type PaginiRulare, paginiRulare, rezumatSemnale, type RezumatSemnale, verificaContext } from '../_shared/cantMasura.ts'
 
 export type DepsMasuratori = { rpc: (fn: string, args: Record<string, unknown>) => Promise<{ data: any; error: any }> }
 export type RaportMasuratori = {
   ok: boolean
   eroare?: string            // codul erorii (context_nepotrivit, felii_trunchiate, felii_ordine, felii_straine, 'fotografie: …', 'propune: …', 'publica: …', 'exceptie: …')
   detalii?: string
-  nota?: string              // ex. eligibilitatea documentelor n-a putut fi citită (toate documentele fără extragere = necitite)
   evaluare_depasita?: boolean
   fotografie_sha?: string
   evaluare_id?: number
@@ -42,41 +39,6 @@ const eObiect = (x: unknown): x is Record<string, any> => !!x && typeof x === 'o
 const eId = (x: unknown): x is number => typeof x === 'number' && Number.isSafeInteger(x) && x > 0
 const eNumarator = (x: unknown): x is number => typeof x === 'number' && Number.isSafeInteger(x) && x >= 0
 
-// ─── eligibilitatea documentelor fotografiei (review r1 P1 / r2 P1), citită DUPĂ fotografie, pentru EXACT id-urile cerute ───
-// extractibil = ultima versiune (seap_meta.inlocuieste_id, aceeași funcție ca extragerea) ȘI documentul NU e doar pe loturi la care nu participăm
-// (motivul porții `in_afara_loturilor`); orice alt motiv de refuz al porții (de_triat, loturi_neinitializate, nicio_participare …) lasă
-// documentul „extractibil” = NECITIT dacă n-are extragere (conservator: nu știm că nu ne privește). null = necunoscut: poarta picată, un
-// document cerut LIPSĂ din răspunsul porții (hartă parțială / trunchiată — un id absent nu e „neeligibil”), document_inexistent /
-// eroare_poarta, citirea versiunilor picată / incompletă / cu id străin. Apelantul tratează null ca „toate documentele fără extragere = necitite”.
-type ClientDb = { rpc: (fn: string, args: Record<string, unknown>) => any; from: (tabel: string) => any }
-export const MOTIV_IN_AFARA_LOTURILOR = 'in_afara_loturilor'
-export async function eligibilitateDocumenteDb(db: ClientDb, licitatieId: number, ids: number[]): Promise<Map<number, boolean> | null> {
-  try {
-    const cerute = [...new Set(ids.map(Number))]
-    if (cerute.some((x) => !eId(x))) return null
-    const e = await eligibilitateLicitatie(db, licitatieId)
-    if (!e.ok) return null
-    for (const id of cerute) {
-      const el = e.harta.get(id)
-      if (!el || el.motiv === 'document_inexistent' || el.motiv === 'eroare_poarta') return null
-    }
-    const randuri: { id: number; seap_meta: unknown }[] = []
-    for (let i = 0; i < cerute.length; i += 200) {
-      const felie = cerute.slice(i, i + 200)
-      const { data, error } = await db.from('ofertare_documente_atribuire').select('id, seap_meta').eq('licitatie_id', licitatieId).in('id', felie)
-      if (error || !Array.isArray(data) || data.length !== felie.length) return null
-      const vazute = new Set<number>()
-      for (const d of data) {
-        const id = Number(d?.id)
-        if (!felie.includes(id) || vazute.has(id)) return null
-        vazute.add(id); randuri.push({ id, seap_meta: d?.seap_meta })
-      }
-    }
-    const ultime = new Set(ultimeleVersiuni(randuri).map((d) => d.id))
-    return new Map(randuri.map((d) => [d.id, ultime.has(d.id) && e.harta.get(d.id)!.motiv !== MOTIV_IN_AFARA_LOTURILOR]))
-  } catch (_) { return null }
-}
-
 export type ParametriComparatie = {
   licitatie_id: number
   cerere_id?: number
@@ -84,8 +46,6 @@ export type ParametriComparatie = {
   paginiPestePlafon: PaginiDocument[]          // paginile feliilor excluse de plafon în rulare
   // tipurile pe care extragerea le citește (TIPURI_ELIGIBILE); fără ele orice document din fotografie fără extragere e necitit
   tipuriEligibile?: string[]
-  // ultima versiune + lotul, citite DUPĂ fotografie pentru EXACT documentele ei: Map(id → extractibil); null = citire picată / incompletă
-  eligibilitate?: (ids: number[]) => Promise<Map<number, boolean> | null>
   limita_felii?: number
 }
 
@@ -99,25 +59,22 @@ export async function comparaSurse(deps: DepsMasuratori, p: ParametriComparatie)
     if (!eFotografie(fo.data)) return { ...r, eroare: 'fotografie: răspuns fără forma fotografiei' }
     const foto: Fotografie = fo.data
     r.fotografie_sha = foto.sha
-    // (1b) eligibilitatea, pe documentele FOTOGRAFIEI (nu pe o listă citită înaintea ei)
-    let eligibile: Set<number> | null = null
-    if (p.tipuriEligibile) {
-      const tipuri = p.tipuriEligibile
-      const m = p.eligibilitate ? await p.eligibilitate(foto.documente.map((d) => Number(d.id))) : new Map<number, boolean>()
-      if (!m) r.nota = 'eligibilitatea documentelor nu a putut fi citită — toate documentele fără extragere sunt tratate ca necitite'
-      else eligibile = new Set(foto.documente.filter((d) => tipuri.includes(d.tip) && (m.get(Number(d.id)) ?? true)).map((d) => Number(d.id)))
-    }
-    // (2) contextul documentelor CITITE (cu extragere autoritativă — doar ele au felii), legat de fotografie
-    const citite = foto.documente.filter((d) => d.extragere_id !== null && d.extragere_id !== undefined)
+    // (2) contextul FIECĂRUI document din fotografie (în ordinea id), legat de fotografie
+    const documente = [...foto.documente].sort((a, b) => Number(a.id) - Number(b.id))
     const contexte = new Map<number, Context>()
-    for (const d of citite) {
+    for (const d of documente) {
       const cx = await deps.rpc('fn_ofertare_semnale_context', { p_licitatie_id: p.licitatie_id, p_fotografie_sha: foto.sha, p_document_id: d.id })
       if (cx.error) return { ...r, eroare: 'context: ' + mesaj(cx.error), detalii: 'document ' + d.id }
       if (!eObiect(cx.data) || cx.data.refuz) return { ...r, eroare: 'context_nepotrivit', detalii: `document ${d.id}: ${eObiect(cx.data) ? cx.data.refuz : 'răspuns gol'}` }
       if (!(await verificaContext(cx.data as Context, d))) return { ...r, eroare: 'context_nepotrivit', detalii: `document ${d.id}: textul / deciziile / numele / tipul nu sunt cele din fotografie` }
       contexte.set(Number(d.id), cx.data as Context)
     }
+    // (2b) ce poate fi „necitit”: tip extractibil (din fotografie) și fără decizia omului „nu e sursă cantitativă” (din contextul verificat)
+    const eligibile = p.tipuriEligibile
+      ? new Set(documente.filter((d) => p.tipuriEligibile!.includes(d.tip) && !exclusDeOm(contexte.get(Number(d.id))!)).map((d) => Number(d.id)))
+      : null
     // (3) feliile logice ale extragerilor din fotografie, keyset până la pagina goală
+    const citite = documente.filter((d) => d.extragere_id !== null && d.extragere_id !== undefined)
     const extrageri = citite.map((d) => Number(d.extragere_id))
     const setExtrageri = new Set(extrageri)
     const asteptate = citite.reduce((s, d) => s + (Number(d.felii_distincte) || 0), 0)
@@ -161,13 +118,13 @@ export async function comparaSurse(deps: DepsMasuratori, p: ParametriComparatie)
     }
     r.evaluare_id = pr.data.evaluare_id
     r.ignorate = pr.data.ignorate
-    // (6) publicarea atomică (inventar, agregare, verdict, semnal, ciornă) — pe server; răspunsul verificat pe contract (r1 P2)
+    // (6) publicarea atomică (inventar, agregare, verdict, semnal, ciornă) — pe server; răspunsul verificat pe contract (r1 / r2 P2)
     const pu = await deps.rpc('fn_ofertare_semnale_publica', { p_licitatie_id: p.licitatie_id, p_evaluare_id: r.evaluare_id, p_token: token })
     if (pu.error) return { ...r, eroare: 'publica: ' + mesaj(pu.error) }
     if (!eObiect(pu.data)) return { ...r, eroare: 'publica: răspuns neconform', detalii: 'nu e obiect; starea evaluării e necunoscută' }
     if (pu.data.refuz === 'evaluare_depasita') return { ...r, evaluare_depasita: true, detalii: 'fotografia s-a schimbat între propunere și publicare' }
     if (pu.data.refuz) return { ...r, eroare: 'publica: ' + String(pu.data.refuz) }
-    // contractul: {evaluare_id = evaluarea propusă (întreg), semnale[], n = numărul lor (întreg ≥ 0)} — tipuri exacte, fără conversii (r2 P2)
+    // contractul: {evaluare_id = evaluarea propusă (întreg), semnale[], n = numărul lor (întreg ≥ 0)} — tipuri exacte, fără conversii
     if (!eId(pu.data.evaluare_id) || pu.data.evaluare_id !== r.evaluare_id || !Array.isArray(pu.data.semnale) || !eNumarator(pu.data.n) || pu.data.n !== pu.data.semnale.length) {
       return { ...r, eroare: 'publica: răspuns neconform', detalii: `evaluare_id ${String(pu.data.evaluare_id)} / semnale ${Array.isArray(pu.data.semnale) ? pu.data.semnale.length : 'lipsă'} / n ${String(pu.data.n)}; starea evaluării e necunoscută` }
     }

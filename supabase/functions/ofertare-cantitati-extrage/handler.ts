@@ -35,7 +35,6 @@ import { coloaneLot, lotDinNumeFisier } from '../_shared/lot.ts'
 import { poateCheltui } from '../_shared/poartaCheltuiala.ts'   // poarta unică pe cheltuială (20261124a)
 import { feliiDocument, type TipLista } from './sectiuni.ts'
 import { extrageStructurat, MAX_IESIRE } from './structurat.ts'
-import { eligibilitateDocumenteDb } from './masuratori.ts'
 import { raspunsCuPuls } from './puls.ts'
 import { cheamaA, MODEL_A, MODEL_S } from './extractorA.ts'
 
@@ -559,8 +558,5 @@ async function ruleazaStructurat(req: Request, deps: Deps, bodyBrut: string): Pr
       return x.eroare ? { txt: '', inF: x.inF, outF: x.outF, eroare: x.eroare } : { txt: x.txt, inF: x.inF, outF: x.outF, necunoscut: x.stop !== 'completed' }
     },
     acum: () => Date.now(),
-    // TKT-0329 A (PR-extragere, review r1 / r2 P1): eligibilitatea pentru EXACT documentele fotografiei, citită DUPĂ ea — funcția testată
-    // separat (masuratori_test): poarta pe loturi proaspătă cu acoperirea tuturor id-urilor cerute + ultima versiune; necunoscut = null
-    eligibilitateDocumente: (l, ids) => eligibilitateDocumenteDb(db, l, ids),
   }, { licitatie_id: licId, cerere_id: cerereId, max_felii: Number(body.max_felii) || 0, extractor }), CORS)
 }

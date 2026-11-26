@@ -3,10 +3,11 @@
 // supabase/tests/20270112a_cazuri_plafon.json (L19).
 import { assert, assertEquals } from 'jsr:@std/assert@1'
 import { sha256Hex } from './cantNormalizare.ts'
-import { cheieFelie, completitudineFelii, type Context, type FelieServita, type Fotografie, type FotoDocument, eFotografie, limitaPagini,
-  numarPagini, paginiInterval, paginiRulare, plafonFelii, rezumatSemnale, rolFelie, verificaContext } from './cantMasura.ts'
+import { cheieFelie, completitudineFelii, type Context, type FelieServita, type Fotografie, type FotoDocument, eFotografie, exclusDeOm, limitaPagini,
+  numarPagini, paginaText, paginiInterval, paginiRulare, plafonFelii, rezumatSemnale, rolFelie, segmentePagini, verificaContext } from './cantMasura.ts'
 
 const CAZURI = JSON.parse(await Deno.readTextFile(new URL('../../tests/20270112a_cazuri_plafon.json', import.meta.url)))
+const CAZURI_PAGINI = JSON.parse(await Deno.readTextFile(new URL('../../tests/20270112a_cazuri_pagini.json', import.meta.url)))
 
 // ─── plafonul (decizia 18), aceeași definiție ca fn_ofertare_masura_pagini_permise ───
 Deno.test('plafonFelii: paritate cu SQL pe tabelul comun de cazuri (limita, plafon_atins, feliile permise / nepermise)', () => {
@@ -53,19 +54,41 @@ Deno.test('plafonFelii: documentul din cache (id mic) numără la fel ca unul no
   assertEquals(limitaPagini([{ id: 9, pagini: 100 }, { id: 5, pagini: 150 }], 200).limita, [{ document_id: 5, ultima_pagina_permisa: 150 }, { document_id: 9, ultima_pagina_permisa: 50 }])
 })
 
-// ─── paginile unei felii și numărul de pagini al unui text (paritate cu fn_ofertare_masura_pagini) ───
+// ─── paginile unei felii și numărul de pagini al unui text (paritate cu fn_ofertare_masura_pagini / _pagina pe tabelul comun; r3 P2) ───
 const T3 = '⟦PAGINA 1⟧\nunu\n⟦PAGINA 2⟧\ndoi\n⟦PAGINA 3⟧\ntrei\n'
-Deno.test('paginiInterval: paginile atinse de o felie (offseturi de caractere); text fără marcaje = pagina 1; preambulul ține de prima pagină', () => {
+Deno.test('pagini: paritate cu SQL pe tabelul comun 20270112a_cazuri_pagini.json (numărul de pagini, textul fiecărei pagini, intervalele plafonului)', () => {
+  assert(CAZURI_PAGINI.cazuri.length >= 10)
+  for (const c of CAZURI_PAGINI.cazuri) {
+    assertEquals(numarPagini(c.text), c.pagini, c.nume + ': numarPagini')
+    for (const [p, asteptat] of Object.entries(c.pagina)) assertEquals(paginaText(c.text, Number(p)), asteptat, c.nume + ': pagina ' + p)
+    for (const i of c.intervale) assertEquals(paginiInterval(c.text, i.de_la, i.pana_la), { pagina_de_la: i.pagina_de_la, pagina_pana_la: i.pagina_pana_la }, c.nume + ': interval ' + i.de_la + '-' + i.pana_la)
+  }
+  // textul null din BD = textul gol
+  assertEquals([numarPagini(null), numarPagini(undefined), paginaText(null, 1)], [0, 0, ''])
+})
+
+Deno.test('paginiInterval / segmentePagini: paginile atinse de o felie (offseturi de caractere); fără marcaje = pagina 1; preambulul = prima pagină marcată; tab-ul nu e marcaj', () => {
   assertEquals(paginiInterval(T3, 0, T3.length), { pagina_de_la: 1, pagina_pana_la: 3 })
   const p2 = T3.indexOf('⟦PAGINA 2⟧')
   assertEquals(paginiInterval(T3, p2, p2 + 5), { pagina_de_la: 2, pagina_pana_la: 2 })
   assertEquals(paginiInterval(T3, p2 - 2, p2 + 5), { pagina_de_la: 1, pagina_pana_la: 2 })
   assertEquals(paginiInterval('fara marcaje', 0, 5), { pagina_de_la: 1, pagina_pana_la: 1 })
   assertEquals(paginiInterval('copertă\n' + T3, 0, 3), { pagina_de_la: 1, pagina_pana_la: 1 })
-  assertEquals(numarPagini(T3), 3)
-  assertEquals(numarPagini('fara marcaje'), 1)
-  assertEquals(numarPagini(''), 0)
+  assertEquals(segmentePagini('copertă\n' + T3).map((s) => s.nr), [null, 1, 2, 3])
+  assertEquals(segmentePagini('').map((s) => [s.nr, s.de, s.pana]), [[null, 0, 0]])
+  assertEquals(segmentePagini('⟦PAGINA\t2⟧\nBODY').map((s) => s.nr), [null])
+  // felia goală la capătul textului = ultima pagină (nu „nimic”)
+  assertEquals(paginiInterval(T3, T3.length, T3.length), { pagina_de_la: 3, pagina_pana_la: 3 })
   assertEquals(numarPagini('⟦PAGINA 7⟧\nx\n⟦PAGINA 2⟧\ny'), 7)   // maximul, ca în SQL
+})
+
+Deno.test('exclusDeOm: doar decizia activă nu_e_sursa_cantitativa pe tot documentul („*”) scoate documentul; pe o secțiune / rol_confirmat / fără decizii → nu', () => {
+  const c = (decizii: Context['decizii']): Context => ({ document_id: 1, text_extras: 'x', nume_original: 'A.pdf', tip: 'alta', sha: 's', decizii, decizii_sha: 'd' })
+  assertEquals(exclusDeOm(c([{ id: 1, rol: null, sectiune: '*', decizie: 'nu_e_sursa_cantitativa' }])), true)
+  assertEquals(exclusDeOm(c([{ id: 1, rol: null, sectiune: '1-2', decizie: 'nu_e_sursa_cantitativa' }])), false)
+  assertEquals(exclusDeOm(c([{ id: 1, rol: 'atr', sectiune: '*', decizie: 'rol_confirmat' }])), false)
+  assertEquals(exclusDeOm(c([])), false)
+  assertEquals(exclusDeOm({ ...c([]), decizii: null as unknown as Context['decizii'] }), false)
 })
 
 // ─── rolul pe felie din contextul legat de fotografie (decizia 17) ───

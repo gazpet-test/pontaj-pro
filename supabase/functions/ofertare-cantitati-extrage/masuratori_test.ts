@@ -5,7 +5,7 @@ import { assert, assertEquals, assertMatch } from 'jsr:@std/assert@1'
 import { sha256Hex } from '../_shared/cantNormalizare.ts'
 import { type Context, type FelieServita, type Fotografie, type FotoDocument, numarPagini } from '../_shared/cantMasura.ts'
 import { interpretari, tokeniNumerici, valoareInDocument } from '../_shared/cantNumar.ts'
-import { comparaSurse, type DepsMasuratori, eligibilitateDocumenteDb, LIMITA_FELII, type ParametriComparatie } from './masuratori.ts'
+import { comparaSurse, type DepsMasuratori, LIMITA_FELII, type ParametriComparatie } from './masuratori.ts'
 
 const F3 = '⟦PAGINA 1⟧\nFormularul F3\nLista cu cantitatile de lucrari\nObiect 3 Str. A\n= NR. SIMBOL ART. CANTITATE UM =\n002 GD11A1 [ 1] M.C. 174.000\nDRENAJ\n0.000 0 Total=\n003 SA11G1 [ 2] M 6.400\nTEAVA PE100 DN160\n0.000 0 Total=\n'
 const ATR = '⟦PAGINA 1⟧\nAVIZ TEHNIC DE RACORDARE\nconducta Dn 160, in lungime totala de 3.995 m\n'
@@ -68,11 +68,10 @@ async function fals(opt: Opt) {
   const fn = (nume: string) => apeluri.filter((a) => a.fn === nume)
   return { deps, foto, apeluri, fn, propune: () => fn('fn_ofertare_masuratori_propune')[0]?.args, publica: () => fn('fn_ofertare_semnale_publica')[0]?.args }
 }
-// tipurile extractibile (ca TIPURI_ELIGIBILE din structurat.ts) și eligibilitatea implicită: toate documentele cerute sunt ultima versiune, în lot
+// tipurile extractibile (ca TIPURI_ELIGIBILE din structurat.ts)
 const TIPURI = ['lista_cantitati', 'formular', 'cs_volum', 'fisa_date', 'alta', 'raspuns_clarificare']
-const toateEligibile = async (ids: number[]) => new Map(ids.map((i) => [i, true]))
 const RULEAZA = (f: Awaited<ReturnType<typeof fals>>, p: Partial<ParametriComparatie> = {}) =>
-  comparaSurse(f.deps, { licitatie_id: 900001, cerere_id: 5, stareExtrageri: new Map(), paginiPestePlafon: [], tipuriEligibile: TIPURI, eligibilitate: toateEligibile, ...p })
+  comparaSurse(f.deps, { licitatie_id: 900001, cerere_id: 5, stareExtrageri: new Map(), paginiPestePlafon: [], tipuriEligibile: TIPURI, ...p })
 const DOC_F3: DocFals = { id: 1, tip: 'formular', nume: 'Formulare.pdf', text: F3, extragere_id: 7 }
 const DOC_ATR: DocFals = { id: 2, tip: 'alta', nume: 'ATR.pdf', text: ATR, extragere_id: 8 }
 const FELII_TICHET = () => [felieS(1, 7, F3, { obs: [obs(F3, '174.000', 1), obs(F3, '6.400', 2)] }), felieS(2, 8, ATR, { obs: [obs(ATR, '3.995', 3)] })]
@@ -131,114 +130,65 @@ Deno.test('m_extragere_intrerupta / m_cost_necunoscut: document fără extragere
   assertEquals(r.ok, true)
   const p = f.propune()!.p_pagini as Record<string, unknown>
   assertEquals([p.documente_necitite, p.documente_necitite_stare], [[2], [{ document_id: 2, stare: 'in_lucru (se preia la rularea următoare)' }]])
-  assertEquals(f.fn('fn_ofertare_semnale_context').map((a) => a.args.p_document_id), [1])
+  // contextul se cere pentru FIECARE document din fotografie (și cel necitit: deciziile lui decid dacă e „necitit”), feliile doar pentru extrageri
+  assertEquals(f.fn('fn_ofertare_semnale_context').map((a) => a.args.p_document_id), [1, 2])
   assertEquals(f.fn('fn_ofertare_semnale_felii')[0].args.p_extrageri, [7])
   assertEquals(f.fn('fn_ofertare_semnale_publica').length, 1)
   // cost necunoscut (felie necunoscut → extragere partial, fără autoritativă): la fel, o singură propunere, nicio reîncercare
   const g = await fals({ docs: [DOC_F3, atrNecitit], felii: [FELII_TICHET()[0]] })
   await RULEAZA(g, { stareExtrageri: new Map([[2, 'partial']]) })
   assertEquals([(g.propune()!.p_pagini as any).documente_necitite_stare, g.fn('fn_ofertare_masuratori_propune').length], [[{ document_id: 2, stare: 'partial' }], 1])
-  // niciun document cu extragere: fără context / felii, dar propune + publica rulează (toate măsurile → document necitit, decis de server)
+  // niciun document cu extragere: context pe fiecare, fără felii, dar propune + publica rulează (toate măsurile → document necitit, decis de server)
   const h = await fals({ docs: [{ ...DOC_F3, extragere_id: null }, atrNecitit] })
   const rh = await RULEAZA(h)
-  assertEquals([rh.ok, h.apeluri.map((a) => a.fn)], [true, ['fn_ofertare_semnale_fotografie', 'fn_ofertare_masuratori_propune', 'fn_ofertare_semnale_publica']])
+  assertEquals([rh.ok, h.apeluri.map((a) => a.fn)], [true, ['fn_ofertare_semnale_fotografie', 'fn_ofertare_semnale_context', 'fn_ofertare_semnale_context', 'fn_ofertare_masuratori_propune', 'fn_ofertare_semnale_publica']])
   assertEquals((h.propune()!.p_pagini as any).documente_necitite, [1, 2])
-  // eligibilitatea (decizia 15 / abaterea (g)): o planșă fără extragere NU e „necitită” (tipul din fotografie nu e extractibil); un document
-  // extractibil FĂRĂ text (pagini 0) ESTE
+  // decizia 15 / abaterea (g): o planșă fără extragere NU e „necitită” (tipul din fotografie nu e extractibil); un document extractibil FĂRĂ
+  // text (pagini 0) ESTE
   const plansa: DocFals = { id: 3, tip: 'plansa', nume: 'Plan.pdf', text: '[PLANSA: plan de situatie]', extragere_id: null }
   const faraText: DocFals = { id: 4, tip: 'alta', nume: 'Scan.pdf', text: '', extragere_id: null }
   const k = await fals({ docs: [DOC_F3, DOC_ATR, plansa, faraText], felii: FELII_TICHET() })
   await RULEAZA(k, { stareExtrageri: new Map([[4, 'sarit:fara_text']]) })
   const pk = k.propune()!.p_pagini as any
   assertEquals([pk.documente_necitite, pk.documente_necitite_stare], [[4], [{ document_id: 4, stare: 'sarit:fara_text' }]])
-  assertEquals(k.fn('fn_ofertare_semnale_context').map((a) => a.args.p_document_id), [1, 2])
+  assertEquals(k.fn('fn_ofertare_semnale_context').map((a) => a.args.p_document_id), [1, 2, 3, 4])
   // fără tipurile extractibile: conservator, toate documentele fără extragere sunt necitite
   const k2 = await fals({ docs: [DOC_F3, DOC_ATR, plansa, faraText], felii: FELII_TICHET() })
-  await RULEAZA(k2, { tipuriEligibile: undefined, eligibilitate: undefined })
+  await RULEAZA(k2, { tipuriEligibile: undefined })
   assertEquals((k2.propune()!.p_pagini as any).documente_necitite, [3, 4])
 })
 
-Deno.test('r1 P1: eligibilitatea se stabilește pe documentele FOTOGRAFIEI, după ea — document apărut între citiri = necitit; citire picată = toate necitite; versiune înlocuită / lot străin = nu', async () => {
+Deno.test('r1–r3 P1: „necitit” DOAR din date legate de fotografie — orice document extractibil fără extragere e necitit; îl scoate numai decizia omului nu_e_sursa_cantitativa pe „*” (în decizii_sha); lotul / versiunea nu exclud nimic', async () => {
   const aparut: DocFals = { id: 5, tip: 'cs_volum', nume: 'Caiet nou.pdf', text: '', extragere_id: null }
   const plansa: DocFals = { id: 3, tip: 'plansa', nume: 'Plan.pdf', text: '[PLANSA]', extragere_id: null }
-  // eligibilitatea citită ÎNAINTEA fotografiei (lista veche: 1, 2, 3) nu-l cunoaște pe 5 → eligibil (necitit), nu dispare
+  // document apărut (în fotografie, fără extragere, de tip extractibil) → necitit; contextul e cerut pentru EXACT documentele fotografiei
   const a = await fals({ docs: [DOC_F3, DOC_ATR, plansa, aparut], felii: FELII_TICHET() })
-  const ceruti: number[][] = []
-  const ra = await RULEAZA(a, { eligibilitate: async (ids) => { ceruti.push(ids); return new Map([[1, true], [2, true], [3, true]]) } })
-  assertEquals([ra.ok, ceruti], [true, [[1, 2, 3, 5]]])   // cerute EXACT documentele fotografiei
+  const ra = await RULEAZA(a)
+  assertEquals([ra.ok, a.fn('fn_ofertare_semnale_context').map((x) => x.args.p_document_id)], [true, [1, 2, 3, 5]])
   assertEquals((a.propune()!.p_pagini as any).documente_necitite, [5])
-  // eligibilitatea goală (ex. citirea întoarce `data || []`): documentele necunoscute = eligibile → necitite
-  const b = await fals({ docs: [DOC_F3, DOC_ATR, plansa, aparut], felii: FELII_TICHET() })
-  await RULEAZA(b, { eligibilitate: async () => new Map() })
-  assertEquals((b.propune()!.p_pagini as any).documente_necitite, [5])
-  // citirea picată (null): TOATE documentele fără extragere sunt necitite (și planșa), cu nota în raport
-  const c = await fals({ docs: [DOC_F3, DOC_ATR, plansa, aparut], felii: FELII_TICHET() })
-  const rc = await RULEAZA(c, { eligibilitate: async () => null })
-  assertEquals([rc.ok, (c.propune()!.p_pagini as any).documente_necitite], [true, [3, 5]])
-  assert(String(rc.nota).includes('eligibilitatea documentelor nu a putut fi citită'))
-  // versiune înlocuită sau în afara loturilor noastre (false) fără extragere → nu e necitită; eligibilă fără extragere → este
+  // decizia omului „nu e sursă cantitativă” pe tot documentul → nu mai e necitit (decizia intră în decizii_sha, deci în fotografie)
+  const scos: DocFals = { ...aparut, decizii: [{ id: 9, rol: null, sectiune: '*', decizie: 'nu_e_sursa_cantitativa' }] }
+  const b = await fals({ docs: [DOC_F3, DOC_ATR, plansa, scos], felii: FELII_TICHET() })
+  await RULEAZA(b)
+  assertEquals((b.propune()!.p_pagini as any).documente_necitite, [])
+  assert(a.foto.documente[3].decizii_sha !== b.foto.documente[3].decizii_sha && a.foto.sha !== b.foto.sha)
+  // decizia doar pe o secțiune („1-2”) sau rol_confirmat → documentul rămâne necitit
+  for (const dec of [{ id: 9, rol: null, sectiune: '1-2', decizie: 'nu_e_sursa_cantitativa' }, { id: 9, rol: 'atr', sectiune: '*', decizie: 'rol_confirmat' }]) {
+    const c = await fals({ docs: [DOC_F3, DOC_ATR, plansa, { ...aparut, decizii: [dec] }], felii: FELII_TICHET() })
+    await RULEAZA(c)
+    assertEquals((c.propune()!.p_pagini as any).documente_necitite, [5], JSON.stringify(dec))
+  }
+  // o versiune veche / un document al altui lot (informații care NU sunt în fotografie) rămân necitite până la decizia omului — conservator
   const vechi: DocFals = { id: 6, tip: 'alta', nume: 'ATR v1.pdf', text: 'vechi', extragere_id: null }
   const d = await fals({ docs: [DOC_F3, DOC_ATR, vechi, aparut], felii: FELII_TICHET() })
-  await RULEAZA(d, { eligibilitate: async (ids) => new Map(ids.map((i) => [i, i !== 6])) })
-  assertEquals((d.propune()!.p_pagini as any).documente_necitite, [5])
-  // eligibilitatea picată NU oprește comparația (serverul decide verdictul conservator), dar o excepție în ea = raport, nimic propus
-  const e = await fals({ docs: [DOC_F3], felii: [FELII_TICHET()[0]] })
-  const re = await RULEAZA(e, { eligibilitate: async () => { throw new Error('citire picată') } })
-  assertEquals([re.ok, re.eroare, e.fn('fn_ofertare_masuratori_propune').length], [false, 'exceptie: citire picată', 0])
-})
-
-// baza falsă pentru eligibilitateDocumenteDb: poarta (rpc fn_ofertare_eligibilitate) + citirea versiunilor (from().select().eq().in())
-type RandPoarta = { document_id: number; eligibil: boolean; motiv: string }
-function bazaFalsa(poarta: RandPoarta[] | { error: string }, randuri: { id: number; seap_meta: unknown }[] | { error: string }, opt: { dubleaza?: boolean; strain?: boolean } = {}) {
-  const cereriIn: number[][] = []
-  return {
-    cereriIn,
-    rpc: (_fn: string, _args: Record<string, unknown>) => Promise.resolve('error' in poarta ? { data: null, error: { message: poarta.error } } : { data: poarta, error: null }),
-    from: (_t: string) => ({ select: (_c: string) => ({ eq: (_k: string, _v: unknown) => ({ in: (_k2: string, ids: number[]) => {
-      cereriIn.push(ids)
-      if ('error' in randuri) return Promise.resolve({ data: null, error: { message: randuri.error } })
-      let data = randuri.filter((r) => ids.includes(r.id))
-      if (opt.dubleaza && data.length) data = [data[0], ...data]
-      if (opt.strain && data.length) data = [{ ...data[0], id: 777777 }, ...data.slice(1)]
-      return Promise.resolve({ data, error: null })
-    } }) }) }),
-  }
-}
-const POARTA: RandPoarta[] = [{ document_id: 1, eligibil: true, motiv: 'comun' }, { document_id: 2, eligibil: false, motiv: 'in_afara_loturilor' }, { document_id: 3, eligibil: false, motiv: 'de_triat' },
-  { document_id: 6, eligibil: true, motiv: 'lot_participam' }, { document_id: 7, eligibil: true, motiv: 'lot_participam' }]
-const RANDURI = [{ id: 1, seap_meta: null }, { id: 2, seap_meta: {} }, { id: 3, seap_meta: null }, { id: 6, seap_meta: null }, { id: 7, seap_meta: { inlocuieste_id: 6 } }]
-
-Deno.test('r2 P1: eligibilitateDocumenteDb — extractibil = ultima versiune ȘI nu „în afara loturilor”; de_triat rămâne extractibil (necitit, conservator)', async () => {
-  const db = bazaFalsa(POARTA, RANDURI)
-  const m = await eligibilitateDocumenteDb(db, 900001, [1, 2, 3, 6, 7])
-  assertEquals(m, new Map([[1, true], [2, false], [3, true], [6, false], [7, true]]))   // 6 e înlocuit de 7; 2 e doar pe alte loturi
-  assertEquals(db.cereriIn, [[1, 2, 3, 6, 7]])
-})
-
-Deno.test('r2 P1: un document cerut LIPSĂ din răspunsul porții (hartă parțială / trunchiată) = null, nu „neeligibil”; poarta picată / document_inexistent / eroare_poarta = null', async () => {
-  // poarta nu-l are pe 5 (apărut între timp sau răspuns trunchiat), deși citirea versiunilor îl are
-  const randuri = [...RANDURI, { id: 5, seap_meta: null }]
-  assertEquals(await eligibilitateDocumenteDb(bazaFalsa(POARTA, randuri), 900001, [1, 2, 3, 5, 6, 7]), null)
-  assertEquals(await eligibilitateDocumenteDb(bazaFalsa([], randuri), 900001, [1]), null)
-  assertEquals(await eligibilitateDocumenteDb(bazaFalsa({ error: 'poarta picata' }, randuri), 900001, [1]), null)
-  assertEquals(await eligibilitateDocumenteDb(bazaFalsa([{ document_id: 1, eligibil: false, motiv: 'document_inexistent' }], randuri), 900001, [1]), null)
-  assertEquals(await eligibilitateDocumenteDb(bazaFalsa([{ document_id: 1, eligibil: false, motiv: 'eroare_poarta' }], randuri), 900001, [1]), null)
-  // cu toate id-urile în poartă, același set e OK
-  assertEquals((await eligibilitateDocumenteDb(bazaFalsa([...POARTA, { document_id: 5, eligibil: true, motiv: 'comun' }], randuri), 900001, [1, 5]))?.get(5), true)
-})
-
-Deno.test('r2 P1: citirea versiunilor picată / incompletă / cu dubluri / cu id străin = null; id-uri invalide = null; bucăți de 200', async () => {
-  assertEquals(await eligibilitateDocumenteDb(bazaFalsa(POARTA, { error: 'timeout' }), 900001, [1]), null)
-  assertEquals(await eligibilitateDocumenteDb(bazaFalsa(POARTA, RANDURI.filter((r) => r.id !== 3)), 900001, [1, 3]), null)   // rând lipsă
-  assertEquals(await eligibilitateDocumenteDb(bazaFalsa(POARTA, RANDURI, { dubleaza: true }), 900001, [1, 2]), null)
-  assertEquals(await eligibilitateDocumenteDb(bazaFalsa(POARTA, RANDURI, { strain: true }), 900001, [1, 2]), null)
-  for (const ids of [[0], [1.5], [-1], [NaN], [1, 0]]) assertEquals(await eligibilitateDocumenteDb(bazaFalsa(POARTA, RANDURI), 900001, ids), null, JSON.stringify(ids))
-  // 450 de documente → 3 cereri (200 + 200 + 50), fiecare cu exact id-urile ei; toate în poartă
-  const multe = Array.from({ length: 450 }, (_, i) => i + 1000)
-  const db = bazaFalsa(multe.map((id) => ({ document_id: id, eligibil: true, motiv: 'comun' })), multe.map((id) => ({ id, seap_meta: null })))
-  const m = await eligibilitateDocumenteDb(db, 900001, multe)
-  assertEquals([m?.size, db.cereriIn.map((x) => x.length)], [450, [200, 200, 50]])
-  assertEquals([...new Set(db.cereriIn.flat())].length, 450)
+  await RULEAZA(d)
+  assertEquals((d.propune()!.p_pagini as any).documente_necitite, [5, 6])
+  // decizia venită pe alt sha (context cu decizii_sha diferit de fotografie) → context_nepotrivit, nimic propus
+  const e = await fals({ docs: [DOC_F3, DOC_ATR, scos], felii: FELII_TICHET() })
+  const rpc0 = e.deps.rpc
+  e.deps.rpc = async (fn, args) => { const r = await rpc0(fn, args); return fn === 'fn_ofertare_semnale_context' && Number(args.p_document_id) === 5 ? { data: { ...r.data, decizii_sha: 'alt' }, error: null } : r }
+  const re = await RULEAZA(e)
+  assertEquals([re.ok, re.eroare, e.fn('fn_ofertare_masuratori_propune').length], [false, 'context_nepotrivit', 0])
 })
 
 Deno.test('r1 P2 / r2 P2: răspunsul publicării / propunerii se verifică pe TIP (fără conversii) — formă străină = eroare explicită, nu succes', async () => {

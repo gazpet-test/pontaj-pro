@@ -1,0 +1,25 @@
+{
+  "_descriere": "Tabelul COMUN al citirii marcajelor de pagina (TKT-2026-0329 A, PR-extragere, review r3 P2): text -> numarul de pagini (fn_ofertare_masura_pagini) si textul fiecarei pagini cerute (fn_ofertare_masura_pagina; null = pagina nu exista). Marcajul = chr(10214) 'PAGINA' [ ]* cifre chr(10215): doar spatii (un tab NU face marcaj), numarul se ia asa cum e (si 0). Fara marcaje: textul nevid = 1 pagina (pagina 1 = tot textul), textul gol = 0. `intervale` = conventia TypeScript a plafonului (paginiInterval: paginile atinse de o felie [de_la, pana_la); preambulul fara marcaj = prima pagina marcata care urmeaza; pagina 0 ramane 0 si nu e permisa) — fara echivalent SQL direct. Rulat de proba PGlite pe functiile SQL reale (scripts/pglite/test_cantmasura_pagini_paritate.mjs) si de testul Deno (cantMasura_test.ts), L19.",
+  "cazuri": [
+    { "nume": "trei pagini", "text": "⟦PAGINA 1⟧\nunu\n⟦PAGINA 2⟧\ndoi\n⟦PAGINA 3⟧\ntrei\n", "pagini": 3,
+      "pagina": { "1": "\nunu\n", "2": "\ndoi\n", "3": "\ntrei\n", "4": null },
+      "intervale": [ { "de_la": 0, "pana_la": 46, "pagina_de_la": 1, "pagina_pana_la": 3 }, { "de_la": 15, "pana_la": 20, "pagina_de_la": 2, "pagina_pana_la": 2 }, { "de_la": 13, "pana_la": 20, "pagina_de_la": 1, "pagina_pana_la": 2 } ] },
+    { "nume": "fara marcaje: o pagina", "text": "fara marcaje", "pagini": 1, "pagina": { "1": "fara marcaje", "2": null },
+      "intervale": [ { "de_la": 0, "pana_la": 5, "pagina_de_la": 1, "pagina_pana_la": 1 } ] },
+    { "nume": "text gol: zero pagini (pagina 1 = textul gol, ca in SQL)", "text": "", "pagini": 0, "pagina": { "1": "", "2": null }, "intervale": [] },
+    { "nume": "PAGINA 0 (review r3 P2): numarul se ia ca atare, nicio pagina permisa", "text": "⟦PAGINA 0⟧\nBODY", "pagini": 0, "pagina": { "0": "\nBODY", "1": null },
+      "intervale": [ { "de_la": 0, "pana_la": 16, "pagina_de_la": 0, "pagina_pana_la": 0 } ] },
+    { "nume": "tab in marcaj: nu e marcaj (SQL accepta doar spatii); textul are prefixul, deci pagina 1 e null", "text": "⟦PAGINA\t2⟧\nBODY", "pagini": 1, "pagina": { "1": null, "2": null },
+      "intervale": [ { "de_la": 0, "pana_la": 16, "pagina_de_la": 1, "pagina_pana_la": 1 } ] },
+    { "nume": "preambul fara marcaj: nu e pagina in SQL; plafonul il socoteste la prima pagina marcata", "text": "PRE\n⟦PAGINA 5⟧\nBODY", "pagini": 5, "pagina": { "1": null, "5": "\nBODY" },
+      "intervale": [ { "de_la": 0, "pana_la": 3, "pagina_de_la": 5, "pagina_pana_la": 5 }, { "de_la": 0, "pana_la": 20, "pagina_de_la": 5, "pagina_pana_la": 5 } ] },
+    { "nume": "marcaje nemonotone: numarul = maximul; intervalul = min..max atinse", "text": "⟦PAGINA 7⟧\nx\n⟦PAGINA 2⟧\ny", "pagini": 7, "pagina": { "7": "\nx\n", "2": "\ny", "1": null },
+      "intervale": [ { "de_la": 0, "pana_la": 26, "pagina_de_la": 2, "pagina_pana_la": 7 } ] },
+    { "nume": "spatii multiple in marcaj", "text": "⟦PAGINA   3⟧\nz", "pagini": 3, "pagina": { "3": "\nz", "1": null },
+      "intervale": [ { "de_la": 0, "pana_la": 15, "pagina_de_la": 3, "pagina_pana_la": 3 } ] },
+    { "nume": "marcaj dublat: textul paginii = de la prima aparitie pana la urmatorul marcaj", "text": "⟦PAGINA 1⟧\na\n⟦PAGINA 1⟧\nb", "pagini": 1, "pagina": { "1": "\na\n", "2": null },
+      "intervale": [ { "de_la": 0, "pana_la": 26, "pagina_de_la": 1, "pagina_pana_la": 1 } ] },
+    { "nume": "numar cu 6 cifre nu e marcaj la numarare (cifre{1,5}), dar fn_ofertare_masura_pagina il gaseste cerut explicit (oglindit)", "text": "⟦PAGINA 123456⟧\nq", "pagini": 1, "pagina": { "1": null, "123456": "\nq" },
+      "intervale": [ { "de_la": 0, "pana_la": 18, "pagina_de_la": 1, "pagina_pana_la": 1 } ] }
+  ]
+}

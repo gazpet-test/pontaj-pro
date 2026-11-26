@@ -8,7 +8,7 @@
 //   - inventarul paginilor rulării (ofertare_cantitati_evaluari.pagini) și rezumatul semnalelor pentru raport.
 // Importurile din folderul extragerii sunt intenționate: rolul și poarta sunt ale extragerii, iar comparația trebuie să le folosească EXACT
 // (o copie ar putea diverge).
-import { type Rol, aplicaDecizii, pagini, sectiuniRol } from '../ofertare-cantitati-extrage/roluri.ts'
+import { type Rol, aplicaDecizii, sectiuniRol } from '../ofertare-cantitati-extrage/roluri.ts'
 import { type ObsPentruPoarta, poartaFelie, ROLURI_POARTA } from '../ofertare-cantitati-extrage/poartaB1.ts'
 import { sha256Hex } from './cantNormalizare.ts'
 
@@ -92,18 +92,50 @@ export function plafonFelii(docs: DocPagini[], felii: FelieInterval[], plafon: n
   return { permise, limita, pagini_necitite, plafon_atins }
 }
 
-// ─── paginile unui text / ale unei felii (marcajele ⟦PAGINA n⟧, aceleași segmente ca sectiuniRol) ───
-// numărul de pagini = maximul marcajelor (ca fn_ofertare_masura_pagini); fără marcaje = 1 pagină dacă textul nu e gol, 0 dacă e gol
+// ─── paginile unui text / ale unei felii: ACEEAȘI citire a marcajelor ca SQL (review r3 P2; paritate pe supabase/tests/20270112a_cazuri_pagini.json) ───
+// marcajul = chr(10214) 'PAGINA' [ ]* cifre{1,5} chr(10215) (doar spații, ca în fn_ofertare_masura_pagini — un tab nu face marcaj); numerele se iau
+// așa cum sunt (și 0; „0” nu e o pagină permisă nicăieri). (Rolurile — sectiuniRol — au citirea lor, nu intră în plafon.)
+const RE_PAGINA = /⟦PAGINA[ ]*(\d{1,5})⟧/g
+const PREFIX_PAGINA = '⟦PAGINA'
+export type SegmentPagina = { nr: number | null; de: number; pana: number }
+// segmentele textului: preambulul (fără marcaj, nr null) + câte unul pe marcaj, de la marcaj (inclusiv) până la următorul; fără marcaje = un segment nr null
+export function segmentePagini(text: string | null | undefined): SegmentPagina[] {
+  const t = text ?? ''
+  const out: SegmentPagina[] = []
+  let prev: { nr: number; de: number } | null = null
+  for (const m of t.matchAll(RE_PAGINA)) {
+    const i = m.index ?? 0
+    if (prev) out.push({ ...prev, pana: i })
+    else if (i > 0) out.push({ nr: null, de: 0, pana: i })
+    prev = { nr: Number(m[1]), de: i }
+  }
+  if (prev) out.push({ ...prev, pana: t.length })
+  if (!out.length) out.push({ nr: null, de: 0, pana: t.length })
+  return out
+}
+// numărul de pagini = fn_ofertare_masura_pagini: maximul numerelor din marcaje (chiar 0); fără marcaje = 1 dacă textul nu e gol, 0 dacă e gol
 export function numarPagini(text: string | null | undefined): number {
   const t = text ?? ''
-  if (t === '') return 0
-  let max = 0
-  for (const p of pagini(t)) if (p.nr !== null && p.nr > max) max = p.nr
-  return max > 0 ? max : 1
+  const nrs = [...t.matchAll(RE_PAGINA)].map((m) => Number(m[1]))
+  if (nrs.length) return Math.max(...nrs)
+  return t === '' ? 0 : 1
 }
-// paginile atinse de o felie [de_la, pana_la) în text; preambulul fără marcaj ține de prima pagină numerotată care urmează (sau de pagina 1)
+// textul paginii n = fn_ofertare_masura_pagina: fără prefixul de marcaj în text → pagina 1 = tot textul, altfel null; cu prefix → de DUPĂ primul marcaj
+// cu numărul n până la următorul marcaj (orice număr), null dacă n nu apare. Preambulul nu e pagină. (Folosită în proba de paritate.)
+export function paginaText(text: string | null | undefined, n: number): string | null {
+  const t = text ?? ''
+  if (!t.includes(PREFIX_PAGINA)) return n === 1 ? t : null
+  const re = new RegExp('⟦PAGINA[ ]*' + String(n) + '⟧')
+  const m = re.exec(t)
+  if (!m) return null
+  const s = m.index + m[0].length
+  const e = t.indexOf(PREFIX_PAGINA, s)
+  return e < 0 ? t.slice(s) : t.slice(s, e)
+}
+// paginile atinse de o felie [de_la, pana_la) în text; preambulul (fără marcaj) e socotit la prima pagină marcată care urmează — convenție a
+// plafonului, niciodată mai permisivă decât SQL (preambulul nu e pagină în SQL); fără marcaje = pagina 1; pagina „0” rămâne 0 (nepermisă)
 export function paginiInterval(text: string, de_la: number, pana_la: number): { pagina_de_la: number; pagina_pana_la: number } {
-  const seg = pagini(text ?? '')
+  const seg = segmentePagini(text)
   const nrs: number[] = []
   let urm = 1
   for (let i = seg.length - 1; i >= 0; i--) { if (seg[i].nr !== null) urm = seg[i].nr as number; nrs[i] = urm }
@@ -123,6 +155,13 @@ export function rolFelie(ctx: Context, felie: { de_la: number; pana_la: number }
   const sectiuni = aplicaDecizii(sectiuniRol(ctx.text_extras ?? '', ctx.nume_original, ctx.tip), (ctx.decizii ?? []).map((d) => ({ rol: d.rol ?? '', sectiune: d.sectiune ?? '', decizie: d.decizie })))
   const s = sectiuni.find((x) => x.de <= felie.de_la && felie.de_la < x.pana)
   return s ? s.rol : null
+}
+
+// documentul scos de om din sursele cantitative: decizia activă `nu_e_sursa_cantitativa` pe TOT documentul („*”), din contextul legat de fotografie
+// (decizii_sha intră în fotografie → o schimbare a deciziei schimbă fotografia; review r3 P1: singura excludere a unui document fără extragere
+// din „necitit” e o decizie a omului înregistrată în fotografie, nu o stare citită separat — lot / versiune)
+export function exclusDeOm(ctx: Context): boolean {
+  return Array.isArray(ctx?.decizii) && ctx.decizii.some((d) => d?.decizie === 'nu_e_sursa_cantitativa' && d?.sectiune === '*')
 }
 
 // contextul primit e EXACT versiunea din fotografie: textul (sha256), deciziile (decizii_sha), numele, tipul, documentul
@@ -172,9 +211,8 @@ export type PaginiRulare = {
   pagini_necitite: PaginiDocument[]                              // ale documentului ∪ peste limita plafonului ∪ feliile excluse în rulare
   felii_incomplete: FelieIncompleta[]
 }
-// `eligibile` = documentele pe care extragerea structurată le citește (ultimele versiuni ale tipurilor eligibile, inclusiv cele fără text încă);
-// doar ele pot fi „necitite” (decizia 15: extragere lipsă / neterminată). Un tip în afara extragerii (ex. planșele, abaterea (g)) sau o versiune
-// înlocuită nu e un document necitit. `null` = toate documentele fotografiei (conservator, când apelantul nu știe eligibilitatea).
+// `eligibile` = documentele care pot fi „necitite” (decizia 15: extragere lipsă / neterminată), stabilite de apelant DOAR din date legate de fotografie
+// (tipul din fotografie ∈ tipurile extractibile și fără decizia omului `nu_e_sursa_cantitativa`); `null` = toate documentele fotografiei (conservator).
 export function paginiRulare(foto: Fotografie, stareExtrageri: Map<number, string>, feliiIncomplete: FelieIncompleta[], paginiPestePlafon: PaginiDocument[],
   eligibile: Set<number> | null = null): PaginiRulare {
   const docs = [...(foto.documente ?? [])].sort((a, b) => Number(a.id) - Number(b.id))

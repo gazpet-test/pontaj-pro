@@ -15,7 +15,6 @@ import { MODEL_A, MODEL_S, OVERHEAD_A, PROMPT_A, tarifA, tarifS } from './extrac
 import { type PoartaFelie, poartaFelie } from './poartaB1.ts'
 import { eFotografie, limitaPagini, paginiInterval } from '../_shared/cantMasura.ts'
 import { comparaSurse, type RaportMasuratori } from './masuratori.ts'
-import { ultimeleVersiuni } from './versiuni.ts'
 
 export const EXTRACTOR = { model: 'gpt-5-mini', prompt: 'p3', normalizator: 'n7', feliere: 'f2' }   // n5 (20.10): coduri cu „%” + coloana „[ n]”; n6 (21.10): antetul „<cod> pag N” sub marcaj; n7 (21.10): „<n> COD <cod>” = continuare
 export const EXTRACTOR_ID = `${EXTRACTOR.model}@${EXTRACTOR.prompt}@${EXTRACTOR.normalizator}@${EXTRACTOR.feliere}`
@@ -67,9 +66,6 @@ export type DepsStructurat = {
   feliiGata: (extragereId: number) => Promise<{ gata: number; total: number } | null>
   ai: (prompt: string, cine?: 'principal' | 'escaladare') => Promise<RezultatAI>
   acum: () => number
-  // TKT-0329 A (PR-extragere, review r1 P1): pentru EXACT documentele fotografiei (citite DUPĂ ea): Map(id → extractibil = ultima versiune ȘI
-  // eligibil pe lot); null = citire picată / incompletă (comparația tratează toate documentele fără extragere ca necitite). Lipsă = la fel.
-  eligibilitateDocumente?: (licitatieId: number, ids: number[]) => Promise<Map<number, boolean> | null>
 }
 
 export const PROMPT_STRUCTURAT = (nume: string, rol: string) => `Ești inginer de devize. Din bucata de mai jos a documentului "${nume}" (secțiune cu rolul: ${rol}), extrage FIECARE RÂND cantitativ (lungimi de conductă, branșamente, tuburi de protecție, lucrări cu cantitate).
@@ -102,8 +98,10 @@ export function sumaRezervata(prompt: string, ex: Extractor = EXTRACTOARE.B): nu
 // familia „parte”: un PDF împărțit în p01 / p02 … e un singur document pentru convenția numerică
 export const radacinaParte = (nume: string) => nume.replace(/\s+—\s+p\d{2}_pag\d+-\d+\.pdf$/i, '').trim()
 
-// ultimele versiuni: versiuni.ts (aceeași definiție și la eligibilitatea comparației)
-export { ultimeleVersiuni } from './versiuni.ts'
+function ultimeleVersiuni(docs: Document[]): Document[] {
+  const inlocuite = new Set(docs.map((d) => Number(d?.seap_meta?.inlocuieste_id)).filter((x) => Number.isFinite(x) && x > 0))
+  return docs.filter((d) => !inlocuite.has(d.id))
+}
 
 // identitatea extractorului = codul + contextul care schimbă rezultatul normalizării: convenția și manifestul (document:sha) al părților
 // VALIDE din grup + deciziile de rol active pe acest document și sha. Alt context = altă muncă, alt cache.
@@ -187,13 +185,14 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
         felii.push({ nr: felii.length, de_la: s.de + f.de, pana_la: s.de + f.de + f.text.length, text: f.text, s })
       }
     }
-    // plafonul (decizia 18), ÎNAINTEA buclei de felii: o felie e permisă DOAR dacă TOATE paginile ei sunt ≤ ultima pagină permisă a documentului;
-    // una care traversează limita e exclusă întreagă (nu se împarte), paginile ei intră în pagini_necitite; feliile excluse nu ajung la
-    // felie_incepe / rezervare / AI, iar extragerea documentului rămâne `partial`. Un document absent din fotografie = 0 pagini permise.
+    // plafonul (decizia 18), ÎNAINTEA buclei de felii: o felie e permisă DOAR dacă TOATE paginile ei sunt în 1..ultima pagină permisă a documentului
+    // (o pagină „0” sau un interval invalid = nepermisă, review r3 P2); una care traversează limita e exclusă întreagă (nu se împarte), paginile ei
+    // intră în pagini_necitite; feliile excluse nu ajung la felie_incepe / rezervare / AI, iar extragerea documentului rămâne `partial`.
+    // Un document absent din fotografie = 0 pagini permise.
     const permise = new Set<number>()
     for (const f of felii) {
       const pg = paginiInterval(text, f.de_la, f.pana_la)
-      if (pg.pagina_pana_la <= (ultimaPermisa.get(d.id) ?? 0)) { permise.add(f.nr); continue }
+      if (pg.pagina_de_la >= 1 && pg.pagina_pana_la >= pg.pagina_de_la && pg.pagina_pana_la <= (ultimaPermisa.get(d.id) ?? 0)) { permise.add(f.nr); continue }
       const e = pestePlafon.get(d.id) ?? { felii: [], pagini: new Set<number>() }
       e.felii.push(f.nr)
       for (let q = pg.pagina_de_la; q <= pg.pagina_pana_la; q++) e.pagini.add(q)
@@ -398,10 +397,10 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
   // TKT-0329 A (PR-extragere): comparația surselor — ÎNTOTDEAUNA după bucla documentelor, și la `oprit` (decizia 15): zero apeluri AI,
   // serverul decide (fn_ofertare_masuratori_propune / fn_ofertare_semnale_publica); documentele fără extragere gata intră în documente_necitite
   const paginiPestePlafon = [...pestePlafon].map(([document_id, e]) => ({ document_id, pagini: [...e.pagini].sort((a, b) => a - b) }))
-  // eligibilitatea documentelor se stabilește în comparaSurse pe documentele FOTOGRAFIEI (review r1 P1): tipul din fotografie + ultima versiune /
-  // lotul citite după ea; lista `docs` de mai sus (citită înaintea fotografiei) NU se folosește pentru „necitit”
-  const masuratori = await comparaSurse({ rpc: deps.rpc }, { licitatie_id: p.licitatie_id, cerere_id: c.id, stareExtrageri: stareDoc, paginiPestePlafon,
-    tipuriEligibile: TIPURI_ELIGIBILE, eligibilitate: deps.eligibilitateDocumente ? (ids) => deps.eligibilitateDocumente!(p.licitatie_id, ids) : async () => null })
+  // „necitit” se decide în comparaSurse DOAR din date legate de fotografie (review r1–r3 P1): tipul documentului din fotografie + decizia omului
+  // `nu_e_sursa_cantitativa` din contextul verificat prin decizii_sha; lista `docs` de mai sus (citită înaintea fotografiei), versiunile și lotul
+  // (neincluse în fotografie) NU decid nimic aici
+  const masuratori = await comparaSurse({ rpc: deps.rpc }, { licitatie_id: p.licitatie_id, cerere_id: c.id, stareExtrageri: stareDoc, paginiPestePlafon, tipuriEligibile: TIPURI_ELIGIBILE })
   return { status: 200, body: { ok: true, mod: 'structurat', extractor: idExtractor(xt), felii_apelate: feliiApelate, felii_cu_deficit_b1: feliiCuDeficit, felii_escaladate: feliiEscaladate,
     cost_usd: Math.round(cost * 1e4) / 1e4, oprit, raport,
     plafon: { plafon: foto0.data.plafon, plafon_atins: limita.plafon_atins },
