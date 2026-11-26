@@ -206,7 +206,8 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
   }
   const addQ = async () => {
     const nr = (clar?.length ? Math.max(...clar.map(q => q.nr || 0)) : 0) + 1
-    const { error } = await supabase.from('ofertare_clarificari').insert({ licitatie_id: licId, nr, intrebare: '', status: 'de_trimis' })
+    // origine explicită: implicitul din BD e „platforma”, rezervat serverului (fn_ofertare_surse_valideaza refuză inserarea de la utilizator)
+    const { error } = await supabase.from('ofertare_clarificari').insert({ licitatie_id: licId, nr, intrebare: '', status: 'de_trimis', origine: 'manual' })
     if (error) { showToast('Eroare: ' + error.message, 'err'); return }
     await load()
   }
