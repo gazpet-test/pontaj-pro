@@ -41,9 +41,11 @@ def la_inceput_de_lucru(m, calendar):
     (08:00); MPXJ scrie uneori una, motorul cealaltă (ex. jalonul OI de la ziua 0, la trecerea înapoi). Se aduc la aceeași formă
     prin calendarul din fișier — doar la jaloane; restul se compară exact."""
     import java.time as jt
-    if m is None:
-        return None
-    d = jt.LocalDateTime.parse(m + (':00' if len(m) == 16 else ''))
+    if m is None or not m.endswith('T17:00'):
+        return m  # doar „17:00” se mută; orice altă oră rămâne cum e (07:00 ≠ 08:00 — r2 Jak P2)
+    d = jt.LocalDateTime.parse(m + ':00')
+    if not calendar.isWorkingDate(d.toLocalDate()):
+        return m  # 17:00 într-o zi nelucrătoare nu e sfârșitul unei zile de lucru: nicio echivalență
     return moment(calendar.getNextWorkStart(d))
 
 
@@ -61,7 +63,10 @@ def compara(proiect, ref, cu_tarziu):
     for t in proiect.getTasks():
         wbs = t.getWBS()
         if not wbs:
-            continue  # sarcina-rezumat a proiectului (UID 0), creată de MPXJ
+            if t.getUniqueID() is not None and int(t.getUniqueID()) == 0:
+                continue  # doar sarcina-rezumat a proiectului (UID 0), creată de MPXJ, e scutită
+            dif.append(f'sarcină fără WBS în fișier (UID {t.getUniqueID()}, „{t.getName()}”) — necunoscută motorului')
+            continue
         wbs = str(wbs)
         vazute[wbs] = vazute.get(wbs, 0) + 1
         r = ref.get(wbs)
@@ -114,8 +119,11 @@ def main():
             return 2
         proiect = UniversalProjectReader().read(File(x))
         d1 = compara(proiect, ref, False)
-        MicrosoftScheduler().schedule(proiect, proiect.getProjectProperties().getStartDate())
-        d2 = compara(proiect, ref, True)
+        try:
+            MicrosoftScheduler().schedule(proiect, proiect.getProjectProperties().getStartDate())
+            d2 = compara(proiect, ref, True)
+        except Exception as e:  # recalcularea imposibilă = neverificat, nu OK
+            d2 = [f'recalcularea MPXJ a eșuat: {type(e).__name__}: {str(e)[:200]}']
         stare = 'OK' if not d1 and not d2 else 'DIFERENȚE'
         print(f'{os.path.basename(x)}: {stare} — citire: {len(d1)} diferențe, recalculare MPXJ: {len(d2)} diferențe ({len(ref)} poziții, toate găsite o dată: {"da" if not [d for d in d1 if "apare de" in d] else "NU"})')
         for d in (d1 + d2)[:25]:

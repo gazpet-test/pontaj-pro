@@ -83,7 +83,7 @@ export function verificaStructura({ noduri, legaturi, cpm, mod, articoleValidate
     if (ePresupus(s)) dupaMod(!schita)('DURATA_PRESUPUSA', `${n.cod}: ${n.jalon ? 'jalonul e marcat' : 'durata e'} PRESUPUS — fără normă validată, document sau răspuns`, { activitate: n.cod })
     else if (!n.jalon && !RE_SURSA.test(String(s ?? ''))) dupaMod(!schita)('SURSA_DURATA_INVALIDA', `${n.cod}: sursa duratei lipsește sau nu e norma:/document:/raspuns:/parametru: (are ${JSON.stringify(s ?? null)})`, { activitate: n.cod })
     // r1 (Jak) P1: contractul câmpurilor de listă — o formă greșită e eroare, nu „nu cere nimic” (L12/L18)
-    if (n.utilaje != null && !(Array.isArray(n.utilaje) && n.utilaje.every(u => (typeof u === 'string' && u.trim()) || (u && typeof u === 'object' && typeof u.tip === 'string' && u.tip.trim() && (u.numar == null || (Number.isInteger(u.numar) && u.numar > 0))))))
+    if (n.utilaje != null && !(Array.isArray(n.utilaje) && n.utilaje.every(u => (typeof u === 'string' && u.trim()) || (u && typeof u === 'object' && typeof u.tip === 'string' && u.tip.trim() && Number.isInteger(u.numar) && u.numar > 0))))
       err('UTILAJE_INVALIDE', `${n.cod}: utilaje trebuie să fie o listă de tipuri sau {tip, numar întreg > 0} (are ${JSON.stringify(n.utilaje)})`, { activitate: n.cod })
     if (n.articole_deviz != null && !(Array.isArray(n.articole_deviz) && n.articole_deviz.every(a => typeof a === 'string' && a.trim())))
       err('ARTICOLE_INVALIDE', `${n.cod}: articole_deviz trebuie să fie o listă de coduri (are ${JSON.stringify(n.articole_deviz)})`, { activitate: n.cod })
@@ -104,12 +104,12 @@ export function verificaStructura({ noduri, legaturi, cpm, mod, articoleValidate
   // ── legăturile de punct de control au motiv cu sursă (spec §5.2; r1 Jak P2) ──
   // Determinist: legătura marcată control:true de generator SAU care atinge o activitate „verificare_receptie” (PCC, probe,
   // verificare izolație, lucrări ascunse). Motivul trebuie să citeze sursa: document:<id…>, raspuns:<id> sau regula:<nume>.
-  const RE_MOTIV = /(document|raspuns|regula):\S/
+  const RE_MOTIV = /\b(document|raspuns|regula)\s*:\s*\S/
   const catDe = new Map(frunze.map(n => [n.cod, n._cat]))
   for (const l of legaturi) {
     const deControl = l.control || catDe.get(l.de) === 'verificare_receptie' || catDe.get(l.la) === 'verificare_receptie'
     if (deControl && !RE_MOTIV.test(String(l.motiv ?? '')))
-      dupaMod(!schita)('LEGATURA_CONTROL_FARA_MOTIV', `legătura ${l.de} → ${l.la} ține de un punct de control, dar motivul nu citează sursa (document:/raspuns:/regula:) — are ${JSON.stringify(l.motiv)}`, { de: l.de, la: l.la })
+      dupaMod(!schita)('LEGATURA_CONTROL_FARA_MOTIV', `legătura ${l.de} → ${l.la} ține de un punct de control, dar motivul nu citează sursa (document: / raspuns: / regula:) — are ${JSON.stringify(l.motiv)}`, { de: l.de, la: l.la })
   }
 
   // ── corespondența cu devizul (C3) ──

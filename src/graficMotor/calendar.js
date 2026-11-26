@@ -121,9 +121,13 @@ export function creeazaAxa(calendar, dataStart) {
   dinIso(dataStart)
   const zile = []
   let cursor = dataStart, pasi = 0
+  const CAPAT = '2099-12-31' // ultimul an cu Paștele calculat (pasteOrtodox)
+  const dincolo = () => { const e = new Error(`calendarul nu merge dincolo de ${CAPAT}`); e.capatCalendar = true; return e }
   const extinde = (pana) => {
     while (zile.length <= pana) {
+      if (cursor > CAPAT) throw dincolo()
       while (!calendar.esteLucratoare(cursor)) {
+        if (cursor >= CAPAT) throw dincolo()
         cursor = adaugaZile(cursor, 1)
         if (++pasi > PLAFON_ZILE) throw new Error('calendarul nu are zile lucrătoare (opriri prea lungi?)')
       }
@@ -136,11 +140,13 @@ export function creeazaAxa(calendar, dataStart) {
     if (!Number.isInteger(i) || i < 0) throw new Error(`index de zi invalid: ${i}`)
     extinde(i); return zile[i]
   }
+  // ziua i sau null dacă ar fi dincolo de capătul calendarului (2099) — index() se oprește la ultima zi existentă (r2 Jak P2)
+  const ziSauNimic = (i) => { try { return zi(i) } catch (e) { if (e.capatCalendar) return null; throw e } }
   const index = (iso) => {
     const t = dinIso(iso)
     if (t < dinIso(zile[0])) return -1
     let i = 0
-    while (dinIso(zi(i + 1)) <= t) i++
+    for (let u = ziSauNimic(1); u !== null && dinIso(u) <= t; u = ziSauNimic(i + 1)) i++
     return i
   }
   return { start: zile[0], startCerut: dataStart, zi, index }

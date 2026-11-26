@@ -460,3 +460,32 @@ describe('runda r1 Jakarinos — căile de ocolire închise', () => {
     expect(CAMPURI_TEXT.map(c => [c.nume, c.id])).toEqual([['Text1', 188743731], ['Text2', 188743734], ['Text3', 188743737], ['Text4', 188743740]])
   })
 })
+
+describe('runda r2 Jakarinos', () => {
+  it('utilaj în formă de obiect fără număr (sau cu null) = eroare, nu „1” tacit', () => {
+    expect(coduri(calculeazaGrafic(cuActivitate(graficBun(), 'A1', { utilaje: [{ tip: 'macara' }] })), 'eroare')).toEqual(['UTILAJE_INVALIDE'])
+    expect(coduri(calculeazaGrafic(cuActivitate(graficBun(), 'A1', { utilaje: [{ tip: 'macara', numar: null }] })), 'eroare')).toEqual(['UTILAJE_INVALIDE'])
+    expect(calculeazaGrafic(cuActivitate(graficBun(), 'A1', { utilaje: [{ tip: 'macara', numar: 1 }] })).probleme).toEqual([])
+  })
+  it('legătura control:true cu motiv valid trece; citarea cu spațiu după prefix e acceptată', () => {
+    const cu = (motiv) => { const g = graficBun(); g.legaturi = [L('J1', 'A1'), { ...L('A1', 'A2'), control: true, motiv }, L('A2', 'J2')]; return calculeazaGrafic(g) }
+    for (const m of ['document:31#p12', 'PCC 4.9 (document: 31#p12)', 'raspuns: 17', 'regula : receptie-dupa-verificari']) expect(cu(m).probleme, m).toEqual([])
+    for (const m of ['PCC 4.9', 'documentul 31', 'vezi caietul de sarcini', '']) expect(coduri(cu(m), 'eroare'), m).toEqual(['LEGATURA_CONTROL_FARA_MOTIV'])
+  })
+  it('rezumat cu marjă pozitivă: LS și LF calendaristice sunt cele târzii ale copiilor, nu cele timpurii', () => {
+    const r = calculeazaGrafic({ mod: 'schita', data_start: '2027-03-01', activitati: [
+      act('A', 6, { categorie: 'organizare', executant: 'Gazpet', sursa_durata: 'parametru:x' }), { cod: 'R', rezumat: true },
+      act('B', 2, { parinte: 'R', categorie: 'organizare', executant: 'Gazpet', sursa_durata: 'parametru:x' }),
+      act('C', 1, { parinte: 'R', categorie: 'organizare', executant: 'Gazpet', sursa_durata: 'parametru:x' }), jal('F', { executant: 'beneficiar' })],
+      legaturi: [L('A', 'F'), L('B', 'C'), L('C', 'F')] })
+    // R: es 0, ef 3, ls 3, lf 6 (indexuri) → ES 01.03, EF 03.03, LS 04.03 (ls B = 3), LF 08.03 (lf C = 6 → ziua 5)
+    expect(tabelPERT(r).find(x => x.cod === 'R')).toMatchObject({ ES: '2027-03-01', EF: '2027-03-03', LS: '2027-03-04', LF: '2027-03-08', marja: 3, critic: false })
+  })
+  it('termenul la capătul calendarului (decembrie 2099) se verifică fără eroare', () => {
+    const r = calculeazaGrafic({ ...graficBun(), data_start: '2099-12-21', termen: { tip: 'data', valoare: '2099-12-31' } })
+    expect(coduri(r)).not.toContain('TERMEN_INVALID')
+    // 21–24.12 + 28.12 (25–26 Crăciunul, 26–27 weekend) → finalul 28.12.2099, în termen
+    expect(r.termen).toMatchObject({ data_limita: '2099-12-31', data_final: '2099-12-28', incadrat: true })
+    expect(() => creeazaAxa(creeazaCalendar(), '2099-12-30').zi(5)).toThrow(/dincolo de 2099-12-31/)
+  })
+})
