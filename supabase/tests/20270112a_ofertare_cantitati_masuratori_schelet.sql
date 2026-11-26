@@ -30,6 +30,11 @@ CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$
 $$;
 GRANT USAGE ON SCHEMA auth, public TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION auth.uid() TO anon, authenticated, service_role;
+-- ca pe producție (pgvector în schema extensions, proba pe clona 176, 26.11.2026): agregate `sum` în afara pg_catalog, cu același nume ca built-in-ul
+-- folosit (necalificat) de funcțiile noi; postcondiția lanțului de apel NU trebuie să le confunde cu un apel
+CREATE SCHEMA extensions;
+CREATE AGGREGATE extensions.sum(text) (SFUNC = textcat, STYPE = text);
+CREATE AGGREGATE extensions.sum(bytea) (SFUNC = byteacat, STYPE = bytea);
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;

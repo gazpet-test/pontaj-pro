@@ -1859,9 +1859,13 @@ BEGIN
     RAISE EXCEPTION '20270112a: postconditie: protocolul lock-urilor (advisory / ORDER BY id FOR UPDATE)';
   END IF;
   -- functiile noi cheama (in afara pg_catalog) DOAR: una pe alta, auth.uid, fn_are_acces_ofertare, fn_ofertare_source_pack_poate_decide, ofertare_clarificare_baza_stare; nimic dinamic
+  -- Rezolvarea numelor (proba pe clona 176: `sum(` se potrivea cu extensions.sum(vector) din pgvector): toate functiile noi au search_path = public, pg_temp
+  -- (verificat mai sus, proconfig), deci un nume NECALIFICAT ajunge doar in pg_catalog / public / pg_temp — se cauta doar in public (pg_catalog e exclus mai jos);
+  -- un nume CALIFICAT „schema.fn(” se cauta exact in schema lui (un apel extensions.x( ramane prins).
   SELECT string_agg(DISTINCT p2.oid::regprocedure::text, ', ') INTO v_alt
-    FROM pg_proc p CROSS JOIN LATERAL regexp_matches(p.prosrc, '([[:alpha:]_][[:alnum:]_$]*)"?[[:space:]]*[(]', 'g') w
-    JOIN pg_proc p2 ON lower(p2.proname) = lower(w[1]) AND p2.oid <> p.oid
+    FROM pg_proc p CROSS JOIN LATERAL regexp_matches(p.prosrc, '(?:([[:alpha:]_][[:alnum:]_$]*)"?[[:space:]]*[.][[:space:]]*"?)?([[:alpha:]_][[:alnum:]_$]*)"?[[:space:]]*[(]', 'g') w
+    JOIN pg_proc p2 ON lower(p2.proname) = lower(w[2]) AND p2.oid <> p.oid
+    JOIN pg_namespace n2 ON n2.oid = p2.pronamespace AND (CASE WHEN w[1] IS NULL THEN n2.nspname = 'public' ELSE lower(n2.nspname) = lower(w[1]) END)
    WHERE p.pronamespace = 'public'::regnamespace
      AND (p.proname LIKE 'fn\_ofertare\_masura\_%' OR p.proname LIKE 'fn\_ofertare\_semnal%' OR p.proname LIKE 'fn\_ofertare\_masuratori\_%'
           OR p.proname IN ('fn_ofertare_numar_ro', 'fn_ofertare_um_canonica', 'fn_ofertare_ciorna_auto_stare', 'ofertare_semnal_baza_stare', 'fn_trg_ofertare_masuratori_licitatie', 'fn_trg_ofertare_masuratori_imuabil'))

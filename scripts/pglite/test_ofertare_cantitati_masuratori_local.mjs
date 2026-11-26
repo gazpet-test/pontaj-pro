@@ -1728,6 +1728,9 @@ if (vrea('t5') && MIG) {
     ['S7 un RPC UI SECURITY INVOKER', [["CREATE FUNCTION public.fn_ofertare_semnale_lista(p_licitatie_id bigint) RETURNS TABLE (semnal jsonb, rezolvat boolean, actual boolean, in_curs boolean, masuratori jsonb)\nLANGUAGE plpgsql STABLE SECURITY DEFINER", "CREATE FUNCTION public.fn_ofertare_semnale_lista(p_licitatie_id bigint) RETURNS TABLE (semnal jsonb, rezolvat boolean, actual boolean, in_curs boolean, masuratori jsonb)\nLANGUAGE plpgsql STABLE SECURITY INVOKER"]], /postconditie: functia public\.fn_ofertare_semnale_lista\(bigint\)/],
     ['S8 corp rescris cu alt text decât cel declarat (export)', [["    IF coalesce(c.sursa,'') ~ '(^|,)revizie_' THEN RAISE EXCEPTION 'Clarificarea #% necesită revizie',c.nr; END IF;\n    IF coalesce(c.cheie,'') ~ '^auto_(planse|surse)_' THEN", "    IF coalesce(c.cheie,'') ~ '^auto_(planse|surse)_' THEN"]], /postconditie: public\.ofertare_clarificari_export\(bigint\) nu are corpul/],
     ['S9 advisory în notificare (protocolul lock-urilor)', [["DECLARE c public.ofertare_clarificari; v_st jsonb; v_resp uuid[]; v_n int := 0;\nBEGIN\n  IF auth.uid() IS NULL OR NOT coalesce(public.fn_are_acces_ofertare(),false) THEN RETURN jsonb_build_object('error','fără acces'); END IF;\n  -- 20261121a", "DECLARE c public.ofertare_clarificari; v_st jsonb; v_resp uuid[]; v_n int := 0;\nBEGIN\n  PERFORM pg_advisory_xact_lock(hashtextextended('ofertare_cantitati_semnale:' || p_licitatie_id, 0));\n  IF auth.uid() IS NULL OR NOT coalesce(public.fn_are_acces_ofertare(),false) THEN RETURN jsonb_build_object('error','fără acces'); END IF;\n  -- 20261121a"]], /postconditie: (protocolul lock-urilor|public\.ofertare_clarificari_notifica\(bigint\) nu are corpul)/],
+    // proba pe clona 176 (26.11.2026): un apel CALIFICAT spre o funcție din schema extensions (pgvector pe producție) rămâne prins;
+    // numele necalificat `sum(` (built-in) NU mai e confundat cu extensions.sum — vezi t5.8
+    ['S10 o funcție nouă cheamă extensions.sum (apel calificat)', [["  IF auth.uid() IS NULL OR NOT coalesce(public.fn_are_acces_ofertare(), false) THEN RAISE EXCEPTION 'CM_FARA_DREPT: fara acces la Ofertare' USING ERRCODE = '42501'; END IF;\n  v_sha :=", "  IF auth.uid() IS NULL OR NOT coalesce(public.fn_are_acces_ofertare(), false) THEN RAISE EXCEPTION 'CM_FARA_DREPT: fara acces la Ofertare' USING ERRCODE = '42501'; END IF;\n  PERFORM extensions.sum(x) FROM (VALUES ('a')) v(x);\n  v_sha :="]], /cheama in afara lantului declarat: (.*, )?extensions\.sum\(/],
   ]) {
     const db = await bazaNoua()
     const s = await stare(db)
@@ -1801,6 +1804,20 @@ if (vrea('t5') && MIG) {
     let ro, rm
     try { ro = await rezultat(scen, MIG); rm = await rezultat(scen, aplica(MIG, inl)) } catch (e) { ro = 'x'; rm = 'x'; console.log('     ' + e.message) }
     ok(/^REFUZ/.test(ro) && /^APLICAT/.test(rm), `${nume} prins: original «${ro.slice(0, 70)}» / mutant «${rm.slice(0, 70)}»`)
+  }
+  console.log('t5.8 lanțul de apel: nume necalificat doar în public, calificat doar în schema lui (pgvector în extensions, ca pe producție)')
+  {
+    const VECHE = [["FROM pg_proc p CROSS JOIN LATERAL regexp_matches(p.prosrc, '(?:([[:alpha:]_][[:alnum:]_$]*)\"?[[:space:]]*[.][[:space:]]*\"?)?([[:alpha:]_][[:alnum:]_$]*)\"?[[:space:]]*[(]', 'g') w\n    JOIN pg_proc p2 ON lower(p2.proname) = lower(w[2]) AND p2.oid <> p.oid\n    JOIN pg_namespace n2 ON n2.oid = p2.pronamespace AND (CASE WHEN w[1] IS NULL THEN n2.nspname = 'public' ELSE lower(n2.nspname) = lower(w[1]) END)",
+      "FROM pg_proc p CROSS JOIN LATERAL regexp_matches(p.prosrc, '([[:alpha:]_][[:alnum:]_$]*)\"?[[:space:]]*[(]', 'g') w\n    JOIN pg_proc p2 ON lower(p2.proname) = lower(w[1]) AND p2.oid <> p.oid"]]
+    const ex = (await (async () => { const db = await bazaNoua(); try { return (await q(db, `SELECT string_agg(p.oid::regprocedure::text, ', ' ORDER BY p.oid::regprocedure::text) x FROM pg_proc p WHERE p.pronamespace = 'extensions'::regnamespace`))[0].x } finally { await db.close() } })())
+    ok(ex === 'extensions.sum(bytea), extensions.sum(text)', 'scheletul are agregatele extensions.sum (ca pgvector pe producție): ' + ex)
+    const db = await bazaNoua()
+    const s = await stare(db)
+    let r
+    try { r = await livreaza(db, aplica(MIG, VECHE)) } catch (e) { r = { ok: false, eroare: 'mutant inaplicabil: ' + e.message } }
+    ok(!r.ok && /cheama in afara lantului declarat: .*extensions\.sum/.test(r.eroare) && JSON.stringify(await stare(db)) === JSON.stringify(s),
+      'forma veche a potrivirii (nume oriunde) refuză migrarea corectă pe schema cu extensions.sum — exact eșecul de pe clona 176: ' + (r.eroare || 'APLICAT').slice(0, 140))
+    await db.close()
   }
 }
 
