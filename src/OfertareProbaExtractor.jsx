@@ -29,12 +29,13 @@ export default function OfertareProbaExtractor({ licitatie: l, onRulare = null }
   const [jurnal, setJurnal] = useState([])
   const opreste = useRef(false)
   const licCurenta = useRef(l.id)   // review Copilot / Gemini #797 r1 (P2): rezultatul unei încărcări vechi nu suprascrie altă licitație
+  const genCtx = useRef(0)          // review Jakarinos #1207 r4 (P2): generația contextului — A → B → A sau demontarea invalidează rularea veche, nu doar id-ul
 
   // altă licitație (sau închiderea secțiunii): starea veche se golește, iar o rulare în curs se oprește după pasul curent
   useEffect(() => {
-    licCurenta.current = l.id
+    licCurenta.current = l.id; genCtx.current++
     setSt(null); setJurnal([]); setErr(null)
-    return () => { opreste.current = true }
+    return () => { opreste.current = true; genCtx.current++ }
   }, [l.id])
 
   const load = async () => {
@@ -75,8 +76,8 @@ export default function OfertareProbaExtractor({ licitatie: l, onRulare = null }
     if (!window.confirm(`Pornesc extragerea cu extractorul ${extractor} pe ${l.nr_anunt}? E plătită (rămas din plafon: ${st.buget ? (st.buget.plafon_usd - st.consum).toFixed(2) : '—'} USD); se oprește singură la plafon.`)) return
     opreste.current = false; setBusy(true); setErr(null)
     // review Copilot #797 r2 (P2): callback-urile rulării scriu DOAR dacă panoul arată încă licitația pe care a pornit rularea
-    const idRulare = l.id
-    const aici = () => licCurenta.current === idRulare
+    const idRulare = l.id, ctx = genCtx.current
+    const aici = () => licCurenta.current === idRulare && genCtx.current === ctx
     const jurnalAici = (x) => { if (aici()) setJurnal(j => [...j, { t: new Date().toLocaleTimeString('ro-RO'), x }]) }
     jurnalAici(`▶ extractor ${extractor}`)
     try {

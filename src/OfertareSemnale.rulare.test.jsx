@@ -101,18 +101,51 @@ async function monteazaProba(onRulare) {
 let curata = []
 afterEach(() => { [...curata].reverse().forEach(f => f()); curata = []; st.rpc = {}; st.tabele = {}; st.cereri = []; st.invocari = 0; st.listaCurenta = () => []; st.amana = {}; vi.restoreAllMocks() })
 
-dom('onRulare — contextul reverificat după recitirea bugetului; notificarea nu depinde de reușita recitirii (review r3 P2)', () => {
-  it('extragerea pe A termină, recitirea bugetului e în zbor, omul trece pe B, recitirea se termină → onRulare NU e chemat', async () => {
+// citirile bugetului de după prima (deschidere) rămân în zbor, FIECARE cu resolverul ei (review r4 P3: se finalizează explicit cea a lui A)
+const bugetSuspendat = () => {
+  let n = 0
+  const pend = []
+  st.amana.ofertare_ai_buget = valoare => { n++; return n <= 1 ? Promise.resolve({ data: valoare, error: null }) : new Promise(res => { pend.push({ id: valoare?.licitatie_id ?? null, rezolva: () => res({ data: valoare, error: null }) }) }) }
+  return pend
+}
+dom('onRulare — contextul reverificat după recitirea bugetului; notificarea nu depinde de reușita recitirii (review r3 / r4 P2)', () => {
+  it('extragerea pe A termină, recitirea bugetului A e în zbor, omul trece pe B, recitirea lui A se termină → onRulare NU e chemat', async () => {
     st.tabele = TABELE_PROBA()
-    let n = 0, rezolva = null
-    // prima citire a bugetului (la deschidere) trece; a doua (după rulare) rămâne în zbor
-    st.amana.ofertare_ai_buget = valoare => { n++; return n <= 1 ? Promise.resolve({ data: valoare, error: null }) : new Promise(res => { rezolva = () => res({ data: valoare, error: null }) }) }
+    const pend = bugetSuspendat()
     const onRulare = vi.fn()
     const { act, asteapta, apasa, buton } = await monteazaProba(onRulare)
     await apasa(buton('Rulează B'))
-    expect(st.invocari).toBe(1); expect(rezolva).toBeTypeOf('function'); expect(onRulare).not.toHaveBeenCalled()
+    expect(st.invocari).toBe(1); expect(pend.map(p => p.id)).toEqual([LIC.id]); expect(onRulare).not.toHaveBeenCalled()
     await act(async () => { comuta(LIC_B) }); await asteapta()
-    await act(async () => { rezolva() }); await asteapta()
+    expect(pend.map(p => p.id)).toEqual([LIC.id, LIC_B.id])   // și încărcarea lui B e în zbor, separat
+    await act(async () => { pend[0].rezolva() }); await asteapta()   // se termină EXACT recitirea lui A
+    expect(onRulare).not.toHaveBeenCalled()
+    await act(async () => { pend[1].rezolva() }); await asteapta()
+    expect(onRulare).not.toHaveBeenCalled()
+  })
+  it('A → B → A: recitirea VECHE a lui A se termină după revenirea pe A → onRulare NU e chemat (contextul e generația, nu id-ul)', async () => {
+    st.tabele = TABELE_PROBA()
+    const pend = bugetSuspendat()
+    const onRulare = vi.fn()
+    const { act, asteapta, apasa, buton } = await monteazaProba(onRulare)
+    await apasa(buton('Rulează B'))
+    await act(async () => { comuta(LIC_B) }); await asteapta()
+    await act(async () => { comuta(LIC) }); await asteapta()
+    expect(pend.map(p => p.id)).toEqual([LIC.id, LIC_B.id, LIC.id])
+    await act(async () => { pend[0].rezolva() }); await asteapta()   // recitirea veche a lui A
+    expect(onRulare).not.toHaveBeenCalled()
+    await act(async () => { pend[2].rezolva() }); await asteapta()   // încărcarea nouă a lui A (nu e o rulare)
+    expect(onRulare).not.toHaveBeenCalled()
+  })
+  it('demontarea cu recitirea bugetului în zbor → onRulare NU e chemat după demontare', async () => {
+    st.tabele = TABELE_PROBA()
+    const pend = bugetSuspendat()
+    const onRulare = vi.fn()
+    const { apasa, buton } = await monteazaProba(onRulare)
+    await apasa(buton('Rulează B'))
+    expect(pend.length).toBe(1)
+    ;[...curata].reverse().forEach(f => f()); curata = []
+    pend[0].rezolva(); for (let i = 0; i < 80; i++) await Promise.resolve()
     expect(onRulare).not.toHaveBeenCalled()
   })
   it('recitirea bugetului RESPINSĂ după rulare → onRulare e chemat totuși (o dată, cu licitația rulării) și eroarea recitirii e afișată', async () => {
