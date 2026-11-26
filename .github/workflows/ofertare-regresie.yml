@@ -158,6 +158,8 @@ jobs:
           supabase/functions/ofertare-seap-import
           supabase/functions/ofertare-seap-veghe
           supabase/functions/ofertare-cerinte/autorizare_test.ts
+          supabase/functions/ofertare-cantitati-extrage/masuratori_test.ts
+          supabase/functions/ofertare-cantitati-extrage/structurat_test.ts
           supabase/functions/ofertare-verificare-finala
           worker/ofertare/plansa_test.ts
           worker/ofertare/poarta_coada_test.ts

@@ -1,6 +1,8 @@
 import { assert, assertEquals } from 'jsr:@std/assert@1'
-import { aplicaDecizii, type DepsStructurat, EXTRACTOR_ID, extractorCuContext, extrageStructurat, radacinaParte, sumaRezervata } from './structurat.ts'
+import { aplicaDecizii, type DepsStructurat, EXTRACTOR_ID, extractorCuContext, extrageStructurat, radacinaParte, sumaRezervata, TIPURI_ELIGIBILE } from './structurat.ts'
 import { feliiCuPozitie, FELIE, SUPRAPUNERE } from './sectiuni.ts'
+import { sha256Hex } from '../_shared/cantNormalizare.ts'
+import { numarPagini, paginiInterval } from '../_shared/cantMasura.ts'
 
 const TEXT_F3 = 'Formularul F3\nLista cu cantitatile de lucrari\nObiect 3 Str. Platanului\n= NR. SIMBOL ART. CANTITATE UM =\n002 GD11A1 [ 1] M.C. 174.000\nDRENAJ\n0.000 0 Total=\n003 SA11G1 [ 2] M 1160.000\nTEAVA PVC ... DISTRIBUTIE D= 90 MM\n0.000 0 Total=\n'
 const RAND = [null, null, null, 'SA11G1', 'TEAVA PVC ... DISTRIBUTIE D= 90 MM', 'Str. Platanului', 'PVC', 'D= 90 MM', null, 'M', '1160.000', 0, 0,
@@ -10,9 +12,20 @@ const DOC = { id: 212, nume_original: 'Liste de cantitati — p01_pag1-104.pdf',
 
 type Opt = { cerere?: any; refuzRezerva?: string; aiEroare?: boolean; aiAruncă?: boolean; cache?: boolean; pesteRezervare?: boolean
   inLucru?: number | null; inLucruCerere?: number; docsDupa?: any[]; grupSchimbat?: boolean; refuzGrup?: string; decizii?: any[]; ultima?: any; feliiExistente?: boolean; raspuns?: string; docs?: any[]; nevalide?: number[]
-  cereri?: Record<number, any>; feliiGata?: { gata: number; total: number }; refuzInchide?: string }
+  cereri?: Record<number, any>; feliiGata?: { gata: number; total: number }; refuzInchide?: string
+  // TKT-0329 A (PR-extragere): fotografia surselor (plafonul) și RPC-urile comparației, simulate; docsFoto = documente DOAR în fotografie
+  // (apărute între citirea documentelor și fotografie); eligibilitate = răspunsul deps.eligibilitateDocumente (lipsă = toate true)
+  plafon?: number; cacheIds?: number[]; fotoLipsa?: boolean; docsFoto?: any[]; deciziiContext?: Record<number, any[]> }
+// fotografia falsă a licitației: toate documentele rulării, cu paginile din marcaje; fără extrageri gata (comparația nu are felii de verificat)
+async function fotoFalsa(docs: any[], plafon: number) {
+  const documente = []
+  for (const d of docs) documente.push({ id: d.id, tip: d.tip, nume_original: d.nume_original, revizie: '-', sha: await sha256Hex(d.text_extras ?? ''), pagini: numarPagini(d.text_extras),
+    pagini_necitite: [], lot_stare: d.lot_stare, extragere_id: null, extractor_id: null, felii_distincte: 0, felii_sha: null, obs_sha: null, decizii_sha: 'd' })
+  return { licitatie_id: 15, documente, document_loturi_sha: 'l', stare_loturi: 'fara_loturi', cantitati_sha: 'c', prag: 0.05, plafon, v: 'surse_v1', sha: 'sha-foto' }
+}
 function fals(opt: Opt = {}) {
   const apeluri: string[] = []
+  const apeluriMasuratori: { fn: string; args: Record<string, unknown> }[] = []
   let obsScrise: any[] = []
   const toateObs: any[][] = []
   let aiApeluri = 0
@@ -22,6 +35,19 @@ function fals(opt: Opt = {}) {
   const deps: DepsStructurat = {
     rpc: async (fn, args) => {
       if (fn === 'fn_ofertare_cb_text_valid') return { data: (opt.nevalide || []).includes(Number(args.p_document_id)) ? {} : { tip: 'prov', id: 1 }, error: null }
+      // RPC-urile comparației (20270112a) — separate de apelurile de muncă, ca listele `apeluri` din probele vechi să rămână exacte
+      if (fn.startsWith('fn_ofertare_semnale_') || fn === 'fn_ofertare_masuratori_propune') {
+        apeluriMasuratori.push({ fn, args })
+        if (fn === 'fn_ofertare_semnale_fotografie') return opt.fotoLipsa ? { data: null, error: { message: 'PGRST202: funcția nu există' } } : { data: await fotoFalsa([...(opt.docs ?? [DOC]), ...(opt.docsFoto ?? [])], opt.plafon ?? 200), error: null }
+        if (fn === 'fn_ofertare_semnale_context') {
+          const d = [...(opt.docs ?? [DOC]), ...(opt.docsFoto ?? [])].find((x) => x.id === Number(args.p_document_id))
+          if (!d) return { data: { refuz: 'document_necunoscut' }, error: null }
+          return { data: { document_id: d.id, text_extras: d.text_extras ?? '', nume_original: d.nume_original, tip: d.tip, sha: await sha256Hex(d.text_extras ?? ''), decizii: (opt.deciziiContext ?? {})[d.id] ?? [], decizii_sha: 'd' }, error: null }
+        }
+        if (fn === 'fn_ofertare_masuratori_propune') return { data: { evaluare_id: 11, semnale: [], ignorate: [] }, error: null }
+        if (fn === 'fn_ofertare_semnale_publica') return { data: { evaluare_id: 11, semnale: [], n: 0 }, error: null }
+        return { data: [], error: null }
+      }
       apeluri.push(fn.replace('fn_ofertare_cb_', '') + (fn.endsWith('inchide') ? ':' + args.p_stare : ''))
       switch (fn) {
         case 'fn_ofertare_cb_extragere_incepe_grup':
@@ -29,7 +55,7 @@ function fals(opt: Opt = {}) {
           if (opt.grupSchimbat) return { data: { refuz: 'grup_schimbat' }, error: null }
           if (opt.refuzGrup) return { data: { refuz: opt.refuzGrup }, error: null }
           extractori.push(String(args.p_extractor_id))
-          if (opt.cache) return { data: { ok: true, cache: true, extragere_id: 7 }, error: null }
+          if (opt.cache || (opt.cacheIds ?? []).includes(Number(args.p_document_id))) return { data: { ok: true, cache: true, extragere_id: 7 }, error: null }
           if (opt.inLucru !== undefined) return { data: { refuz: 'extragere_in_lucru' }, error: null }
           return { data: { ok: true, cache: false, extragere_id: 7 }, error: null }
         case 'fn_ofertare_cb_felie_incepe':
@@ -57,9 +83,157 @@ function fals(opt: Opt = {}) {
     },
     acum: () => 0,
   }
-  return { deps, apeluri, obs: () => obsScrise, prima: () => toateObs[0] || [], ai: () => aiApeluri, extractori, argsGrup }
+  return { deps, apeluri, apeluriMasuratori, obs: () => obsScrise, prima: () => toateObs[0] || [], ai: () => aiApeluri, extractori, argsGrup }
 }
 const RULEAZA = (f: ReturnType<typeof fals>) => extrageStructurat(f.deps, { licitatie_id: 15, cerere_id: 5 })
+
+// ─── TKT-0329 A, PR-extragere (Task 7): plafonul înaintea procesării, tipul `formular`, comparația după bucla documentelor ───
+const paginaF3 = (n: number, umplutura = '') => `⟦PAGINA ${n}⟧\n003 SA11G1 [ 2] M 1160.000\nTEAVA PVC D= 90 MM${umplutura}\n0.000 0 Total=\n`
+const docPagini = (id: number, pagini: number, umplutura = '', tip = 'lista_cantitati') =>
+  ({ id, nume_original: `Lista ${id}.pdf`, tip, text_extras: 'Formularul F3\nLista cu cantitatile de lucrari\n' + Array.from({ length: pagini }, (_, i) => paginaF3(i + 1, umplutura)).join(''), seap_meta: null, lot_stare: 'comun' })
+const fnM = (f: ReturnType<typeof fals>, nume: string) => f.apeluriMasuratori.filter((a) => a.fn === nume)
+
+Deno.test('m_fara_ai: comparația rulează după bucla documentelor cu ZERO apeluri AI în plus; răspunsul poartă masuratori, plafon, peste_plafon', async () => {
+  const f = fals()
+  const r = await RULEAZA(f)
+  assertEquals([f.ai(), r.status], [1, 200])
+  // fotografia o dată pentru plafon (înaintea buclei) + o dată în comparație (după extragere); contextul fiecărui document; apoi propune → publică
+  assertEquals(f.apeluriMasuratori.map((a) => a.fn), ['fn_ofertare_semnale_fotografie', 'fn_ofertare_semnale_fotografie', 'fn_ofertare_semnale_context', 'fn_ofertare_masuratori_propune', 'fn_ofertare_semnale_publica'])
+  const b = r.body as any
+  assertEquals([b.masuratori.ok, b.masuratori.evaluare_id, b.plafon, b.peste_plafon], [true, 11, { plafon: 200, plafon_atins: false }, []])
+  // apelurile de muncă sunt EXACT cele de dinainte (drumul normal) — pasul nou nu schimbă extragerea
+  assertEquals(f.apeluri, ['extragere_incepe_grup', 'felie_incepe', 'rezerva', 'deconteaza', 'obs_scrie', 'felie_inchide:gata', 'extragere_inchide:gata'])
+})
+
+Deno.test('comparația rulează și la `oprit` (rezervare refuzată / plafon de bani), cu documentele neterminate în documente_necitite (starea din rulare)', async () => {
+  const f = fals({ refuzRezerva: 'plafon' })
+  const r = await RULEAZA(f)
+  assertEquals(r.body.oprit, 'rezervare:plafon')
+  assertEquals(fnM(f, 'fn_ofertare_masuratori_propune').length, 1)
+  const p = fnM(f, 'fn_ofertare_masuratori_propune')[0].args.p_pagini as any
+  assertEquals([p.documente_necitite, p.documente_necitite_stare], [[212], [{ document_id: 212, stare: 'esuat' }]])
+  // oprit pe timp: extragerea rămâne în lucru → starea spune asta
+  const g = fals({ docs: [DOC, { ...DOC, id: 213, nume_original: 'Alta.pdf' }] })
+  g.deps.acum = (() => { let n = 0; return () => (n++ > 0 ? 10 ** 9 : 0) })()   // t0 = 0, apoi bugetul e depășit la prima felie
+  const rg = await RULEAZA(g)
+  assertEquals(rg.body.oprit, 'buget_timp')
+  const pg = fnM(g, 'fn_ofertare_masuratori_propune')[0].args.p_pagini as any
+  assertEquals(pg.documente_necitite_stare, [{ document_id: 212, stare: 'in_lucru:buget_timp' }, { document_id: 213, stare: 'neprocesat:buget_timp' }])
+})
+
+Deno.test('documente_necitite = doar documentele de tip extractibil fără extragere gata: planșa nu intră; documentul extractibil fără text intră (sarit:fara_text)', async () => {
+  const f = fals({ docs: [DOC, { ...DOC, id: 300, tip: 'plansa', nume_original: 'Plan.pdf', text_extras: '[PLANSA: plan]' }, { ...DOC, id: 301, tip: 'alta', nume_original: 'Scan.pdf', text_extras: '' }] })
+  const r = await RULEAZA(f)
+  assertEquals(f.ai(), 1)
+  assert((r.body as any).raport.some((x: any) => x.document_id === 301 && x.sarit === 'fara_text'))
+  const p = fnM(f, 'fn_ofertare_masuratori_propune')[0].args.p_pagini as any
+  // fotografia falsă n-are extrageri gata → 212 (extras în această rulare, dar fotografia falsă nu știe) și 301 (fără text) sunt necitite; 300 (planșă) nu
+  assertEquals([p.documente_necitite, p.documente_necitite_stare], [[212, 301], [{ document_id: 212, stare: 'gata' }, { document_id: 301, stare: 'sarit:fara_text' }]])
+  // contextul e cerut DUPĂ fotografie, pentru EXACT documentele ei (nu lista citită la început)
+  assertEquals(fnM(f, 'fn_ofertare_semnale_context').map((a) => a.args.p_document_id), [212, 300, 301])
+})
+
+Deno.test('r1–r3 P1: document apărut între citirea documentelor și fotografie → necitit (nu dispare); scos doar de decizia omului pe „*” (din fotografie)', async () => {
+  const nou = { ...DOC, id: 999, tip: 'cs_volum', nume_original: 'Caiet nou.pdf', text_extras: '' }
+  const f = fals({ docsFoto: [nou] })
+  const r = await RULEAZA(f)
+  const p = fnM(f, 'fn_ofertare_masuratori_propune')[0].args.p_pagini as any
+  assertEquals([fnM(f, 'fn_ofertare_semnale_context').map((a) => a.args.p_document_id), p.documente_necitite], [[212, 999], [212, 999]])
+  assertEquals(p.documente_necitite_stare.find((x: any) => x.document_id === 999), { document_id: 999, stare: 'fara_extragere_gata' })
+  assertEquals((r.body as any).masuratori.ok, true)
+  const g = fals({ docsFoto: [nou], deciziiContext: { 999: [{ id: 1, rol: null, sectiune: '*', decizie: 'nu_e_sursa_cantitativa' }] } })
+  await RULEAZA(g)
+  assertEquals((fnM(g, 'fn_ofertare_masuratori_propune')[0].args.p_pagini as any).documente_necitite, [212])
+})
+
+Deno.test('fotografia indisponibilă (ex. migrarea neaplicată) = fail-closed: niciun RPC de muncă, niciun apel AI, raport cu eroarea', async () => {
+  const f = fals({ fotoLipsa: true })
+  const r = await RULEAZA(f)
+  const b = r.body as any
+  assertEquals([f.ai(), f.apeluri, b.ok, b.oprit, b.felii_apelate], [0, [], false, 'fotografie_indisponibila', 0])
+  assert(String(b.masuratori.eroare).startsWith('fotografie: PGRST202'))
+  assertEquals(f.apeluriMasuratori.map((a) => a.fn), ['fn_ofertare_semnale_fotografie'])
+  // o fotografie cu formă străină ({ok: true}) e la fel de inutilizabilă
+  const g = fals()
+  const rpc0 = g.deps.rpc
+  g.deps.rpc = async (fn, args) => fn === 'fn_ofertare_semnale_fotografie' ? { data: { ok: true }, error: null } : rpc0(fn, args)
+  const rg = await RULEAZA(g)
+  assertEquals([g.ai(), g.apeluri, (rg.body as any).oprit], [0, [], 'fotografie_indisponibila'])
+})
+
+Deno.test('m_formular: un document `formular` cu antet F3 intră în felii (înainte: sărit); fără secțiune cantitativă → sărit ca până acum', async () => {
+  assert(TIPURI_ELIGIBILE.includes('formular') && !TIPURI_ELIGIBILE.includes('plansa'))
+  const f = fals({ docs: [{ ...DOC, tip: 'formular', nume_original: 'Formulare ofertant.pdf' }] })
+  await RULEAZA(f)
+  assertEquals([f.ai(), f.apeluri.filter((x) => x === 'felie_incepe').length], [1, 1])
+  assertEquals(f.obs()[0]?.rol_sursa, 'f3')
+  const g = fals({ docs: [{ ...DOC, tip: 'formular', nume_original: 'Formulare ofertant.pdf', text_extras: 'Formular nr. 1\nDeclaratie privind neincadrarea\n' }] })
+  const rg = await RULEAZA(g)
+  assertEquals([g.ai(), g.apeluri], [0, []])
+  assert(JSON.stringify(rg.body.raport).includes('fara_sectiuni_cantitative'))
+  // tipurile neeligibile (ex. plansa) rămân sărite
+  const h = fals({ docs: [{ ...DOC, tip: 'plansa' }] })
+  await RULEAZA(h)
+  assertEquals([h.ai(), h.apeluri], [0, []])
+})
+
+Deno.test('m_plafon_aplicat: 3 documente × 100 pagini, plafon 200 → documentul 3 fără felie_incepe / rezervare / AI; paginile lui necitite; plafon_atins; peste_plafon', async () => {
+  const docs = [docPagini(1, 100), docPagini(2, 100), docPagini(3, 100)]
+  const f = fals({ docs })
+  const r = await RULEAZA(f)
+  const b = r.body as any
+  assertEquals([f.ai(), f.apeluri.filter((x) => x === 'felie_incepe').length, f.apeluri.filter((x) => x === 'rezerva').length], [2, 2, 2])
+  assertEquals(f.argsGrup.map((a) => a.p_document_id), [1, 2])
+  assertEquals([b.plafon, b.peste_plafon], [{ plafon: 200, plafon_atins: true }, [{ document_id: 3, felii: [0] }]])
+  assert(b.raport.some((x: any) => x.document_id === 3 && x.sarit === 'peste_plafon'))
+  const p = fnM(f, 'fn_ofertare_masuratori_propune')[0].args.p_pagini as any
+  assertEquals(p.pagini_necitite, [{ document_id: 3, pagini: Array.from({ length: 100 }, (_, i) => i + 1) }])
+  assertEquals([p.plafon, p.plafon_atins], [200, true])
+  // plafon 300: toate trei procesate
+  const g = fals({ docs, plafon: 300 })
+  await RULEAZA(g)
+  assertEquals([g.ai(), g.argsGrup.length], [3, 3])
+})
+
+Deno.test('m_plafon_aplicat: o felie care traversează limita e exclusă ÎNTREAGĂ (nu se împarte); extragerea rămâne partial; paginile ei + cele de peste limită necitite', async () => {
+  // 250 de pagini × ~300 caractere → două felii: [0, 55000) și [53000, …); a doua trece de pagina 200 → exclusă; prima e sub limită
+  const d = docPagini(212, 250, ' ' + 'x'.repeat(240))
+  const text = d.text_extras
+  const felii = feliiCuPozitie(text)
+  assertEquals(felii.length, 2)
+  const pg0 = paginiInterval(text, felii[0].de, felii[0].de + felii[0].text.length), pg1 = paginiInterval(text, felii[1].de, felii[1].de + felii[1].text.length)
+  assert(pg0.pagina_pana_la <= 200 && pg1.pagina_de_la <= 200 && pg1.pagina_pana_la === 250, JSON.stringify([pg0, pg1]))
+  const f = fals({ docs: [d] })
+  const r = await RULEAZA(f)
+  const b = r.body as any
+  assertEquals([f.ai(), f.apeluri.filter((x) => x === 'felie_incepe').length, b.peste_plafon], [1, 1, [{ document_id: 212, felii: [1] }]])
+  assertEquals(f.argsGrup[0].p_felii_total, 2)
+  assertEquals(f.apeluri.at(-1), 'extragere_inchide:partial')
+  assert(b.raport.some((x: any) => x.document_id === 212 && x.felie === 1 && JSON.stringify(x.peste_plafon) === JSON.stringify([pg1.pagina_de_la, pg1.pagina_pana_la])))
+  const p = fnM(f, 'fn_ofertare_masuratori_propune')[0].args.p_pagini as any
+  const nec: number[] = p.pagini_necitite[0].pagini
+  assertEquals([p.pagini_necitite[0].document_id, nec[0], nec.at(-1), nec.includes(pg1.pagina_de_la - 1), nec.includes(201)], [212, pg1.pagina_de_la, 250, false, true])
+  // la plafon 250 ambele felii se procesează
+  const g = fals({ docs: [d], plafon: 250 })
+  await RULEAZA(g)
+  assertEquals([g.ai(), g.apeluri.at(-1)], [2, 'extragere_inchide:gata'])
+})
+
+Deno.test('m_plafon_aplicat: documentul din cache (id mic) consumă plafonul — al doilea document NOU e exclus deși primul n-a costat nimic', async () => {
+  const docs = [docPagini(5, 150), docPagini(9, 100)]
+  const f = fals({ docs, cacheIds: [5] })
+  const r = await RULEAZA(f)
+  assertEquals([f.ai(), f.apeluri], [0, ['extragere_incepe_grup']])   // doc 5 = cache (un singur RPC), doc 9 = sărit pe plafon
+  assertEquals((r.body as any).peste_plafon, [{ document_id: 9, felii: [0] }])
+  const p = fnM(f, 'fn_ofertare_masuratori_propune')[0].args.p_pagini as any
+  assertEquals(p.pagini_necitite, [{ document_id: 9, pagini: Array.from({ length: 100 }, (_, i) => i + 1) }])
+  // un document care nu e în fotografie (a apărut între timp) = 0 pagini permise, conservator
+  const g = fals({ docs: [docPagini(1, 10)] })
+  const rpc0 = g.deps.rpc
+  g.deps.rpc = async (fn, args) => { const r = await rpc0(fn, args); return fn === 'fn_ofertare_semnale_fotografie' ? { data: { ...r.data, documente: [] }, error: null } : r }
+  await RULEAZA(g)
+  assertEquals([g.ai(), g.apeluri], [0, []])
+})
 
 Deno.test('fără cerere activă → 402, niciun RPC de muncă și niciun apel AI', async () => {
   for (const cerere of [null, { id: 5, licitatie_id: 15, scop: 'cant_extragere', stare: 'anulata', valabil_pana: ACUM, lot_domeniu: 'toate', lot_nr: [] },

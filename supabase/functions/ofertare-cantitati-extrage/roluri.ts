@@ -9,6 +9,10 @@
 import { sectiuniLista } from './sectiuni.ts'
 
 export type Rol = 'f3' | 'c6' | 'lista_alt' | 'atr' | 'cs' | 'fisa_date' | 'memoriu' | 'plansa' | 'raspuns' | 'alt'
+// rolurile pe care extragerea structurată le trimite la AI (din structurat.ts; aici ca aceeași listă să decidă și „documentul are ce extrage” în
+// comparația cantităților — _shared/cantMasura.ts, L19). review Jakarinos #757 r1 (P1): 'lista_alt' rămâne extrasă — eticheta e euristică
+// (o pagină F3 / un memoriu pot moșteni lista_alt), deci excluderea ei poate tăia lungimi reale
+export const ROLURI_EXTRASE: Rol[] = ['f3', 'c6', 'lista_alt', 'atr', 'cs', 'fisa_date', 'memoriu', 'plansa', 'raspuns']
 export type DecisDe = 'antet' | 'marcaj' | 'titlu' | 'model' | 'om'
 export type SectiuneRol = { de: number; pana: number; pagini: [number, number] | null; rol: Rol; decis_de: DecisDe }
 
@@ -127,4 +131,19 @@ function paginaUltima(t: string, de: number, pana: number): number | null {
 // secțiunea în formatul deciziilor umane: „*” (tot documentul) sau „a-b” (pagini)
 export function cheieSectiune(s: SectiuneRol, totDocumentul: boolean): string {
   return totDocumentul || !s.pagini ? '*' : `${s.pagini[0]}-${s.pagini[1]}`
+}
+
+export type SectiuneDecisa = Omit<SectiuneRol, 'rol'> & { rol: Rol | null }
+// deciziile umane pe secțiune: „*” = tot documentul; „a-b” = paginile secțiunii trebuie să fie exact a-b
+// (mutată aici din structurat.ts la PR-extragere TKT-0329 A: reconstruirea rolului pe felie din _shared/cantMasura.ts folosește EXACT
+// același calcul ca rularea extragerii — L19; structurat.ts o re-exportă)
+export function aplicaDecizii(s: SectiuneRol[], decizii: { rol: string; sectiune: string; decizie: string }[]): SectiuneDecisa[] {
+  return s.map((x): SectiuneDecisa => {
+    const cheie = cheieSectiune(x, false)
+    const d = decizii.find((y) => y.sectiune === cheie) ?? decizii.find((y) => y.sectiune === '*')
+    if (!d) return x
+    if (d.decizie === 'nu_e_sursa_cantitativa') return { ...x, rol: null }
+    if (d.decizie === 'rol_confirmat') return { ...x, rol: d.rol as Rol, decis_de: 'om' as const }
+    return x
+  })
 }
