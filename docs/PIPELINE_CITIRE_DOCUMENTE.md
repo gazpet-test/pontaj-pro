@@ -230,7 +230,7 @@ Testele: 56 Deno (`deno test -A scripts/recitire_val1/`) și harness-ul PG16 `sc
 - **Ce face:** măsurătorile citite din documentele unei licitații (F3, ATR, CS / memoriu, răspunsuri) se compară pe aceeași măsură canonică (lot, obiect, element, natură, UM); o diferență peste prag (implicit 5%) dă o ciornă de clarificare `auto_surse_*`, cu dovezile din ambele surse. Fără inventar complet sau cu dovadă neverificată → `neverificat`, nu „în regulă”.
 - **BD (20270112a, aplicată 26.11.2026):** `ofertare_cantitati_masuratori`, `_evaluari`, `_semnale`, `_setari`, listele închise `ofertare_elemente_masura` (139) / `ofertare_tipare_cantitate` (19); publicarea atomică prin RPC; circuitul de protecție al ciornelor `auto_planse_*` extins la `auto_surse_*`. Revenire: `supabase/revenire/20270112a_ofertare_cantitati_masuratori_ROLLBACK.sql`.
 - **Extragerea (pasul din procesarea plătită) și ecranul** vin în PR-urile următoare (PR-extragere, PR-UI); până atunci tabelele stau goale.
-- **Citirea:** RLS ca la cantități (orice cont logat citește; scrierile doar prin RPC-urile de server).
+- **Citirea:** tabelele operaționale (măsurători, evaluări, semnale, setări) cer acces Ofertare; nomenclatoarele (`ofertare_elemente_masura`, `ofertare_tipare_cantitate`) sunt accesibile oricărui cont autentificat. Scrierile se fac doar prin RPC-urile de server, cu autorizarea aferentă.
 
 ### 1.5 Porțile și plafoanele (rezumat)
 
