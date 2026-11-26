@@ -1,5 +1,9 @@
 # Administrativ → Unități protejate: fondul de handicap necheltuit (20261229a)
 
+> **Actualizare 20.11.2026 (20270101a, NEAPLICATĂ):** plafonul fix e înlocuit de contribuția CALCULATĂ după răspunsul expertului
+> contabil (NMA din pontaj, salariul minim pe perioade, deducerea = cel mult jumătate, reportul). Vezi `docs/administrativ/UPA_CALCUL_EXPERT.md`.
+> Restul documentului (jurnalul, destinatarii, drepturile, bucketul) rămâne valabil.
+
 Deciziile owner-ului (19.11.2026):
 
 - Plafonul lunar (azi 7.000 lei) rămâne o valoare **setată** de firmă (o calculează ei din numărul de angajați raportat la cei cu handicap

@@ -76,7 +76,7 @@ import { analizaDublura, texteAltContinut, cheieDosar, perechiDeVerificat, bucat
   STATUS_COADA, rezultatInserareHR, MESAJ_MIGRARE_SURSA, copieDeSters, mesajRefuzSursa,
   fisierDinRand, faraMetadateSursa, MESAJ_SURSA_FARA_METADATE } from './citesteOriceDubluri.js'
 // UPA (20261229b): numărul facturii obligatoriu pe card + refuzul gărzii din BD tradus
-import { numarFacturaUpa, mesajInsertUpa } from './upaLogica.js'
+import { numarFacturaUpa, mesajInsertUpa, validaFaraTva } from './upaLogica.js'
 
 const supabase = instrumenteazaStorageRls(createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -787,6 +787,9 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
     const dd = row.payload_ai?.date_document || {}
     const valoare = Number(row._editValoare ?? dd.valoare_totala)
     if (!valoare || valoare <= 0) { flash('err', 'Completează valoarea facturii (lei, cu TVA).'); return }
+    // 20270101a: se deduce valoarea FĂRĂ TVA (o completează omul de pe factură; AI-ul citește doar totalul cu TVA)
+    const faraTva = validaFaraTva(row._editFaraTva, valoare)
+    if (faraTva.eroare) { flash('err', faraTva.eroare + ' (câmpul „Valoare fără TVA” de pe card)'); return }
     const lunaStr = row._editLuna || (dd.data_emitere ? dd.data_emitere.slice(0, 7) : new Date().toISOString().slice(0, 7))
     // 20261229b: numărul facturii e obligatoriu (garda în BD pe rândurile noi); de pe card: editat de om, altfel cel citit de AI
     const numar = numarFacturaUpa(row._editNumar, dd.numar)
@@ -797,7 +800,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
       const { data: created, error: insErr } = await supabase.from('upa_achizitii').insert({
         furnizor_id: furnizorId, furnizor_nume: fz.nume || fz.label,
         luna: lunaStr + '-01', numar_factura: numar, data_factura: dd.data_emitere || null,
-        valoare, descriere: row.payload_ai?.titlu_scurt || null,
+        valoare, valoare_fara_tva: faraTva.valoare, descriere: row.payload_ai?.titlu_scurt || null,
         document_path: destPath, created_by: profile.id,
       }).select('id').single()
       if (insErr) throw new Error(mesajInsertUpa(insErr))
@@ -1158,6 +1161,11 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                                     <span style={{ color:G.muted, display:'block', marginBottom:4 }}>Valoare factură (lei, cu TVA)</span>
                                     <input type="number" step="0.01" value={row._editValoare ?? dd.valoare_totala ?? ''}
                                       onChange={e => patch(row.id, '_editValoare', e.target.value)} style={sel} placeholder="0.00" />
+                                  </label>
+                                  <label style={{ flex:'1 1 160px', fontSize:12 }}>
+                                    <span style={{ color: String(row._editFaraTva ?? '').trim() ? G.muted : G.yellow, display:'block', marginBottom:4 }}>Valoare fără TVA (lei) *{String(row._editFaraTva ?? '').trim() ? '' : ' (se deduce)'}</span>
+                                    <input type="number" step="0.01" value={row._editFaraTva ?? ''}
+                                      onChange={e => patch(row.id, '_editFaraTva', e.target.value)} style={{ ...sel, borderColor: String(row._editFaraTva ?? '').trim() ? undefined : G.yellow }} placeholder="de pe factură" />
                                   </label>
                                   <label style={{ flex:'1 1 150px', fontSize:12 }}>
                                     <span style={{ color:G.muted, display:'block', marginBottom:4 }}>Luna din care se scade</span>

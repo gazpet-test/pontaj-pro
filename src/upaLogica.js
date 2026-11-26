@@ -1,6 +1,6 @@
-// Unități protejate (UPA, 20261229a) — logica pură a ecranului (fără rețea; testele: src/upaAlerta.test.js).
-// Ce e „sub plafon după ziua din setări” NU se calculează aici: vine calculat din BD (fn_upa_luni.in_alerta, L19).
-import { lei } from '../supabase/functions/_shared/upaAlerta.mjs'
+// Unități protejate (UPA, 20261229a; calculul 20270101a) — logica pură a ecranului (fără rețea; testele: src/upaAlerta.test.js).
+// Contribuția, deducerea, reportul și „mai e de cumpărat după ziua din setări” NU se calculează aici: vin din BD (fn_upa_situatie, L19).
+import { lei, ziText } from '../supabase/functions/_shared/upaAlerta.mjs'
 import { respingereServer } from './citesteOriceDubluri.js'
 
 // ziua de azi în România (L17: nu UTC, nu new Date('YYYY-MM-DD'))
@@ -24,13 +24,21 @@ export function luniInapoi(zi, n) {
 const LUNI = ['ianuarie', 'februarie', 'martie', 'aprilie', 'mai', 'iunie', 'iulie', 'august', 'septembrie', 'octombrie', 'noiembrie', 'decembrie']
 const numeLuna = l => { const x = lunaDinZi(l); return x ? `${LUNI[Number(x.slice(5, 7)) - 1]} ${x.slice(0, 4)}` : '—' }
 
-// plafonul scris în ecran (input type=number: punct zecimal): număr pozitiv, cel mult 2 zecimale, sub 10 milioane
-export function validaPlafon(text) {
+// o sumă scrisă în ecran (input type=number: punct zecimal): număr cu cel mult 2 zecimale, sub 10 milioane; zero doar dacă e permis
+export function validaSuma(text, { zero = false, ce = 'Suma' } = {}) {
   const t = String(text ?? '').trim()
-  if (!/^[0-9]{1,7}([.][0-9]{1,2})?$/.test(t)) return { eroare: 'Plafonul trebuie să fie un număr pozitiv, cu cel mult două zecimale.' }
+  if (!/^[0-9]{1,7}([.][0-9]{1,2})?$/.test(t)) return { eroare: `${ce} trebuie să fie un număr, cu cel mult două zecimale.` }
   const v = Number(t)
-  if (!Number.isFinite(v) || v <= 0) return { eroare: 'Plafonul trebuie să fie mai mare ca zero.' }
+  if (!Number.isFinite(v) || v < 0 || (!zero && v === 0)) return { eroare: `${ce} trebuie să fie mai mare ca zero.` }
   return { valoare: v }
+}
+// valoarea fără TVA a unei facturi: obligatorie, > 0 și cel mult valoarea cu TVA (aceeași regulă ca CHECK-ul upa_achizitii_fara_tva_interval)
+export function validaFaraTva(text, valoareCuTva) {
+  const v = validaSuma(text, { ce: 'Valoarea fără TVA' })
+  if (v.eroare) return v
+  const c = Number(valoareCuTva)
+  if (Number.isFinite(c) && v.valoare > c) return { eroare: 'Valoarea fără TVA nu poate fi mai mare decât valoarea cu TVA.' }
+  return v
 }
 
 // avertismentele la adăugarea unei achiziții (nu blochează salvarea)
@@ -52,7 +60,30 @@ export function avertismenteAchizitie({ dataFactura, luna, arePdf }) {
 //   'refuzat_nesigur' refuz acum, dar o încercare anterioară a avut rezultat nesigur: refuzul reîncercării NU dovedește refuzul ei
 //                     (rândul ei poate exista și trimite la PDF) → nimic șters, formularul rămâne înghețat
 //   'necunoscut'      rețea / timeout / 5xx / răspuns în afara contractului / conflict tranzitoriu (40001…): nimic șters, reîncercarea identică
-export const CAMPURI_INTENTIE = ['furnizor_id', 'furnizor_nume', 'numar_factura', 'data_factura', 'luna', 'valoare', 'descriere', 'document_path']
+// 20270101a: + valoare_fara_tva, data_plata, stare_plata (aceeași listă ca fn_upa_campuri_intentie_v2 din BD; fără ele, amprenta e cea din 20261229a)
+export const CAMPURI_INTENTIE = ['furnizor_id', 'furnizor_nume', 'numar_factura', 'data_factura', 'luna', 'valoare', 'descriere', 'document_path',
+  'valoare_fara_tva', 'data_plata', 'stare_plata']
+// plata unei facturi din formular / din listă: 'platita' (cu data) / 'neplatita' (știut: nu se deduce) / '' = necunoscut (luna nu se închide);
+//   aceeași regulă ca CHECK-ul upa_achizitii_stare_plata
+export function validaPlata(stare, data) {
+  if (stare === 'platita') {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(data ?? ''))) return { eroare: 'Alege data plății.' }
+    return { stare_plata: 'platita', data_plata: data }
+  }
+  if (stare === 'neplatita') return { stare_plata: 'neplatita', data_plata: null }
+  if (stare === '' || stare == null) return { stare_plata: null, data_plata: null }
+  return { eroare: 'Starea plății e necunoscută.' }
+}
+// starea plății unui rând (pentru listă)
+export function textPlata(a) {
+  if (!a) return { text: '—', ton: 'gri' }
+  if (a.stare_plata === 'platita') {
+    const tarziu = String(a.data_plata ?? '').slice(0, 7) > String(a.luna ?? '').slice(0, 7)
+    return { text: `plătită ${ziText(a.data_plata)}${tarziu ? ' (după sfârșitul lunii: nu se deduce)' : ''}`, ton: tarziu ? 'rosu' : 'gri' }
+  }
+  if (a.stare_plata === 'neplatita') return { text: 'neplătită (nu se deduce dacă nu se plătește în lună)', ton: 'galben' }
+  return { text: 'plata necompletată (luna nu se poate închide)', ton: 'galben' }
+}
 export const COD_DIFERIT = 'UPA02'
 const CODURI_TRANZITORII = new Set(['40001', '40P01', '55P03', '57014'])
 export function stareSalvare(res, ambiguuAnterior = false) {
@@ -92,23 +123,132 @@ export const ordineFurnizori = (a, b) => String(a.nume ?? '').localeCompare(Stri
 export class Oprit extends Error { constructor() { super('oprit'); this.oprit = true } }
 export const paginaCuGarda = (curent, cerePagina) => (ultim, pas) => { if (!curent()) throw new Oprit(); return cerePagina(ultim, pas) }
 
-// textul unei luni din istoric (rândurile fn_upa_luni): plafonul ACELEI luni, necheltuitul de la închidere (instantaneul), diferențele de după
-export function starePlafonLuna(l) {
-  const plafon = l.plafon == null ? null : Number(l.plafon)
-  const consumat = Number(l.consumat) || 0
-  if (l.e_curenta) {
-    if (plafon == null) return { text: 'în curs · plafon neînregistrat', ton: 'galben' }
-    const r = Math.max(0, plafon - consumat)
-    return r > 0 ? { text: `în curs · rămân ${lei(r)} lei`, ton: l.in_alerta ? 'rosu' : 'gri' } : { text: 'în curs · plafon consumat ✓', ton: 'verde' }
+// ─── Calculul contribuției (20270101a, răspunsul expertului contabil) ────────────────────────────────────────────────────
+// Numerele vin calculate din BD (fn_upa_situatie -> fn_upa_calcul_la, L19); aici doar textele ecranului. null = necunoscut, nu 0 (L18).
+export const esteNumar = v => v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v))
+export const leiSauLipsa = v => esteNumar(v) ? lei(v) : '—'
+const nrTxt = (n, unu, multe) => `${n} ${n === 1 ? unu : multe}`
+// codurile de blocaj / avertisment ale calculului -> text pentru oameni (necunoscut = codul, lizibil)
+const TEXTE_COD = {
+  fara_salariu_minim: () => 'salariul minim al lunii nu e înregistrat (Parametri)',
+  fara_nr_handicap: () => 'numărul angajaților cu handicap nu e înregistrat (Parametri)',
+  fara_inceput_calcul: () => 'prima lună a calculului nu e stabilită (Parametri → report inițial)',
+  inainte_de_inceput: () => 'luna e dinaintea primei luni a calculului',
+  luna_anterioara_neinchisa: () => 'luna anterioară nu are încă calculul închis',
+  report_necunoscut: () => 'reportul din lunile anterioare nu se poate calcula',
+  report_din_previziune: () => 'reportul vine din previziunea lunii anterioare',
+  pontaj_neinchis: () => 'pontajul lunii nu e încă închis (corecturile se fac până pe 12 a lunii următoare)',
+  pontaj_in_curs: () => 'luna e în curs: pontajul zilelor rămase se completează',
+  pontaj_lipsa: n => nrTxt(n, 'zi lucrătoare', 'zile lucrătoare') + ' fără pontaj (angajat × zi; poate fi și o zi lucrătoare de dinainte / de după lună, de care depind zilele libere de la margini): se completează pontajul înainte de închidere',
+  calendar_incomplet: an => `calendarul sărbătorilor legale pe ${an ?? 'an'} nu e încărcat (Setări → Calendar)`,
+  angajati_cu_corectii: n => nrTxt(n, 'angajat cu corecție', 'angajați cu corecții') + ' HR (normă / administrator / suspendare), vezi Detaliu NMA',
+  sub_50_angajati: () => 'numărul mediu de angajați sub 50: nu există obligație',
+  suspendari_langa_zile_libere: n => nrTxt(n, 'angajat', 'angajați') + ' cu CFS / suspendare lângă un weekend sau o sărbătoare: zilele libere de la capăt se numără active; dacă actul le acoperă, trece codul și pe ele în pontaj (vezi Detaliu NMA)',
+  achizitii_fara_tva: n => nrTxt(n, 'factură fără', 'facturi fără') + ' valoarea fără TVA',
+  achizitii_fara_data_platii: n => nrTxt(n, 'factură fără', 'facturi fără') + ' data plății',
+  achizitii_fara_stare_plata: n => nrTxt(n, 'factură', 'facturi') + ' cu plata necompletată (plătită / neplătită)',
+  achizitii_neplatite: n => nrTxt(n, 'factură neplătită', 'facturi neplătite') + ' încă (se deduc doar dacă se plătesc până la sfârșitul lunii)',
+  achizitii_neplatite_excluse: n => nrTxt(n, 'factură neplătită', 'facturi neplătite') + ' în lună (nu intră în deducere)',
+  achizitii_platite_dupa_termen: n => nrTxt(n, 'factură plătită', 'facturi plătite') + ' după sfârșitul lunii (nu intră în deducere)',
+  angajati_fara_data_angajarii: n => nrTxt(n, 'angajat', 'angajați') + ' fără data angajării (se completează în HR)',
+  angajati_fara_norma: n => nrTxt(n, 'angajat', 'angajați') + ' fără normă (se completează în HR)',
+  inactivi_fara_data_incetarii_cu_pontaj: n => nrTxt(n, 'angajat inactiv', 'angajați inactivi') + ' fără data încetării, cu pontaj în lună (se completează data în HR)',
+}
+// Detaliu NMA: zilele libere numărate active lângă o suspendare (runda 4)
+export const nrZileLibere = n => nrTxt(Number(n), 'zi liberă', 'zile libere')
+export function textCod(cod) {
+  // numele poate avea cifre (sub_50_angajati, runda 4: înainte apărea codul brut pe ecran)
+  const m = /^([a-z][a-z0-9_]{0,59})(?::([0-9]{1,6}))?$/.exec(String(cod ?? ''))
+  if (!m) return String(cod ?? '')
+  const f = TEXTE_COD[m[1]]
+  return f ? f(m[2] == null ? null : Number(m[2])) : m[1].replace(/_/g, ' ')
+}
+const lst = v => Array.isArray(v) ? v : []
+// starea unei luni din istoric (un rând din fn_upa_situatie.luni)
+export function stareCalculLuna(c) {
+  if (!c || typeof c !== 'object') return { text: '—', ton: 'gri' }
+  if (c.stare === 'in_afara_calculului') return { text: 'în afara calculului', ton: 'gri' }
+  const rep = esteNumar(c.report_iesit) && Number(c.report_iesit) > 0
+  if (c.stare === 'definitiv') {
+    return { text: `închis · de plată la stat ${lei(c.de_plata)} lei până pe ${ziText(c.termen_stat)}${rep ? ` · se reportează ${lei(c.report_iesit)} lei` : ''}`,
+             ton: Number(c.de_plata) > 0 ? 'rosu' : 'verde' }
   }
-  if (l.inchisa) {
-    const rn = Number(l.ramas_necheltuit) || 0
-    const dupa = consumat - (Number(l.consumat_inchis) || 0)
-    const extra = Math.abs(dupa) >= 0.005 ? ` · după închidere ${dupa > 0 ? '+' : '−'}${lei(Math.abs(dupa))} lei` : ''
-    return rn > 0 ? { text: `necheltuit ${lei(rn)} lei (de plătit la bugetul de stat, plafon ${lei(l.plafon_inchis)})${extra}`, ton: 'rosu' }
-      : { text: `plafon consumat ✓${extra}`, ton: 'verde' }
+  if (!esteNumar(c.de_plata)) return { text: 'calcul incomplet: ' + (lst(c.blocaje).map(textCod).join('; ') || 'date lipsă'), ton: 'galben' }
+  const pref = c.poate_inchide ? 'gata de închis' : c.pontaj_inchis ? 'de completat înainte de închidere' : 'previziune'
+  return { text: `${pref} · de plată ${c.poate_inchide ? '' : 'estimat '}${lei(c.de_plata)} lei${rep ? ` · report ${c.poate_inchide ? '' : 'estimat '}${lei(c.report_iesit)} lei` : ''}`,
+           ton: c.poate_inchide ? 'verde' : 'galben' }
+}
+// eticheta stării (insignă): PREVIZIUNE până la închiderea pontajului, apoi valoarea exactă
+export const etichetaStare = c => !c ? '' : c.stare === 'definitiv' ? 'EXACT (închis)' : c.stare === 'previziune' ? (c.pontaj_inchis ? 'DE ÎNCHIS' : 'PREVIZIUNE') : ''
+
+// ─── Parametrii pe perioade (upa_parametri, fn_upa_parametru_seteaza) ──────────────────────────────────────────────────
+// termen_stat_zi (runda 6, experta contabilă 25.11.2026): ziua din luna următoare până la care se plătește la stat (fără rând = 25; 21 pentru
+//   noiembrie 2026); zi întreagă 1..25, aceeași regulă ca CHECK-ul upa_parametri_valoare și RPC-ul
+export const CHEI_PARAMETRI = ['salariu_minim', 'angajati_handicap', 'report_initial', 'termen_stat_zi']
+export const NUME_PARAMETRU = { salariu_minim: 'Salariul minim brut pe țară (lei)', angajati_handicap: 'Angajați cu handicap', report_initial: 'Report inițial (lei, prima lună a calculului)',
+  termen_stat_zi: 'Termenul de plată la stat (ziua din luna următoare; fără valoare = 25)' }
+export const TERMEN_ZI_MAX = 25
+// luna din ecran ('AAAA-LL') + valoarea -> argumentele RPC-ului, sau eroarea
+export function validaParametru(cheie, lunaText, text) {
+  if (!CHEI_PARAMETRI.includes(cheie)) return { eroare: 'Alege parametrul.' }
+  const m = /^(\d{4})-(\d{2})$/.exec(String(lunaText ?? ''))
+  if (!m || Number(m[2]) < 1 || Number(m[2]) > 12) return { eroare: 'Alege luna de la care se aplică.' }
+  const v = validaSuma(text, { zero: cheie !== 'salariu_minim' && cheie !== 'termen_stat_zi', ce: 'Valoarea' })
+  if (v.eroare) return v
+  if (cheie === 'angajati_handicap' && !Number.isInteger(v.valoare)) return { eroare: 'Numărul angajaților cu handicap trebuie să fie întreg.' }
+  if (cheie === 'termen_stat_zi' && (!Number.isInteger(v.valoare) || v.valoare > TERMEN_ZI_MAX)) return { eroare: `Termenul e o zi întreagă a lunii următoare, între 1 și ${TERMEN_ZI_MAX}.` }
+  return { de_la: `${m[1]}-${m[2]}-01`, valoare: v.valoare }
+}
+// valoarea unui parametru, pentru oameni (lista și mesajul de după salvare)
+export function textValoareParametru(cheie, valoare) {
+  if (cheie === 'angajati_handicap') return String(Number(valoare))
+  if (cheie === 'termen_stat_zi') return `ziua ${Number(valoare)} a lunii următoare`
+  return lei(valoare) + ' lei'
+}
+// valoarea văzută de om pentru rândul (cheie, de_la) — CAS-ul RPC-ului (p_vechi); null = rândul nu există
+export function valoareVazuta(parametri, cheie, deLa) {
+  const r = lst(parametri).find(p => p.cheie === cheie && String(p.de_la).slice(0, 10) === deLa)
+  return r && esteNumar(r.valoare) ? Number(r.valoare) : null
+}
+// ─── Corecțiile HR pe interval (upa_angajat_perioade, fn_upa_perioada_adauga; doar owner-ul) ──────────────────────────────
+// formularul -> argumentele RPC-ului, sau eroarea (aceleași reguli ca în BD: interval, normă în (0, 1], cel puțin o schimbare, motivul)
+export function validaPerioada({ employee_id, de_la, pana_la, norma, administrator, suspendat, nota }) {
+  const id = Number(employee_id)
+  if (!Number.isSafeInteger(id) || id <= 0) return { eroare: 'Alege angajatul.' }
+  if (!ZI.test(String(de_la ?? '')) || !ZI.test(String(pana_la ?? ''))) return { eroare: 'Alege intervalul (de la / până la).' }
+  if (String(pana_la) < String(de_la)) return { eroare: '„Până la” e înaintea lui „de la”.' }
+  let n = null
+  if (String(norma ?? '').trim() !== '') {
+    const t = String(norma).trim()
+    if (!/^(0([.][0-9]{1,4})?|1([.]0{1,4})?)$/.test(t) || Number(t) <= 0) return { eroare: 'Norma e o fracție între 0 și 1 (ex. 0.5 = 4 ore din 8).' }
+    n = Number(t)
   }
-  if (plafon == null) return { text: 'plafon neînregistrat pentru luna asta', ton: 'gri' }
-  const r = Math.max(0, plafon - consumat)
-  return { text: r > 0 ? `neînchisă · estimat necheltuit ${lei(r)} lei` : 'neînchisă · plafon consumat ✓', ton: r > 0 ? 'galben' : 'verde' }
+  const adm = administrator === 'da' ? true : administrator === 'nu' ? false : null
+  const susp = suspendat === true
+  if (n === null && adm === null && !susp) return { eroare: 'Alege ce se schimbă: norma, administrator sau suspendare.' }
+  const motiv = String(nota ?? '').trim()
+  if (!motiv) return { eroare: 'Scrie motivul (actul adițional / decizia).' }
+  if (motiv.length > 300) return { eroare: 'Motivul are peste 300 de caractere.' }
+  return { p_employee_id: id, p_de_la: de_la, p_pana_la: pana_la, p_norma: n, p_administrator: adm, p_suspendat: susp, p_nota: motiv }
+}
+export function mesajPerioada(err) {
+  if (err?.code === '42501') return 'Corecțiile HR le face doar owner-ul.'
+  if (err?.code === 'UPA05') return 'Intervalul se suprapune cu altă corecție a angajatului: șterge-o sau alege alt interval.'
+  if (err?.code === 'UPA03') return 'O lună deja închisă folosește intervalul: nu se mai poate schimba.'
+  if (err?.code === '22023') return 'Corecție invalidă (interval, normă, motiv).'
+  return 'Eroare: ' + (err?.message || 'refuzat')
+}
+// închiderea calculului (owner, pe amprenta văzută)
+export function mesajInchidere(err) {
+  if (err?.code === '42501') return 'Închiderea calculului (confirmarea datelor HR) o face doar owner-ul.'
+  if (err?.code === '40001') return 'Datele lunii s-au schimbat de la afișare (pontaj, facturi, corecții). Am reîncărcat: verifică din nou și închide.'
+  return 'Eroare: ' + (err?.message || 'refuzat')
+}
+
+// refuzurile RPC-ului de parametri -> text
+export function mesajParametru(err) {
+  if (err?.code === '42501') return 'Nu ai drept să schimbi parametrii (cere acces Administrativ › Unități protejate, editor).'
+  if (err?.code === '40001') return 'Parametrul s-a schimbat între timp (din alt ecran). Am reîncărcat valorile.'
+  if (err?.code === 'UPA03') return 'O lună deja închisă folosește valoarea asta: alege o lună de după ultima lună închisă.'
+  return 'Eroare: ' + (err?.message || 'refuzat')
 }
