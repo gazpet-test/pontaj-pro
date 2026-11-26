@@ -10,7 +10,7 @@
 import { conventieDocument, type Conventie } from '../_shared/cantNumar.ts'
 import { CAMPURI_RAND, normalizeazaRand, randDinTablou, sha256Hex } from '../_shared/cantNormalizare.ts'
 import { feliiCuPozitie } from './sectiuni.ts'
-import { type Rol, type SectiuneRol, cheieSectiune, sectiuniRol } from './roluri.ts'
+import { type Rol, type SectiuneRol, aplicaDecizii, cheieSectiune, sectiuniRol } from './roluri.ts'
 import { MODEL_A, MODEL_S, OVERHEAD_A, PROMPT_A, tarifA, tarifS } from './extractorA.ts'
 import { type PoartaFelie, poartaFelie } from './poartaB1.ts'
 
@@ -362,15 +362,6 @@ export function parseRaspuns(txt: string): unknown[][] | null {
   } catch { return null }
 }
 
-export type SectiuneDecisa = Omit<SectiuneRol, 'rol'> & { rol: Rol | null }
-// deciziile umane pe secțiune: „*” = tot documentul; „a-b” = paginile secțiunii trebuie să fie exact a-b
-export function aplicaDecizii(s: SectiuneRol[], decizii: { rol: string; sectiune: string; decizie: string }[]): SectiuneDecisa[] {
-  return s.map((x): SectiuneDecisa => {
-    const cheie = cheieSectiune(x, false)
-    const d = decizii.find((y) => y.sectiune === cheie) ?? decizii.find((y) => y.sectiune === '*')
-    if (!d) return x
-    if (d.decizie === 'nu_e_sursa_cantitativa') return { ...x, rol: null }
-    if (d.decizie === 'rol_confirmat') return { ...x, rol: d.rol as Rol, decis_de: 'om' as const }
-    return x
-  })
-}
+// aplicaDecizii / SectiuneDecisa stau în roluri.ts (PR-extragere TKT-0329 A, L19: aceeași funcție reconstruiește rolul pe felie în
+// _shared/cantMasura.ts); re-exportate de aici pentru apelanții existenți
+export { aplicaDecizii, type SectiuneDecisa } from './roluri.ts'

@@ -128,3 +128,18 @@ function paginaUltima(t: string, de: number, pana: number): number | null {
 export function cheieSectiune(s: SectiuneRol, totDocumentul: boolean): string {
   return totDocumentul || !s.pagini ? '*' : `${s.pagini[0]}-${s.pagini[1]}`
 }
+
+export type SectiuneDecisa = Omit<SectiuneRol, 'rol'> & { rol: Rol | null }
+// deciziile umane pe secțiune: „*” = tot documentul; „a-b” = paginile secțiunii trebuie să fie exact a-b
+// (mutată aici din structurat.ts la PR-extragere TKT-0329 A: reconstruirea rolului pe felie din _shared/cantMasura.ts folosește EXACT
+// același calcul ca rularea extragerii — L19; structurat.ts o re-exportă)
+export function aplicaDecizii(s: SectiuneRol[], decizii: { rol: string; sectiune: string; decizie: string }[]): SectiuneDecisa[] {
+  return s.map((x): SectiuneDecisa => {
+    const cheie = cheieSectiune(x, false)
+    const d = decizii.find((y) => y.sectiune === cheie) ?? decizii.find((y) => y.sectiune === '*')
+    if (!d) return x
+    if (d.decizie === 'nu_e_sursa_cantitativa') return { ...x, rol: null }
+    if (d.decizie === 'rol_confirmat') return { ...x, rol: d.rol as Rol, decis_de: 'om' as const }
+    return x
+  })
+}
