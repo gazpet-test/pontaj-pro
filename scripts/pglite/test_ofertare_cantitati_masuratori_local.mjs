@@ -1725,7 +1725,8 @@ if (vrea('t5') && MIG) {
     ['M58 rândul revendicat de două poziții → ambele ok (revendicările ignorate)', [["          IF v_anc_n > 1 OR v_rev > 0 THEN v_ver := 'rand_ambiguu'; END IF;", "          IF v_anc_n > 1 THEN v_ver := 'rand_ambiguu'; END IF;"]], ['t3_dovada_a_cod_intreg + t3_dovada_a_ambigua']],
     ['M59 ancora pe denumire fără UM-ul poziției după ea (forma r3)', [["public.fn_ofertare_masura_norm(q.denumire) || ' ' || public.fn_ofertare_masura_norm(q.um) AS d) z", "public.fn_ofertare_masura_norm(q.denumire) AS d) z"]], ['t3_dovada_a_cod_intreg + t3_dovada_a_ambigua']],
     // r4 P1: denumirea acceptată oriunde în celulă (sufix), nu la începutul ei
-    ['M60 ancora pe denumire ca subșir al celulei, nu la început (forma r4)', [["ELSE strpos(z.x || ' ', z.d || ' ') = 1 AND", "ELSE strpos(z.x || ' ', z.d || ' ') > 0 AND"]], ['t3_dovada_a_cod_intreg + t3_dovada_a_ambigua']],
+    // (strpos > 0 singur ar fi echivalent: restul tăiat de la începutul rândului conține cuvintele dinaintea denumirii → respins oricum; mutantul real taie restul de la locul potrivirii)
+    ['M60 ancora pe denumire ca subșir al celulei, nu la început (forma r4)', [["ELSE strpos(z.x || ' ', z.d || ' ') = 1 AND substr(z.x, length(z.d) + 1) ~", "ELSE strpos(z.x || ' ', z.d || ' ') > 0 AND substr(z.x, strpos(z.x, z.d) + length(z.d)) ~"]], ['t3_dovada_a_cod_intreg + t3_dovada_a_ambigua']],
     // r5 P1: după UM pot urma cuvinte (UM-ul din interiorul unei denumiri mai lungi trece ca coloană UM)
     ['M61 capătul drept al denumirii neconfirmat: după UM orice (forma r5)', [["AND substr(z.x, length(z.d) + 1) ~ ('^( [0-9][0-9.,' || chr(160) || chr(8239) || chr(8201) || ']*)+$') END;", "END;"]], ['t3_dovada_a_cod_intreg + t3_dovada_a_ambigua']],
   ]
