@@ -9,18 +9,21 @@ const PAGINA = 1000
 const PAGINI_MAX = 200   // 200 × 1000 rânduri: gardă împotriva unui server care nu avansează range-ul
 // migrarea neaplicată: tabel / funcție inexistente (PostgREST: PGRST202 pentru RPC, PGRST205 / 42P01 pentru tabel, 42883 funcție)
 export const eNeactiv = e => ['42P01', 'PGRST202', '42883', 'PGRST205'].includes(String(e?.code || '')) || /does not exist|Could not find the (function|table)/i.test(String(e?.message || ''))
-// toate rândurile fn_ofertare_semnale_lista, pagină cu pagină (range pe rezultatul funcției), până la pagina goală — nu „length < pagină” (L23)
+// toate rândurile fn_ofertare_semnale_lista, pagină cu pagină (range pe rezultatul funcției), până la pagina goală — nu „length < pagină” (L23).
+// Offsetul avansează cu numărul de rânduri PRIMIT, nu cu mărimea cerută (review r1 P1: un plafon de server mai mic decât pagina sărea rânduri fără eroare).
 export async function incarcaSemnale(sb, licitatieId) {
   const randuri = []
+  let de = 0
   for (let p = 0; p < PAGINI_MAX; p++) {
-    const de = p * PAGINA
     const { data, error } = await sb.rpc('fn_ofertare_semnale_lista', { p_licitatie_id: licitatieId }).range(de, de + PAGINA - 1)
     if (error) return { error }
     if (!Array.isArray(data)) return { error: { message: 'răspuns neașteptat de la server (nu e listă)' } }
     if (!data.length) return { data: randuri }
+    if (data.length > PAGINA) return { error: { message: 'răspuns neașteptat de la server (mai multe rânduri decât pagina cerută)' } }
     for (const r of data) randuri.push(r)   // nu push(...data): RangeError la liste mari
+    de += data.length
   }
-  return { error: { message: `prea multe rânduri (peste ${PAGINI_MAX * PAGINA}) — lista nu e completă` } }
+  return { error: { message: `prea multe rânduri (peste ${PAGINI_MAX} pagini) — lista nu e completă` } }
 }
 const ORDINE_VERDICT = { diferenta: 0, de_verificat: 1, neverificat: 2, in_regula: 3 }
 const NUME_VERDICT = { in_regula: 'în regulă', diferenta: 'diferență', de_verificat: 'de verificat', neverificat: 'neverificat' }
@@ -114,24 +117,29 @@ const norm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ
 export const dnElement = el => { const m = /_dn(\d{2,4})$/.exec(String(el ?? '')); return m ? Number(m[1]) : null }
 // familiile fără DN (ofertare_elemente_masura): cuvântul-cheie pe textul normalizat (fără diacritice)
 const FAMILIE_RE = { bransament: /\bbransament/, sapatura: /\bsapatur|\bexcava/, refacere: /\brefacer/ }
+const escRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+// cuvânt întreg în textul normalizat: nu „tronsonul 2” în „tronsonul 20” (review r1 P2)
+const cuvantIntreg = (t, fraza) => new RegExp(`(?:^|[^a-z0-9])${escRe(fraza)}(?![a-z0-9])`).test(t)
 const elementInText = (element, t) => {
   const dn = dnElement(element)
-  // DN-ul ca „DN 160” / „Dn160” / „Ø160” / „De 160”, întreg (nu parte din 1600 / 1160); textul e normalizat (minuscule)
-  if (dn != null) return new RegExp(`(?:^|[^a-z0-9])(?:dn|ø|de)[ ]*${dn}(?![0-9])`).test(t)
+  // DN-ul ca „DN 160” / „Dn160” / „Ø160”, număr întreg și complet: nu 1600 / 1160, nu „160,5” / „160.5”; NU „de 160 m” (prepoziție, nu diametru — r1 P2)
+  if (dn != null) return new RegExp(`(?:^|[^a-z0-9])(?:dn|ø)[ ]*${dn}(?![0-9]|[.,][0-9])`).test(t)
   const re = FAMILIE_RE[String(element ?? '')]
   return re ? re.test(t) : false
 }
 export function propuneRaspunsRelevant(semnale, textExtras) {
   const t = norm(textExtras)
   if (!t) return []
-  const out = []
+  const out = [], vazute = new Set()
   for (const r of Array.isArray(semnale) ? semnale : []) {
     const s = r?.semnal ?? r
     if (!s || s.id == null || r?.rezolvat === true || s.element == null || s.element === 'necunoscut') continue
+    if (vazute.has(s.id)) continue   // lista brută poate repeta un semnal (paginare mișcată): o propunere pe semnal
+    vazute.add(s.id)
     if (!elementInText(s.element, t)) continue
     const ob = norm(s.obiect_cheie)
     const oriceObiect = !ob || ob === '*'
-    if (!oriceObiect && !t.includes(ob)) continue
+    if (!oriceObiect && !cuvantIntreg(t, ob)) continue
     const dn = dnElement(s.element)
     const ce = dn != null ? `DN ${dn}` : `elementul „${s.element}”`
     out.push({ semnal_id: s.id, motiv: oriceObiect ? `${ce} apare în răspuns (măsură la nivelul lucrării)` : `${ce} și obiectul „${ob}” apar în răspuns` })
@@ -145,8 +153,11 @@ export function textRezumatSemnale(masuratori) {
   if (masuratori.ok !== true) return `Semnale: comparația nu a rulat — ${masuratori.eroare || 'motiv necunoscut'}${masuratori.evaluare_depasita ? ' (sursele s-au schimbat în timpul rulării)' : ''}`
   const r = masuratori.rezumat
   if (!r || typeof r !== 'object') return 'Semnale: rezumat lipsă din răspuns'
-  const n = k => Number(r[k]) || 0
-  return `Semnale: ${n('diferente')} diferențe, ${n('de_verificat')} de verificat, ${n('neverificate')} neverificate (${n('in_regula')} în regulă, ${n('total')} în total)`
+  // contoarele trebuie să fie întregi ≥ 0 (review r1 P2: lipsă / invalid ≠ 0 — L18)
+  const chei = ['diferente', 'de_verificat', 'neverificate', 'in_regula', 'total']
+  const lipsa = chei.filter(k => !(typeof r[k] === 'number' && Number.isInteger(r[k]) && r[k] >= 0))
+  if (lipsa.length) return `Semnale: rezumat incomplet din răspuns (lipsesc contoarele ${lipsa.join(', ')})`
+  return `Semnale: ${r.diferente} diferențe, ${r.de_verificat} de verificat, ${r.neverificate} neverificate (${r.in_regula} în regulă, ${r.total} în total)`
 }
 
 // validarea formularului de setări — aceleași limite ca CHECK-urile din ofertare_cantitati_setari (serverul le impune oricum)

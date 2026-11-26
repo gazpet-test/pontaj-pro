@@ -160,6 +160,18 @@ describe('propuneRaspunsRelevant (spec §3.6: potrivire textuală pe măsură; o
   it('element prezent dar alt obiect → []', () => {
     expect(propuneRaspunsRelevant([s(8, 'teava_pe_dn160', 'tronsonul 5')], text)).toEqual([])
   })
+  it('review r1 P2: potriviri FALSE refuzate — obiect ca prefix („tronsonul 20”), „de 160 m” (prepoziție, nu DN), „DN 160,5”', () => {
+    expect(propuneRaspunsRelevant([s(11, 'teava_pe_dn160', 'tronsonul 2')], 'Pe tronsonul 20 conducta DN 160 are 300 m')).toEqual([])
+    expect(propuneRaspunsRelevant([s(12, 'teava_pe_dn160', 'tronsonul 2')], 'Pe tronsonul 2 lungimea este de 160 m')).toEqual([])
+    expect(propuneRaspunsRelevant([s(13, 'teava_pe_dn160', 'tronsonul 2')], 'Pe tronsonul 2: DN 160,5 mm')).toEqual([])
+    expect(propuneRaspunsRelevant([s(14, 'teava_pe_dn160', 'tronsonul 2')], 'Pe tronsonul 2: DN 160.5 mm')).toEqual([])
+    // obiectul cu caractere speciale e tratat literal; „tronsonul 2,” cu virgulă după e cuvânt întreg
+    expect(propuneRaspunsRelevant([s(15, 'teava_pe_dn160', 'str. a+b (1)')], 'DN 160 pe str. a+b (1), lungime 20 m').length).toBe(1)
+    expect(propuneRaspunsRelevant([s(16, 'teava_pe_dn160', 'tronsonul 2')], 'DN 160 pe tronsonul 2, lungime 20 m').length).toBe(1)
+  })
+  it('același semnal de două ori în lista brută → o singură propunere', () => {
+    expect(propuneRaspunsRelevant([s(17, 'teava_pe_dn160', '*'), s(17, 'teava_pe_dn160', '*')], text).length).toBe(1)
+  })
   it('textExtras null / gol / doar spații → [] (document necitit, nimic de propus)', () => {
     for (const t of [null, undefined, '', '   ']) expect(propuneRaspunsRelevant([s(9, 'teava_pe_dn160', '*')], t)).toEqual([])
   })
@@ -182,6 +194,12 @@ describe('textRezumatSemnale (linia din raportul rulării, Task 9)', () => {
     expect(textRezumatSemnale({ ok: false, eroare: 'propune: depasita', evaluare_depasita: true })).toBe('Semnale: comparația nu a rulat — propune: depasita (sursele s-au schimbat în timpul rulării)')
     expect(textRezumatSemnale(null)).toBe(null)
     expect(textRezumatSemnale({ ok: true })).toBe('Semnale: rezumat lipsă din răspuns')
+  })
+  it('review r1 P2: contoare lipsă / invalide = rezumat incomplet, nu „0 diferențe” (L18)', () => {
+    expect(textRezumatSemnale({ ok: true, rezumat: {} })).toBe('Semnale: rezumat incomplet din răspuns (lipsesc contoarele diferente, de_verificat, neverificate, in_regula, total)')
+    expect(textRezumatSemnale({ ok: true, rezumat: { diferente: '2', de_verificat: 1, neverificate: 3, in_regula: 5, altele: 0, total: 11 } })).toContain('lipsesc contoarele diferente')
+    expect(textRezumatSemnale({ ok: true, rezumat: { diferente: 2, de_verificat: 1, neverificate: 3, in_regula: 5, total: null } })).toContain('lipsesc contoarele total')
+    expect(textRezumatSemnale({ ok: true, rezumat: { diferente: -1, de_verificat: 1, neverificate: 3, in_regula: 5, total: 8 } })).toContain('lipsesc contoarele diferente')
   })
 })
 

@@ -53,17 +53,20 @@ if (!JSDOM) console.warn(`[OfertareClarificari.semnale.test] ${MOTIV_SARIT}`)
 const dom = JSDOM ? describe : describe.skip
 
 const LIC = { id: 900001, nr_anunt: 'CN-TEST', obiect: 'Obiect de test', status: 'in_lucru', termen_depunere: '2027-01-15' }
-const DOC_RASP = 301, DOC_RASP_NECITIT = 302
+const DOC_RASP = 301, DOC_RASP_NECITIT = 302, DOC_RASP2 = 303
 const CLAR = [
   { id: 1, licitatie_id: LIC.id, nr: 1, intrebare: 'Întrebare scrisă de mână', status: 'trimisa', origine: 'manual', cheie: null, fisier_path: null, raspuns: null },
   { id: 2, licitatie_id: LIC.id, nr: 2, intrebare: 'Vă rugăm să precizați cantitatea pentru conducta DN 160.', status: 'de_trimis', origine: 'automat', cheie: 'auto_surse_0123456789abcdef',
     sursa: 'surse_auto:102,gen_abc,ev_def', baza_generare: { evaluare: 'surse_v1', verdict: 'diferenta', a: 6400, b: 3995, prag: 0.05 } },
 ]
+// review r1 P2: documentele au text_extras, dar NICIO citire AI (analiza.citire_noi lipsă) — secțiunea nouă trebuie să meargă fără ea
 const DOCS = [
   { id: DOC_RASP, licitatie_id: LIC.id, nume_original: 'Raspuns autoritate.pdf', tip: 'raspuns_clarificare', aparut_ulterior: true, fisier_path: 'x/r.pdf', created_at: '2026-11-27T10:00:00Z',
-    status_procesare: 'procesat', text_extras: '⟦PAGINA 1⟧ Răspuns: pentru conducta PE100 DN 160, lungimea corectă este 3.995 m.', analiza: { citire_noi: { rezumat: 'r', citit_la: '2026-11-27T10:05:00Z', intrebari_raspunse: [] } } },
+    status_procesare: 'procesat', text_extras: '⟦PAGINA 1⟧ Răspuns: pentru conducta PE100 DN 160, lungimea corectă este 3.995 m.', analiza: null },
   { id: DOC_RASP_NECITIT, licitatie_id: LIC.id, nume_original: 'Raspuns necitit.pdf', tip: 'raspuns_clarificare', aparut_ulterior: true, fisier_path: 'x/n.pdf', created_at: '2026-11-27T11:00:00Z',
-    status_procesare: 'neprocesat', text_extras: null, analiza: { citire_noi: { rezumat: '', intrebari_raspunse: [] } } },
+    status_procesare: 'neprocesat', text_extras: null, analiza: null },
+  { id: DOC_RASP2, licitatie_id: LIC.id, nume_original: 'Raspuns 2.pdf', tip: 'raspuns_clarificare', aparut_ulterior: true, fisier_path: 'x/r2.pdf', created_at: '2026-11-27T12:00:00Z',
+    status_procesare: 'procesat', text_extras: '⟦PAGINA 1⟧ Erată: conducta DN 160 are 4.100 m.', analiza: null },
 ]
 const SEMNALE = [
   { semnal: { id: 50, licitatie_id: LIC.id, element: 'teava_pe_dn160', obiect_cheie: '*', verdict: 'diferenta', valoare_a: 6400, valoare_b: 3995, clarificare_id: 2 }, rezolvat: false, actual: true, in_curs: false, masuratori: [] },
@@ -128,8 +131,8 @@ dom('Clarificări — ciornele auto_surse_* și „răspuns posibil relevant” 
     stareImplicita()
     const { d, apasa, buton, butoane, text, toast } = await monteaza()
     const deschide = butoane('La ce întrebări răspunde?')
-    expect(deschide.length).toBe(2)
-    await apasa(deschide[0])   // documentul citit (are text)
+    expect(deschide.length).toBe(3)   // și fără citire AI (review r1 P2)
+    await apasa(deschide[0])   // documentul cu text (fără analiză AI)
     expect(text()).toContain('Semnale posibil relevante')
     const sectiune = d.querySelector('[data-semnale-relevante]')
     expect(sectiune).toBeTruthy()
@@ -152,6 +155,24 @@ dom('Clarificări — ciornele auto_surse_* și „răspuns posibil relevant” 
     expect(toast.mock.calls.some(c => String(c[0]).includes('legat de răspuns') && c[1] !== 'err')).toBe(true)
     // secțiunea nu scrie direct în tabele
     expect(st.scrieri.filter(s => s.tabel === 'ofertare_cantitati_semnale' || s.tabel === 'ofertare_clarificari')).toEqual([])
+  })
+  it('review r1 P2: valoarea aleasă pe răspunsul D1 NU reapare la D2 pentru același semnal — câmpul pornește gol, „✓ leagă” dezactivat', async () => {
+    stareImplicita()
+    const { d, apasa, buton, butoane } = await monteaza()
+    await apasa(butoane('La ce întrebări răspunde?')[0])   // D1
+    await apasa(buton('ia B'))
+    expect(d.querySelector('[data-semnale-relevante] input[type="number"]').value).toBe('3995')
+    await apasa(buton('Renunță'))
+    expect(d.querySelector('[data-semnale-relevante]')).toBeNull()
+    await apasa(butoane('La ce întrebări răspunde?')[2])   // D2, același semnal 50
+    const sectiune = d.querySelector('[data-semnale-relevante]')
+    expect([...sectiune.querySelectorAll('[data-semnal-propus]')].map(e => e.getAttribute('data-semnal-propus'))).toEqual(['50'])
+    expect(sectiune.querySelector('input[type="number"]').value).toBe('')
+    expect(buton('✓ leagă').disabled).toBe(true)
+    // legarea pe D2 trimite documentul D2
+    await apasa(buton('ia A'))
+    await apasa(buton('✓ leagă'))
+    expect(st.cereri.find(c => c.rpc === 'fn_ofertare_semnal_raspuns_leaga').args).toEqual({ p_semnal_id: 50, p_document_id: DOC_RASP2, p_valoare: 6400 })
   })
   it('document fără text_extras → „răspunsul nu e citit — nimic de propus”, fără propuneri și fără invoke', async () => {
     stareImplicita()

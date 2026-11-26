@@ -64,8 +64,9 @@ export default function OfertareSemnale({ licitatie: l, profile, showToast, onDe
       const imbogateste = m => ({ ...m, document_nume: m?.document_id != null ? numeDoc.get(Number(m.document_id)) || null : null })
       const grupuri = grupeazaPeMasura(lista.data).map(gr => ({ ...gr, a: gr.a.map(imbogateste), b: gr.b.map(imbogateste) }))
       const s = setari.data || null
-      setSt({ grupuri, setari: s, docs: docs.data || [], evaluare: ev.data || null, poateDecide: drept.error ? false : drept.data === true, note,
-        necitite: documenteNecitite(lista.data, docs.data || []), numeDoc })
+      // dreptul: eroarea RPC-ului = NECUNOSCUT (dezactivat + mesaj distinct), nu „fără drept” (review r1 P2, L18)
+      setSt({ grupuri, setari: s, docs: docs.data || [], evaluare: ev.data || null, poateDecide: !drept.error && drept.data === true,
+        dreptEroare: drept.error ? mesajEroareClarificare(drept.error) : null, note, necitite: documenteNecitite(lista.data, docs.data || []), numeDoc })
       setPrag(s ? String(Number((Number(s.prag) * 100).toFixed(4))).replace('.', ',') : '5')
       setPlafon(s ? String(s.plafon_pagini) : '200')
     })().catch(e => { if (aici()) setEroare(`${MESAJ_EROARE} (${e?.message || e}) — nu înseamnă că sunt în regulă.`) })
@@ -102,7 +103,11 @@ export default function OfertareSemnale({ licitatie: l, profile, showToast, onDe
     finally { setBusy(false) }
   }
 
-  const rez = st ? st.grupuri.reduce((a, g) => { const v = g.semnal.verdict; a[Object.prototype.hasOwnProperty.call(a, v) ? v : 'altele']++; return a }, { diferenta: 0, de_verificat: 0, neverificat: 0, in_regula: 0, altele: 0 }) : null
+  // rezumatul numără DOAR rezultatele actuale pe verdict; cele istorice (sursele s-au schimbat) stau separat, oricare ar fi fost verdictul (review r1 P1)
+  const rez = st ? st.grupuri.reduce((a, g) => {
+    if (g.actual !== true) { a.istorice++; return a }
+    const v = g.semnal.verdict; a[Object.prototype.hasOwnProperty.call(a, v) ? v : 'altele']++; return a
+  }, { diferenta: 0, de_verificat: 0, neverificat: 0, in_regula: 0, altele: 0, istorice: 0 }) : null
   const plafonAtins = st?.evaluare?.pagini?.plafon_atins === true
 
   return (
@@ -123,7 +128,9 @@ export default function OfertareSemnale({ licitatie: l, profile, showToast, onDe
             <label style={{ color:G.muted }}>Plafon <input aria-label="plafon pagini" style={S.inp} value={plafon} onChange={e => setPlafon(e.target.value)} disabled={!st.poateDecide || busy} /> pagini</label>
             <button style={S.btn} disabled={!st.poateDecide || busy} onClick={salveazaSetari} title={st.poateDecide ? 'Salvează pragul și plafonul (fn_ofertare_semnale_setari)' : 'Doar ownerul / responsabilul licitației / adminul Ofertare pot schimba setările'}>Salvează setările</button>
             {!st.setari && <span style={{ color:G.dim }}>(valorile implicite: 5 % și 200 de pagini)</span>}
-            {!st.poateDecide && <span style={{ color:G.dim }}>fără drept de decizie pe licitație — doar citire</span>}
+            {!st.poateDecide && (st.dreptEroare
+              ? <span style={{ color:G.yellow }}>dreptul de decizie nu s-a putut verifica ({st.dreptEroare}) — doar citire până la reîncărcare</span>
+              : <span style={{ color:G.dim }}>fără drept de decizie pe licitație — doar citire</span>)}
           </div>
           {/* ultima evaluare + plafonul */}
           <div style={{ color:G.muted, marginBottom:8 }}>
@@ -149,7 +156,7 @@ export default function OfertareSemnale({ licitatie: l, profile, showToast, onDe
           )}
           {/* rezumatul */}
           {rez && st.grupuri.length > 0 && <div style={{ marginBottom:8 }}>
-            <b style={{ color:CULORI.rosu }}>{rez.diferenta} diferențe</b> · <b style={{ color:CULORI.portocaliu }}>{rez.de_verificat} de verificat</b> · <b style={{ color:CULORI.gri }}>{rez.neverificat} neverificate</b> · <span style={{ color:CULORI.verde }}>{rez.in_regula} în regulă</span>{rez.altele ? <> · <span style={{ color:CULORI.gri }}>{rez.altele} cu stare necunoscută</span></> : null} · {st.grupuri.length} măsuri
+            <b style={{ color:CULORI.rosu }}>{rez.diferenta} diferențe</b> · <b style={{ color:CULORI.portocaliu }}>{rez.de_verificat} de verificat</b> · <b style={{ color:CULORI.gri }}>{rez.neverificat} neverificate</b> · <span style={{ color:CULORI.verde }}>{rez.in_regula} în regulă</span>{rez.altele ? <> · <span style={{ color:CULORI.gri }}>{rez.altele} cu stare necunoscută</span></> : null}{rez.istorice ? <> · <b style={{ color:CULORI.gri }}>{rez.istorice} istorice (sursele s-au schimbat — nereverificate)</b></> : null} · {st.grupuri.length} măsuri
           </div>}
           {st.grupuri.length === 0 && <div style={{ color:G.dim }}>Nicio măsură evaluată încă pentru această licitație (lipsa semnalelor nu înseamnă „verificat în regulă”).</div>}
           {st.grupuri.length > 0 && (
@@ -164,7 +171,8 @@ export default function OfertareSemnale({ licitatie: l, profile, showToast, onDe
                     const s = g.semnal
                     const et = eticheta(s.verdict, s.motiv)
                     const act = etichetaActualitate(g)
-                    const istoric = g.actual !== true && g.in_curs !== true
+                    // culoarea verdictului DOAR cu actualitate confirmată (actual === true); o reevaluare în curs nu reface actualitatea (review r1 P1)
+                    const istoric = g.actual !== true
                     const docB = s.inventar?.document_b
                     const alteB = (Array.isArray(s.valori_b) ? s.valori_b : []).filter(v => v && String(v.document_id) !== String(docB ?? ''))
                     const rezolvare = s.rezolvare && typeof s.rezolvare === 'object' ? s.rezolvare : null
