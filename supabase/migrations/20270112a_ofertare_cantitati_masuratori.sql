@@ -941,23 +941,19 @@ BEGIN
      WHERE d.licitatie_id = p_licitatie_id
        AND d.id IN (SELECT q.surse_document_ids[1] FROM public.ofertare_cantitati q WHERE q.licitatie_id = p_licitatie_id AND q.surse_document_ids IS NOT NULL AND cardinality(q.surse_document_ids) > 0);
   -- (c2) ancorele pozitiilor F3 (pasul (1) al dovezii A), pentru TOATE pozitiile deodata si FARA cantitate (r2 / r3 P1): randurile documentului-sursa
-  --      care contin codul articolului CA TOKEN INTREG (intre spatii, dupa normalizarea spatiilor; „SA11G1” NU e „SA11G10”) sau, fara cod, CELULA de
-  --      denumire INTREAGA: randul normalizat, dupa numarul de ordine optional („007 ” / „1.2.3 ”), INCEPE cu denumirea normalizata urmata de UM-ul
-  --      pozitiei, iar DUPA UM urmeaza DOAR numere pana la capatul randului (cantitate, pret, valoare): asa UM-ul e coloana UM, nu un cuvant din
-  --      interiorul unei denumiri mai lungi („… dn160 m 6 cu montaj m 100”, r5 P1). „furnizare teava pe100 dn160 m” nu e inclusa in „… dn160 sdr17 m”,
-  --      nici ca sufix in „… dn110 si furnizare teava pe100 dn160 m” (r4 P1). Un rand revendicat de MAI MULTE pozitii nu dovedeste pe niciuna
-  --      (rand_ambiguu la toate, pasul (d)). F3-urile cu coloana de cod, dar pozitii fara cod in ERP, sau cu coloane de text dupa UM, raman nedovedite (la om).
+  --      care contin codul articolului CA TOKEN INTREG (intre spatii, dupa normalizarea spatiilor; „SA11G1” NU e „SA11G10”). DOAR codul articolului e
+  --      ancora (planul: „randul care contine codul articolului si tokenul cantitatii”): o pozitie FARA cod_articol nu are rand-ancora si ramane
+  --      nedovedit (vizibila, la om). Ancora pe denumire a fost incercata si respinsa la review (r3–r6: denumiri incluse una in alta, UM-ul in
+  --      interiorul denumirii, antet cu UM implicit) — fara coloanele confirmate din antet nu delimiteaza celula de denumire; nu se foloseste.
+  --      Un rand revendicat de MAI MULTE pozitii nu dovedeste pe niciuna (rand_ambiguu la toate, pasul (d)).
   DROP TABLE IF EXISTS cm_ancore;
   CREATE TEMP TABLE cm_ancore ON COMMIT DROP AS
     SELECT q.id AS cantitate_id, l.document_id, l.pagina, l.nr, l.linie
       FROM public.ofertare_cantitati q
       JOIN cm_linii l ON l.document_id = q.surse_document_ids[1]
-      CROSS JOIN LATERAL (SELECT regexp_replace(public.fn_ofertare_masura_norm(l.linie), '^[0-9]+([.][0-9]+)*[.]? ', '') AS x,
-                                 public.fn_ofertare_masura_norm(q.denumire) || ' ' || public.fn_ofertare_masura_norm(q.um) AS d) z
      WHERE q.licitatie_id = p_licitatie_id AND q.status IS DISTINCT FROM 'retrasa' AND q.surse_document_ids IS NOT NULL AND cardinality(q.surse_document_ids) > 0
-       AND CASE WHEN nullif(btrim(q.cod_articol), '') IS NOT NULL
-                THEN strpos(' ' || upper(btrim(regexp_replace(l.linie, '[ ' || chr(9) || ']+', ' ', 'g'))) || ' ', ' ' || upper(btrim(q.cod_articol)) || ' ') > 0
-                ELSE strpos(z.x || ' ', z.d || ' ') = 1 AND substr(z.x, length(z.d) + 1) ~ ('^( [0-9][0-9.,' || chr(160) || chr(8239) || chr(8201) || ']*)+$') END;   -- ancora, FARA cantitate
+       AND nullif(btrim(q.cod_articol), '') IS NOT NULL
+       AND strpos(' ' || upper(btrim(regexp_replace(l.linie, '[ ' || chr(9) || ']+', ' ', 'g'))) || ' ', ' ' || upper(btrim(q.cod_articol)) || ' ') > 0;   -- ancora, FARA cantitate
   -- (d) pozitiile F3 (partea A): clasificare in SQL, lot, obiect; componenta A se scrie MEREU (pe obiect SI pe nivelul lucrarii '*')
   FOR r IN SELECT q.* FROM public.ofertare_cantitati q WHERE q.licitatie_id = p_licitatie_id AND q.status IS DISTINCT FROM 'retrasa' ORDER BY q.id LOOP
     v_tip := CASE WHEN public.fn_ofertare_masura_norm(r.denumire) ~ 'protect' THEN 'protectie' WHEN public.fn_ofertare_masura_norm(r.denumire) ~ 'bransament' THEN 'bransament'

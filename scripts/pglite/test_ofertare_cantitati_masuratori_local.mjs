@@ -678,32 +678,15 @@ const ast = (ab, cond, msg) => { if (!cond) ab.push(msg) }
     ast(ab, m.length === 2 && m.every(x => x.verificare === 'rand_ambiguu' && x.valoare === null && x.rand === '003 SA11G1 TEAVA PE100 DN160 M 6.400') && s.verdict === 'neverificat' && Number(s.valoare_a) === 0 && s.inventar.a.componente === 2,
       'un rând revendicat de două poziții → rand_ambiguu la ambele, nicio componentă dovedită (A = suma celor ok = 0, neverificat), nu 12800: ' + JSON.stringify([s.verdict, s.valoare_a, m.map(x => [x.cantitate_id, x.verificare, x.valoare, x.rand])]))
     await db.query(`DELETE FROM public.ofertare_cantitati WHERE id = $1`, [p2])   // pozițiile F3 nu au stare „retrasa” în CHECK (extras / validat / diferenta / revizuit_clarificare): se șterg
-    // r3 P1: fără cod, denumiri incluse una în alta: ancora = denumirea URMATĂ de UM-ul poziției; rândul „… DN160 SDR17 M 100” e al poziției SDR17, nu și al celei scurte
+    // r3–r6 (review): ancora pe DENUMIRE (poziții fără cod) a fost scoasă — planul cere codul articolului; fără coloanele confirmate din antet, denumirea nu delimitează
+    // celula (incluziuni, UM în interiorul denumirii, antet cu UM implicit). Pozițiile fără cod_articol rămân nedovedit (la om) chiar dacă există rânduri cu denumirea lor.
     const p3 = await cantitate(db, { lic: LIC2, denumire: 'Furnizare teava PE100 DN160', um: 'M', cantitate: 100, cod: null, surse: [f2.dF3] })
     const p4 = await cantitate(db, { lic: LIC2, denumire: 'Furnizare teava PE100 DN160 SDR17', um: 'M', cantitate: 100, cod: null, surse: [f2.dF3] })
-    m = await reeval(PAG(1, 'Formularul F3', 'Nr. Cod Denumire UM Cantitate', '003 SA11G1 TEAVA PE100 DN160 M 6.400', 'Nr. Denumire UM Cantitate', '007 Furnizare teava PE100 DN160 SDR17 M 100'))
+    m = await reeval(PAG(1, 'Formularul F3', 'Nr. Denumire UM Cantitate', '006 Furnizare teava PE100 DN160 M 100', '007 Furnizare teava PE100 DN160 SDR17 M 100', '008 Furnizare teava PE100 DN160 M 6 cu montaj M 100', 'Nr. Cod Denumire UM Cantitate', '003 SA11G1 TEAVA PE100 DN160 M 6.400'))
     const m3 = m.find(x => Number(x.cantitate_id) === p3), m4 = m.find(x => Number(x.cantitate_id) === p4), m1 = m.find(x => Number(x.cantitate_id) === f2.cant[0])
-    ast(ab, m3 && m3.verificare === 'nedovedit' && m3.rand === null && m4 && m4.verificare === 'ok' && Number(m4.valoare) === 100 && m1 && m1.verificare === 'ok' && Number(s.valoare_a) === 6500,
-      'denumirea scurtă NU ia rândul denumirii lungi (nedovedit); poziția SDR17 → ok 100; A = 6400 + 100 doar din rândurile dovedite… agregare incompletă: ' + JSON.stringify(m.map(x => [x.cantitate_id, x.verificare, x.valoare])))
-    ast(ab, s.verdict === 'neverificat' && /agregare incompletă/.test(s.motiv), 'poziția nedovedită → neverificat (agregare incompletă): ' + s.motiv)
-    // r4 P1: denumirea ca SUFIX al celulei altui articol („… DN110 si furnizare teava PE100 DN160 M 100”) → celula nu începe cu denumirea → nedovedit, nu ok
-    m = await reeval(PAG(1, 'Formularul F3', 'Nr. Cod Denumire UM Cantitate', '003 SA11G1 TEAVA PE100 DN160 M 6.400', 'Nr. Denumire UM Cantitate', '007 Furnizare teava PE100 DN110 si furnizare teava PE100 DN160 M 100'))
-    ast(ab, m.find(x => Number(x.cantitate_id) === p3)?.verificare === 'nedovedit' && m.find(x => Number(x.cantitate_id) === p3)?.rand === null && m.find(x => Number(x.cantitate_id) === p4)?.verificare === 'nedovedit',
-      'denumirea ca sufix al unei celule cu două diametre → nedovedit (celula trebuie să ÎNCEAPĂ cu denumirea): ' + JSON.stringify(m.map(x => [x.cantitate_id, x.verificare, x.rand])))
-    // r5 P1: UM-ul de după denumire poate fi în INTERIORUL unei denumiri mai lungi („… DN160 M 6 cu montaj M 100”) → după UM trebuie să urmeze doar numere → nedovedit
-    m = await reeval(PAG(1, 'Formularul F3', 'Nr. Cod Denumire UM Cantitate', '003 SA11G1 TEAVA PE100 DN160 M 6.400', 'Nr. Denumire UM Cantitate', '007 Furnizare teava PE100 DN160 M 6 cu montaj M 100'))
-    ast(ab, m.find(x => Number(x.cantitate_id) === p3)?.verificare === 'nedovedit' && m.find(x => Number(x.cantitate_id) === p3)?.rand === null,
-      'UM în interiorul unei denumiri mai lungi → nedovedit (după UM urmează doar numere): ' + JSON.stringify(m.map(x => [x.cantitate_id, x.verificare, x.rand])))
-    // coloanele de preț / valoare după cantitate sunt numere → ok (indexul de la dreapta al coloanei de cantitate din antet)
-    m = await reeval(PAG(1, 'Formularul F3', 'Nr. Denumire UM Cantitate Pret Valoare', '006 Furnizare teava PE100 DN160 M 100 12,5 1.250', 'Nr. Cod Denumire UM Cantitate', '003 SA11G1 TEAVA PE100 DN160 M 6.400'))
-    ast(ab, m.find(x => Number(x.cantitate_id) === p3)?.verificare === 'ok' && Number(m.find(x => Number(x.cantitate_id) === p3)?.valoare) === 100, 'preț și valoare după cantitate → ok 100: ' + JSON.stringify(m.map(x => [x.cantitate_id, x.verificare, x.valoare])))
-    // numărul de ordine ierarhic („1.2.3”) și rândul fără număr: celula începe tot cu denumirea → ok
-    m = await reeval(PAG(1, 'Formularul F3', 'Nr. Denumire UM Cantitate', '1.2.3 Furnizare teava PE100 DN160 M 100', 'Furnizare teava PE100 DN160 SDR17 M 100', 'Nr. Cod Denumire UM Cantitate', '003 SA11G1 TEAVA PE100 DN160 M 6.400'))
-    ast(ab, m.filter(x => x.verificare === 'ok').length === 3, 'nr. ierarhic / fără nr. înaintea denumirii → ok: ' + JSON.stringify(m.map(x => [x.cantitate_id, x.verificare])))
-    // rândul scurt există și el: fiecare poziție își ia rândul ei (denumire + UM ca ancoră)
-    m = await reeval(PAG(1, 'Formularul F3', 'Nr. Denumire UM Cantitate', '006 Furnizare teava PE100 DN160 M 100', '007 Furnizare teava PE100 DN160 SDR17 M 100', 'Nr. Cod Denumire UM Cantitate', '003 SA11G1 TEAVA PE100 DN160 M 6.400'))
-    ast(ab, m.filter(x => x.verificare === 'ok').length === 3 && m.find(x => Number(x.cantitate_id) === p3)?.rand === '006 Furnizare teava PE100 DN160 M 100' && m.find(x => Number(x.cantitate_id) === p4)?.rand === '007 Furnizare teava PE100 DN160 SDR17 M 100',
-      'denumiri incluse una în alta, fiecare cu rândul ei → ambele ok, pe rândul propriu: ' + JSON.stringify(m.map(x => [x.cantitate_id, x.verificare, x.rand])))
+    ast(ab, m3 && m3.verificare === 'nedovedit' && m3.rand === null && m3.valoare === null && m4 && m4.verificare === 'nedovedit' && m4.rand === null && m1 && m1.verificare === 'ok' && Number(m1.valoare) === 6400,
+      'pozițiile fără cod → nedovedit (fără rând), chiar cu rânduri cu denumirea lor; poziția cu cod → ok: ' + JSON.stringify(m.map(x => [x.cantitate_id, x.verificare, x.valoare, x.rand])))
+    ast(ab, s.verdict === 'neverificat' && /agregare incompletă/.test(s.motiv) && Number(s.valoare_a) === 6400, 'A = doar componentele dovedite (6400), semnal neverificat (agregare incompletă): ' + JSON.stringify([s.verdict, s.motiv, s.valoare_a]))
   }
   S3['t3_loturi'] = async (db, ab) => {
     // licitație cu loturi: F3 lot 1 vs observație lista {2} → măsuri diferite, fără semnal
@@ -1716,19 +1699,13 @@ if (vrea('t5') && MIG) {
     ['M52 publica fără refuzul fotografiei schimbate', [["  IF v_foto ->> 'sha' IS DISTINCT FROM v_ev.surse_sha THEN\n    PERFORM set_config('ofertare.masuratori_rpc', '1', true);", "  IF false THEN\n    PERFORM set_config('ofertare.masuratori_rpc', '1', true);"]], ['t3_depasita + t3_izolare + t3_extragere_noua_intre_rpc + t3_plafon_vechi']],
     // r1 (Jakarinos): P1 proveniența ca DEFINER (current_user = mereu postgres → protecția dispare), P1 codul ca subșir, P1 prima potrivire în text, ambiguitatea A
     ['M53 proveniența ca SECURITY DEFINER (forma r1)', [[" LANGUAGE plpgsql\n SECURITY INVOKER\n SET search_path = public, pg_temp\nAS $fn$", " LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path = public, pg_temp\nAS $fn$"]], ['t4_provenienta_directa']],
-    ['M54 codul articolului acceptat ca subșir (SA11G10 dovedește SA11G1)', [["THEN strpos(' ' || upper(btrim(regexp_replace(l.linie, '[ ' || chr(9) || ']+', ' ', 'g'))) || ' ', ' ' || upper(btrim(q.cod_articol)) || ' ') > 0", "THEN strpos(upper(l.linie), upper(btrim(q.cod_articol))) > 0"]], ['t3_dovada_a_cod_intreg + t3_dovada_a_ambigua']],
+    ['M54 codul articolului acceptat ca subșir (SA11G10 dovedește SA11G1)', [["AND strpos(' ' || upper(btrim(regexp_replace(l.linie, '[ ' || chr(9) || ']+', ' ', 'g'))) || ' ', ' ' || upper(btrim(q.cod_articol)) || ' ') > 0;", "AND strpos(upper(l.linie), upper(btrim(q.cod_articol))) > 0;"]], ['t3_dovada_a_cod_intreg + t3_dovada_a_ambigua']],
     ['M55 textul liber ia prima potrivire (fragment cu două cantități)', [["  IF v_nn > 1 THEN RETURN jsonb_build_object('verificare', 'fragment_ambiguu'); END IF;\n", ""]], ['t2']],
     ['M56 mai multe rânduri-ancoră → primul (nu rand_ambiguu)', [["          IF v_anc_n > 1 OR v_rev > 0 THEN v_ver := 'rand_ambiguu'; END IF;", "          IF v_rev > 0 THEN v_ver := 'rand_ambiguu'; END IF;"]], ['t3_dovada_a_cod_intreg + t3_dovada_a_ambigua']],
     // r2 P1: ancora filtrată după cantitate ÎNAINTE de numărarea ambiguității (rândul cu altă cantitate dispare → „ok” pe rândul vecin)
     ['M57 rândul-ancoră ales după cantitate (forma r2)', [["END;   -- ancora, FARA cantitate", "END\n       AND EXISTS (SELECT 1 FROM unnest(regexp_split_to_array(btrim(regexp_replace(l.linie, '[ ' || chr(9) || ']+', ' ', 'g')), ' ')) t WHERE (public.fn_ofertare_numar_ro(t) ->> 'valoare')::numeric = q.cantitate);   -- ancora, FARA cantitate"]], ['t3_dovada_a_cod_intreg + t3_dovada_a_ambigua']],
     // r3 P1: același rând revendicat de două poziții; denumirea ca subșir al alteia (fără UM-ul poziției după ea)
     ['M58 rândul revendicat de două poziții → ambele ok (revendicările ignorate)', [["          IF v_anc_n > 1 OR v_rev > 0 THEN v_ver := 'rand_ambiguu'; END IF;", "          IF v_anc_n > 1 THEN v_ver := 'rand_ambiguu'; END IF;"]], ['t3_dovada_a_cod_intreg + t3_dovada_a_ambigua']],
-    ['M59 ancora pe denumire fără UM-ul poziției după ea (forma r3)', [["public.fn_ofertare_masura_norm(q.denumire) || ' ' || public.fn_ofertare_masura_norm(q.um) AS d) z", "public.fn_ofertare_masura_norm(q.denumire) AS d) z"]], ['t3_dovada_a_cod_intreg + t3_dovada_a_ambigua']],
-    // r4 P1: denumirea acceptată oriunde în celulă (sufix), nu la începutul ei
-    // (strpos > 0 singur ar fi echivalent: restul tăiat de la începutul rândului conține cuvintele dinaintea denumirii → respins oricum; mutantul real taie restul de la locul potrivirii)
-    ['M60 ancora pe denumire ca subșir al celulei, nu la început (forma r4)', [["ELSE strpos(z.x || ' ', z.d || ' ') = 1 AND substr(z.x, length(z.d) + 1) ~", "ELSE strpos(z.x || ' ', z.d || ' ') > 0 AND substr(z.x, strpos(z.x, z.d) + length(z.d)) ~"]], ['t3_dovada_a_cod_intreg + t3_dovada_a_ambigua']],
-    // r5 P1: după UM pot urma cuvinte (UM-ul din interiorul unei denumiri mai lungi trece ca coloană UM)
-    ['M61 capătul drept al denumirii neconfirmat: după UM orice (forma r5)', [["AND substr(z.x, length(z.d) + 1) ~ ('^( [0-9][0-9.,' || chr(160) || chr(8239) || chr(8201) || ']*)+$') END;", "END;"]], ['t3_dovada_a_cod_intreg + t3_dovada_a_ambigua']],
   ]
   const DOAR_MUTANT = (process.argv.find(a => a.startsWith('--mutant=')) || '').slice('--mutant='.length)   // depanare: un singur mutant
   for (const [nume, inl, scenarii] of MUTANTI) {
