@@ -3921,7 +3921,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
 
   useEffect(() => {
     if (tab !== 'clarificari') return
-    supabase.from('ofertare_clarificari').select('id, nr, intrebare, status, origine, citita_la, raspuns, cheie, sursa').eq('licitatie_id', l.id).order('nr')
+    supabase.from('ofertare_clarificari').select('id, nr, intrebare, status, origine, fisier_path, citita_la, raspuns, cheie, sursa').eq('licitatie_id', l.id).order('nr')
       .then(({ data }) => setClar(data || []))
     supabase.from('v_ofertare_clarificari_baza').select('id, stare, marcaj_planse, text, amprenta_curenta').eq('licitatie_id', l.id)
       .then(({ data, error }) => setClarBaza(error ? { peId: null, eroare: error.message || 'eroare' } : { peId: new Map((data || []).map(r => [r.id, r])), eroare: null }))
@@ -4050,7 +4050,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
                       <span style={{ fontWeight:800, color:G.muted }}>{q.nr}.</span>
                       <div style={{ flex:1, minWidth:0 }}>
                         <div style={{ fontSize:13.5, whiteSpace:'pre-wrap' }}>{q.intrebare}</div>
-                        <div style={{ fontSize:11.5, color:G.dim, marginTop:4 }}>{q.origine === 'manual' ? '👤 încărcată manual' : '🤖 generată de platformă'}{q.origine === 'manual' && (q.citita_la ? ' · ✓ citită de platformă' : ' · ⚠ necitită')}</div>
+                        <div style={{ fontSize:11.5, color:G.dim, marginTop:4 }}>{q.origine === 'manual' ? (q.fisier_path ? '👤 încărcată manual' : '👤 scrisă manual') : '🤖 generată de platformă'}{q.origine === 'manual' && q.fisier_path && (q.citita_la ? ' · ✓ citită de platformă' : ' · ⚠ necitită')}</div>
                         {q.raspuns && <div style={{ fontSize:12.5, color:G.green, marginTop:6, whiteSpace:'pre-wrap' }}>↳ {q.raspuns}</div>}
                         {(() => { const st = stareBazaCiorna(q, clarBaza.peId, clarBaza.eroare); return st.blocheaza || st.nivel === 'luat_act'
                           ? <div style={{ fontSize:12, color: st.nivel === 'luat_act' ? G.muted : G.red, marginTop:5 }}>⚠ {(q.status === 'trimisa' || q.status === 'raspunsa') && st.nivel === 'schimbata' ? 'baza cifrelor s-a schimbat DUPĂ transmitere — textul transmis rămâne neschimbat' : st.text} (reconfirmare în ❓ Clarificări)</div> : null })()}

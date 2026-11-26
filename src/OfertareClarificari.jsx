@@ -578,7 +578,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
       <div style={{ ...S.card, padding:14 }}>
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8, flexWrap:'wrap', gap:8 }}>
           <div style={{ fontWeight:800, fontSize:13.5 }}>❓ Întrebările noastre ({clar?.length ?? '...'})
-            {!!clar?.length && <span style={{ fontSize:11, fontWeight:400, color:G.dim, marginLeft:8 }}>🤖 {clar.filter(q => q.origine !== 'manual').length} platformă · 👤 {clar.filter(q => q.origine === 'manual').length} manual{clar.some(q => q.origine === 'manual' && !q.citita_la) ? ` · ⚠ ${clar.filter(q => q.origine === 'manual' && !q.citita_la).length} necitite` : ''}</span>}
+            {!!clar?.length && <span style={{ fontSize:11, fontWeight:400, color:G.dim, marginLeft:8 }}>🤖 {clar.filter(q => q.origine !== 'manual').length} platformă · 👤 {clar.filter(q => q.origine === 'manual').length} manual{clar.some(q => q.origine === 'manual' && q.fisier_path && !q.citita_la) ? ` · ⚠ ${clar.filter(q => q.origine === 'manual' && q.fisier_path && !q.citita_la).length} necitite` : ''}</span>}
           </div>
           <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
             <button style={{ ...S.btnS, padding:'5px 12px', fontSize:12 }} onClick={addQ}>＋ întrebare</button>
