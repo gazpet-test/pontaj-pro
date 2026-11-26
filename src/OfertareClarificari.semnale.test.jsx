@@ -7,7 +7,8 @@ import { afterEach, describe, it, expect, vi } from 'vitest'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 
-const st = vi.hoisted(() => ({ rpc: {}, tabele: {}, erori: {}, cereri: [], invocari: 0, scrieri: [] }))
+// amana[tabel] = rows => Promise<{data, error}>: un select pe acel tabel rămâne în zbor până îl rezolvă testul (probele async, review r2)
+const st = vi.hoisted(() => ({ rpc: {}, tabele: {}, erori: {}, cereri: [], invocari: 0, scrieri: [], amana: {} }))
 vi.mock('./lib/supabase.js', () => ({ supabase: clientFals(st) }))
 vi.mock('./OfertareClarificariPuncte.jsx', () => ({ default: () => null }))
 vi.mock('./OfertareTemeiuri.jsx', () => ({ default: () => null }))
@@ -38,6 +39,7 @@ function clientFals(s) {
         if (q.op !== 'select') { s.scrieri.push({ tabel, op: q.op, payload: q.payload, filtre: q.filtre }); return Promise.resolve({ data: null, error: null }).then(ok, ko) }
         if (s.erori[tabel]) return Promise.resolve({ data: null, error: s.erori[tabel] }).then(ok, ko)
         const rows = (s.tabele[tabel] || []).filter(r => q.filtre.every(([c, v]) => r[c] === v))
+        if (s.amana?.[tabel]) return s.amana[tabel](q.unic ? (rows[0] ?? null) : rows).then(ok, ko)
         return Promise.resolve({ data: q.unic ? (rows[0] ?? null) : rows, error: null }).then(ok, ko)
       }
       return q
@@ -53,6 +55,8 @@ if (!JSDOM) console.warn(`[OfertareClarificari.semnale.test] ${MOTIV_SARIT}`)
 const dom = JSDOM ? describe : describe.skip
 
 const LIC = { id: 900001, nr_anunt: 'CN-TEST', obiect: 'Obiect de test', status: 'in_lucru', termen_depunere: '2027-01-15' }
+const LIC_B = { id: 900002, nr_anunt: 'CN-TEST-B', obiect: 'A doua licitație', status: 'in_lucru', termen_depunere: '2027-02-15' }
+const CLAR_B = [{ id: 9, licitatie_id: LIC_B.id, nr: 1, intrebare: 'Întrebarea licitației B', status: 'de_trimis', origine: 'manual', cheie: null, fisier_path: null, raspuns: null }]
 const DOC_RASP = 301, DOC_RASP_NECITIT = 302, DOC_RASP2 = 303
 const CLAR = [
   { id: 1, licitatie_id: LIC.id, nr: 1, intrebare: 'Întrebare scrisă de mână', status: 'trimisa', origine: 'manual', cheie: null, fisier_path: null, raspuns: null },
@@ -76,7 +80,7 @@ const BAZA = [{ id: 2, licitatie_id: LIC.id, status: 'de_trimis', stare: 'necesi
   text: 'necesită review — aprobă textul exact pe baza curentă', detalii: { evaluare: 'surse_v1', stare: 'necesita_review', diferente: { verdict: { vechi: 'diferenta', acum: 'diferenta' }, a: { vechi: 6400, acum: 6400 }, b: { vechi: 3995, acum: 3995 }, prag: { vechi: 0.05, acum: 0.1 } } } }]
 
 let curata = []
-afterEach(() => { [...curata].reverse().forEach(f => f()); curata = []; st.rpc = {}; st.tabele = {}; st.erori = {}; st.cereri = []; st.invocari = 0; st.scrieri = []; vi.restoreAllMocks() })
+afterEach(() => { [...curata].reverse().forEach(f => f()); curata = []; st.rpc = {}; st.tabele = {}; st.erori = {}; st.cereri = []; st.invocari = 0; st.scrieri = []; st.amana = {}; vi.restoreAllMocks() })
 
 function stareImplicita() {
   st.rpc = {
@@ -87,7 +91,7 @@ function stareImplicita() {
   }
   st.tabele = { ofertare_clarificari: CLAR, profiles: [{ id: 'u1', name: 'Test' }], ofertare_documente_atribuire: DOCS, v_ofertare_clarificari_baza: BAZA }
 }
-async function monteaza() {
+async function monteaza({ licitatii = [LIC] } = {}) {
   const j = new JSDOM('<!doctype html><div id="r"></div>', { pretendToBeVisual: true })
   const vechi = { window: globalThis.window, document: globalThis.document }
   Object.assign(globalThis, { window: j.window, document: j.window.document })
@@ -97,18 +101,28 @@ async function monteaza() {
   const root = createRoot(j.window.document.getElementById('r'))
   const toast = vi.fn()
   const asteapta = async () => { await act(async () => { for (let i = 0; i < 80; i++) await Promise.resolve() }) }
-  await act(async () => { root.render(<ClarificariPanel licitatii={[LIC]} profile={{ id: 'u1' }} showToast={toast} initialLicId={LIC.id} />) })
+  await act(async () => { root.render(<ClarificariPanel licitatii={licitatii} profile={{ id: 'u1' }} showToast={toast} initialLicId={LIC.id} />) })
   await asteapta()
-  curata.push(() => { act(() => root.unmount()); Object.assign(globalThis, vechi) })
+  let demontat = false
+  const demonteaza = () => { if (!demontat) { demontat = true; act(() => root.unmount()); Object.assign(globalThis, vechi) } }
+  curata.push(demonteaza)
   const d = j.window.document
   const apasa = async el => { await act(async () => { el.dispatchEvent(new j.window.MouseEvent('click', { bubbles: true })) }); await asteapta() }
   const scrie = async (el, val) => {
     const set = Object.getOwnPropertyDescriptor(j.window.HTMLInputElement.prototype, 'value').set
     await act(async () => { set.call(el, val); el.dispatchEvent(new j.window.Event('input', { bubbles: true })) })
   }
+  // schimbarea licitației din selectorul din antet (primul <select> din ecran)
+  const alegeLicitatia = async (id) => {
+    const sel = d.querySelector('select')
+    const set = Object.getOwnPropertyDescriptor(j.window.HTMLSelectElement.prototype, 'value').set
+    await act(async () => { set.call(sel, String(id)); sel.dispatchEvent(new j.window.Event('change', { bubbles: true })) })
+    await asteapta()
+  }
   const buton = (txt) => [...d.querySelectorAll('button')].find(b => b.textContent.includes(txt))
   const butoane = (txt) => [...d.querySelectorAll('button')].filter(b => b.textContent.includes(txt))
-  return { d, toast, apasa, scrie, buton, butoane, text: () => d.body.textContent }
+  const notificari = () => st.cereri.filter(c => c.rpc === 'ofertare_clarificari_notifica').map(c => c.args.p_licitatie_id)
+  return { d, toast, apasa, scrie, buton, butoane, alegeLicitatia, asteapta, act, demonteaza, notificari, text: () => d.body.textContent }
 }
 
 dom('Clarificări — ciornele auto_surse_* și „răspuns posibil relevant” (jsdom)', () => {
@@ -191,6 +205,52 @@ dom('Clarificări — ciornele auto_surse_* și „răspuns posibil relevant” 
     const sectiune = d.querySelector('[data-semnale-relevante]')
     expect(sectiune.textContent).toContain('nu putem citi semnalele')
     expect(sectiune.textContent).not.toContain('niciun semnal')
+  })
+  // ─── probele async cerute la review r1 / r2 (L24): notificarea de review e chemată DOAR după ce o încărcare s-a aplicat → e martorul încărcărilor aplicate ───
+  it('A → B → legarea pe A (RPC suspendat) se termină: ecranul rămâne pe B, fără toast-ul acțiunii vechi, fără a treia încărcare aplicată', async () => {
+    stareImplicita()
+    st.tabele.ofertare_clarificari = [...CLAR, ...CLAR_B]
+    let rezolvaLegarea = null
+    st.rpc.fn_ofertare_semnal_raspuns_leaga = () => new Promise(res => { rezolvaLegarea = res })
+    const { apasa, buton, butoane, alegeLicitatia, asteapta, act, text, toast, notificari } = await monteaza({ licitatii: [LIC, LIC_B] })
+    expect(text()).toContain('Întrebare scrisă de mână'); expect(notificari()).toEqual([LIC.id])
+    await apasa(butoane('La ce întrebări răspunde?')[0])
+    await apasa(buton('ia B'))
+    await apasa(buton('✓ leagă'))          // RPC-ul rămâne în zbor
+    expect(rezolvaLegarea).toBeTypeOf('function')
+    await alegeLicitatia(LIC_B.id)        // omul trece pe B; B se încarcă
+    expect(text()).toContain('Întrebarea licitației B'); expect(text()).not.toContain('Întrebare scrisă de mână')
+    expect(notificari()).toEqual([LIC.id, LIC_B.id])
+    await act(async () => { rezolvaLegarea({ data: { ok: true, semnal_id: 50, clarificare: 'retrasa' }, error: null }) }); await asteapta()
+    // acțiunea veche s-a terminat: nu readuce A, nu anunță pe ecranul B, nu aplică o încărcare în plus
+    expect(text()).toContain('Întrebarea licitației B'); expect(text()).not.toContain('Întrebare scrisă de mână')
+    expect(toast.mock.calls.some(c => String(c[0]).includes('legat de răspuns'))).toBe(false)
+    expect(notificari()).toEqual([LIC.id, LIC_B.id])
+  })
+  it('A → B → A cu încărcările lui A terminate INVERS: prima încărcare (veche) nu suprascrie a doua; demontarea cu o încărcare în zbor nu aplică nimic', async () => {
+    stareImplicita()
+    st.tabele.ofertare_clarificari = [...CLAR.map(q => ({ ...q })), ...CLAR_B]
+    const pend = []
+    st.amana.ofertare_clarificari = rows => new Promise(res => { pend.push(() => res({ data: rows, error: null })) })
+    const { alegeLicitatia, asteapta, act, text, notificari, demonteaza } = await monteaza({ licitatii: [LIC, LIC_B] })
+    expect(pend.length).toBe(1); expect(text()).not.toContain('Întrebare scrisă de mână'); expect(notificari()).toEqual([])
+    await alegeLicitatia(LIC_B.id); expect(pend.length).toBe(2)
+    await act(async () => { pend[1]() }); await asteapta()
+    expect(text()).toContain('Întrebarea licitației B'); expect(notificari()).toEqual([LIC_B.id])
+    // înapoi pe A; între timp textul lui A s-a schimbat pe server (v2) → a doua încărcare a lui A aduce v2
+    st.tabele.ofertare_clarificari[0].intrebare = 'Întrebare A versiunea 2'
+    await alegeLicitatia(LIC.id); expect(pend.length).toBe(3)
+    await act(async () => { pend[2]() }); await asteapta()
+    expect(text()).toContain('Întrebare A versiunea 2'); expect(notificari()).toEqual([LIC_B.id, LIC.id])
+    // abia acum se termină PRIMA încărcare a lui A (v1): nu suprascrie v2, nu notifică
+    await act(async () => { pend[0]() }); await asteapta()
+    expect(text()).toContain('Întrebare A versiunea 2'); expect(text()).not.toContain('Întrebare scrisă de mână')
+    expect(notificari()).toEqual([LIC_B.id, LIC.id])
+    // demontare cu o încărcare în zbor: B se cere, ecranul se închide, răspunsul vine după → nimic aplicat, nicio excepție
+    await alegeLicitatia(LIC_B.id); expect(pend.length).toBe(4)
+    demonteaza()
+    pend[3](); for (let i = 0; i < 80; i++) await Promise.resolve()
+    expect(notificari()).toEqual([LIC_B.id, LIC.id])
   })
   it('legarea refuzată de server (CM_FARA_DREPT) → mesajul fără cod, nimic marcat ca legat', async () => {
     stareImplicita()

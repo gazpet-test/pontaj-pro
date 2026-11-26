@@ -28,7 +28,8 @@ const fmtData = d => (d ? new Date(d).toLocaleString('ro-RO', { dateStyle: 'shor
 const naturi = ms => [...new Set((ms || []).map(m => m?.natura).filter(Boolean))].join(' / ') || '—'
 const NUME_OBIECT_TOT = 'toată lucrarea'
 
-export default function OfertareSemnale({ licitatie: l, profile, showToast, onDeschideClarificari = null, deschisInitial = false }) {
+// reloadKey: schimbat de părinte după o extragere structurată încheiată → recitire (serverul a publicat o evaluare nouă; review r2 P2)
+export default function OfertareSemnale({ licitatie: l, profile, showToast, onDeschideClarificari = null, deschisInitial = false, reloadKey = 0 }) {
   const [deschis, setDeschis] = useState(!!deschisInitial)
   const [st, setSt] = useState(null)       // { grupuri, setari, docs, evaluare, poateDecide, necitite }
   const [eroare, setEroare] = useState(null)
@@ -70,7 +71,9 @@ export default function OfertareSemnale({ licitatie: l, profile, showToast, onDe
       setPrag(s ? String(Number((Number(s.prag) * 100).toFixed(4))).replace('.', ',') : '5')
       setPlafon(s ? String(s.plafon_pagini) : '200')
     })().catch(e => { if (aici()) setEroare(`${MESAJ_EROARE} (${e?.message || e}) — nu înseamnă că sunt în regulă.`) })
-  }, [deschis, l?.id, profile?.id, reload])
+    // demontare / schimbare de dependențe: încărcarea în zbor se invalidează (review r2)
+    return () => { gen.current++ }
+  }, [deschis, l?.id, profile?.id, reload, reloadKey])
 
   const salveazaSetari = async () => {
     const er = eroareSetari(prag, plafon)

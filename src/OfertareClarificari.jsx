@@ -482,9 +482,12 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
     const brut = String(valRetinuta[cheieVal(docId, semnalId)] ?? '').trim().replace(',', '.')
     const v = Number(brut)
     if (!brut || !Number.isFinite(v) || v < 0) return showToast('Scrie valoarea reținută (număr ≥ 0) sau alege „ia A” / „ia B”.', 'err')
+    const idCerut = licId
     setLegareSemnal(semnalId)
     try {
       const { data, error } = await supabase.rpc('fn_ofertare_semnal_raspuns_leaga', { p_semnal_id: semnalId, p_document_id: docId, p_valoare: v })
+      // review r2: acțiunea pornită pe altă licitație nu mai anunță nimic pe ecranul curent (serverul a scris sau nu; se vede la reîncărcarea ei)
+      if (licCurenta.current !== idCerut) return
       if (error || data?.ok !== true) { showToast('Legarea semnalului a fost refuzată: ' + mesajEroareClarificare(error || { message: 'răspuns neconfirmat' }), 'err'); return }
       showToast(`✓ Semnalul #${semnalId} a fost legat de răspuns cu valoarea ${v.toLocaleString('ro-RO')}${data.clarificare === 'retrasa' ? ' — ciorna needitată a fost retrasă' : ''}.`)
       await load()

@@ -19,7 +19,8 @@ const S = {
 }
 const SCOP = 'cant_extragere'
 
-export default function OfertareProbaExtractor({ licitatie: l }) {
+// onRulare: chemat după fiecare rulare încheiată (gata / oprit / eroare), pe licitația pe care a pornit — cardul semnalelor se recitește (review r2 P2)
+export default function OfertareProbaExtractor({ licitatie: l, onRulare = null }) {
   const [deschis, setDeschis] = useState(false)
   const [st, setSt] = useState(null)        // { buget, consum, cerere }
   const [err, setErr] = useState(null)
@@ -91,7 +92,7 @@ export default function OfertareProbaExtractor({ licitatie: l }) {
     jurnalAici(`■ ${extractor}: ${r.motiv} — ${tot.felii} felii, ${tot.cost.toFixed(4)} USD, deficit B1 ${tot.deficit}, escaladate ${tot.escaladate}, erori ${tot.erori}${r.pasi.find(p => p.extractor)?.extractor ? ` (${r.pasi.find(p => p.extractor).extractor})` : ''}`)
     } catch (e) { if (aici()) setErr('Rulare întreruptă: ' + (e?.message || String(e))) }
     finally { setBusy(false) }
-    if (aici()) await load()
+    if (aici()) { await load(); if (typeof onRulare === 'function') onRulare(idRulare) }
   }
 
   return (

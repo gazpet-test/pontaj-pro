@@ -3862,6 +3862,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
   const [selCerinte, setSelCerinte] = useState([])
   const [ocrReload, setOcrReload] = useState(0)   // OCR local: eligibilitatea se schimbă din Loturi → reîncarcă secțiunea OCR
   const [packImportKey, setPackImportKey] = useState(0)   // P0c: după import din Source Pack, registrul se reîncarcă
+  const [semnaleReload, setSemnaleReload] = useState(0)   // TKT-0329 A: după o rulare a extragerii structurate, semnalele se recitesc
   useEffect(() => { setSelCerinte([]) }, [l.id])
   const [clar, setClar] = useState(null)
   const [clarBaza, setClarBaza] = useState({ peId: new Map(), eroare: null })   // R5 runda 9 — v_ofertare_clarificari_baza
@@ -4012,8 +4013,9 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
               <CerinteSection licitatie={l} profile={profile} sel={selCerinte} setSel={setSelCerinte} reloadKey={packImportKey} />
               <SourcePackSection licitatie={l} profile={profile} onImported={() => { setPackImportKey(k => k + 1); onChanged?.() }} />
               <InventarIndependentSection licitatie={l} profile={profile} />
-              <OfertareProbaExtractor licitatie={l} />
-              <OfertareSemnale licitatie={l} profile={profile} showToast={showToast} onDeschideClarificari={() => setTab('clarificari')} />
+              {/* TKT-0329 A (review r2 P2): o extragere încheiată în proba extractorului recitește cardul semnalelor deja deschis (serverul a publicat o evaluare nouă) */}
+              <OfertareProbaExtractor licitatie={l} onRulare={() => setSemnaleReload(k => k + 1)} />
+              <OfertareSemnale licitatie={l} profile={profile} showToast={showToast} reloadKey={semnaleReload} onDeschideClarificari={() => setTab('clarificari')} />
               <J02bComutator licitatie={l} profile={profile} onChanged={onChanged} />
               <AcoperireSection licitatie={l} profile={profile} sel={selCerinte} />
             </>}
