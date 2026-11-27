@@ -482,6 +482,15 @@ console.log('0. validatorul runnerului, forma fișierelor, paritatea scheletului
   const S0105 = citeste('supabase/tests/20270105a_executie_rest_decontat_schelet.sql')
   ok(bloc(SCHELET, '-- PARITATE_20261209A_INCEPUT', '-- PARITATE_20261209A_SFARSIT') === bloc(S0105, '-- PARITATE_20261209A_INCEPUT', '-- PARITATE_20261209A_SFARSIT'),
     'blocul 20261209a din schelet = scheletul 20270105a (verbatim)')
+  const porti = t => t.slice(t.indexOf('CREATE FUNCTION public.fn_izo_porti_definitii()'), t.indexOf('END $f$;', t.indexOf('CREATE FUNCTION public.fn_izo_porti_lipsa()')) + 8)
+  ok(porti(SCHELET).length > 500 && porti(SCHELET) === porti(S0105), 'stub-urile porților Izometrie din schelet = scheletul 20270105a (verbatim)')
+  // regula porților (docs/izometrie/PORTI_REGULA.md, CI izometrie-porti-regula): migrarea și revenirea trec detectorul
+  let det
+  try { det = { cod: 0, out: execFileSync('node', [join(ROOT, 'scripts/izometrie/porti_regula.mjs')], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }) } }
+  catch (e) { det = { cod: e.status, out: String(e.stdout || '') + String(e.stderr || '') } }
+  const linieDet = f => (det.out.split('\n').find(l => l.includes(f)) || 'LIPSA').trim()
+  ok(det.cod === 0 && /^OK /.test(linieDet(`migrations/${NUME}.sql`)) && /^OK /.test(linieDet(`revenire/${NUME_REV}.sql`)),
+    `detectorul porților: cod ${det.cod}; ${linieDet(`migrations/${NUME}.sql`).slice(0, 110)}; ${linieDet(`revenire/${NUME_REV}.sql`).slice(0, 110)}`)
   const M1029 = citeste('supabase/migrations/20261029a_executie_pachete_rls_strans.sql')
   const fn1029 = M1029.slice(M1029.indexOf('CREATE OR REPLACE FUNCTION public.fn_executie_pachete_acces'), M1029.indexOf('$$;') + 3)
   ok(bloc(SCHELET, 'CREATE OR REPLACE FUNCTION public.fn_executie_pachete_acces', '$$;') === fn1029, 'fn_executie_pachete_acces din schelet = textul 20261029a (verbatim)')
@@ -759,7 +768,8 @@ const rezultat = async (scenariu, text) => {
 const SCEN = {
   pacheteDeriva: async (db, t) => { await db.exec(`CREATE OR REPLACE FUNCTION public.fn_executie_pachete_acces(p_scriere boolean) RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ SELECT auth.uid() IS NOT NULL $f$`); return livreaza(db, t) },
   calleeDeriva: async (db, t) => { await db.exec(`CREATE OR REPLACE FUNCTION public.fn_executie_acces_nerestrans_cont(p_profile uuid) RETURNS boolean LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$ SELECT true $f$`); return livreaza(db, t) },
-  tipAltul: async (db, t) => { await db.exec('ALTER TABLE public.executie_tronsoane ALTER COLUMN cod TYPE varchar(40)'); return livreaza(db, t) },
+  // (pe executie_tronsoane schimbarea ar înroși și poarta E4b — apărare dublă; aici un tabel din afara amprentei porților)
+  tipAltul: async (db, t) => { await db.exec('ALTER TABLE public.executie_pachete_lansare ALTER COLUMN tronson_id TYPE integer'); return livreaza(db, t) },
   portiRosii: async (db, t) => { await db.exec(`CREATE OR REPLACE FUNCTION public.fn_izo_porti_lipsa() RETURNS text[] LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ SELECT '{e4b}'::text[] $f$`); return livreaza(db, t) },
   revCuDate: async (db, t) => { await livreaza(db, MIG); await ca(db, 'MPA', `SELECT public.fn_sud_metode_seteaza(${PA}, ARRAY['PM'])`, [], { commit: true }); return revino(db, t) },
   revCuObiect: async (db, t) => { await livreaza(db, MIG); await urca(db, 'MPA', `${PA}/${TA12}/r.pdf`); return revino(db, t) },

@@ -7,7 +7,8 @@
 -- user_module_access, employees, executie_acces_proiect (20261209a).
 -- Funcțiile de drept: blocul PARITATE_20261209A = copie VERBATIM din supabase/tests/20270105a_executie_rest_decontat_schelet.sql (proba verifică
 -- textual și md5 bd4320f76e9f36f492c7186c0a982155 pe fn_executie_proiect_permis); fn_executie_pachete_acces = corpul EXACT din
--- 20261029a_executie_pachete_rls_strans.sql (= cel citit de chat pe producție 27.11.2026; proba verifică paritatea). fn_izo_porti_lipsa() = stub '{}'.
+-- 20261029a_executie_pachete_rls_strans.sql (= cel citit de chat pe producție 27.11.2026; proba verifică paritatea). Porțile Izometrie: stub-urile
+-- din scheletul 20270105a (verzi, cu ștampile), pentru că migrarea face ritualul din docs/izometrie/PORTI_REGULA.md.
 -- Proprietarul tabelelor storage aici e postgres (pe Supabase: supabase_storage_admin) — limită declarată în raport.
 DO $r$
 BEGIN
@@ -161,6 +162,56 @@ CREATE POLICY pachete_pdf_incarcare ON storage.objects FOR INSERT TO authenticat
 -- un obiect existent cu nume NENUMERIC (politicile noi nu trebuie să pice pe el la cast)
 INSERT INTO storage.objects (bucket_id, name, owner) VALUES ('executie-pachete-pdf', 'aprobare/abc-nenumeric.pdf', NULL);
 
--- STUB-ul porților Izometrie (verzi); proba îl înlocuiește pentru „porți roșii”
-CREATE FUNCTION public.fn_izo_porti_lipsa() RETURNS text[] LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ SELECT '{}'::text[] $f$;
-REVOKE ALL ON FUNCTION public.fn_izo_porti_lipsa() FROM PUBLIC, anon, authenticated, service_role;
+-- STUB-urile porților Izometrie = blocul din scheletul 20270105a (VERBATIM; forma celor reale: DEFINER, md5 pe catalog, ștampila în COMMENT;
+-- E4b = ACL / coloane / politici pe executie_proiecte / executie_tronsoane). Migrarea le cere verzi înainte, le reștampilează și le cere verzi după
+-- (docs/izometrie/PORTI_REGULA.md); proba înlocuiește fn_izo_porti_lipsa pentru „porți roșii”.
+-- PARITATE_PORTI_INCEPUT
+CREATE FUNCTION public.fn_izo_porti_definitii() RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT md5(coalesce((SELECT string_agg(p.polname, ',' ORDER BY p.polname) FROM pg_policy p WHERE p.polname LIKE 'izo\_%'), ''))
+$f$;
+CREATE FUNCTION public.fn_izo_porti_e3_definitii() RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT md5(coalesce((SELECT string_agg(c.relname, ',' ORDER BY c.relname) FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relname LIKE 'izo\_documente%'), ''))
+$f$;
+CREATE FUNCTION public.fn_izo_porti_e3b_definitii() RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT md5(coalesce((SELECT string_agg(c.relname, ',' ORDER BY c.relname) FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relname LIKE 'izo\_corectii%'), ''))
+$f$;
+CREATE FUNCTION public.fn_izo_porti_e4_definitii() RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT md5(coalesce((SELECT string_agg(pg_get_indexdef(i.indexrelid), ',' ORDER BY i.indexrelid::regclass::text) FROM pg_index i WHERE i.indrelid = 'public.profiles'::regclass), ''))
+$f$;
+CREATE FUNCTION public.fn_izo_porti_e4b_definitii() RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT md5(concat_ws('|',
+   (SELECT string_agg(format('%s:%s:%s:%s:%s:%s', p.oid::regprocedure, p.proowner, p.prosecdef, p.proconfig, p.proacl, md5(p.prosrc)), ',' ORDER BY p.oid::regprocedure::text)
+      FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_izo\_%'),
+   (SELECT string_agg(format('%s:%s:%s:%s:%s', c.relname, c.relowner, c.relrowsecurity, c.relacl, c.reloptions), ',' ORDER BY c.relname)
+      FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relname = ANY (ARRAY['executie_proiecte', 'executie_tronsoane', 'logistica_depozite']::text[])),
+   (SELECT string_agg(format('%s:%s:%s:%s:%s:%s', c.relname, a.attname, a.atttypid, a.attnotnull, a.attacl, pg_get_expr(d.adbin, d.adrelid)), ',' ORDER BY c.relname, a.attnum)
+      FROM pg_class c JOIN pg_attribute a ON a.attrelid = c.oid LEFT JOIN pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum
+     WHERE c.relnamespace = 'public'::regnamespace AND c.relname = ANY (ARRAY['executie_proiecte', 'executie_tronsoane', 'logistica_depozite']::text[]) AND a.attnum > 0 AND NOT a.attisdropped),
+   (SELECT string_agg(format('%s:%s:%s:%s:%s:%s:%s', c.relname, p.polname, p.polcmd, p.polpermissive, p.polroles, pg_get_expr(p.polqual, p.polrelid), pg_get_expr(p.polwithcheck, p.polrelid)), ',' ORDER BY c.relname, p.polname)
+      FROM pg_class c JOIN pg_policy p ON p.polrelid = c.oid WHERE c.relnamespace = 'public'::regnamespace AND c.relname = ANY (ARRAY['executie_proiecte', 'executie_tronsoane', 'logistica_depozite']::text[]))))
+$f$;
+CREATE FUNCTION public.fn_izo_porti_lipsa() RETURNS text[] LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v text[] := '{}'; r record;
+BEGIN
+  FOR r IN SELECT * FROM (VALUES ('fn_izo_porti_definitii', 'porti'), ('fn_izo_porti_e3_definitii', 'porti_e3'), ('fn_izo_porti_e3b_definitii', 'porti_e3b'),
+                                 ('fn_izo_porti_e4_definitii', 'porti_e4'), ('fn_izo_porti_e4b_definitii', 'porti_e4b')) x(f, p) LOOP
+    IF obj_description(to_regprocedure('public.' || r.f || '()'), 'pg_proc') IS DISTINCT FROM r.p || '=' || (SELECT CASE r.f
+         WHEN 'fn_izo_porti_definitii' THEN public.fn_izo_porti_definitii() WHEN 'fn_izo_porti_e3_definitii' THEN public.fn_izo_porti_e3_definitii()
+         WHEN 'fn_izo_porti_e3b_definitii' THEN public.fn_izo_porti_e3b_definitii() WHEN 'fn_izo_porti_e4_definitii' THEN public.fn_izo_porti_e4_definitii()
+         ELSE public.fn_izo_porti_e4b_definitii() END) THEN
+      v := array_append(v, r.f || ' definitii diferite');
+    END IF;
+  END LOOP;
+  RETURN v;
+END $f$;
+-- PARITATE_PORTI_SFARSIT
+REVOKE ALL ON FUNCTION public.fn_izo_porti_definitii(), public.fn_izo_porti_e3_definitii(), public.fn_izo_porti_e3b_definitii(), public.fn_izo_porti_e4_definitii(),
+  public.fn_izo_porti_e4b_definitii(), public.fn_izo_porti_lipsa() FROM PUBLIC, anon, authenticated, service_role;
+DO $stampile$
+BEGIN
+  EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_definitii() IS %L', 'porti=' || public.fn_izo_porti_definitii());
+  EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_e3_definitii() IS %L', 'porti_e3=' || public.fn_izo_porti_e3_definitii());
+  EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_e3b_definitii() IS %L', 'porti_e3b=' || public.fn_izo_porti_e3b_definitii());
+  EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_e4_definitii() IS %L', 'porti_e4=' || public.fn_izo_porti_e4_definitii());
+  EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_e4b_definitii() IS %L', 'porti_e4b=' || public.fn_izo_porti_e4b_definitii());
+END $stampile$;
