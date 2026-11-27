@@ -235,9 +235,15 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
     const nrExport = new Set(deTrimis.map(q => q.nr))
     // 20270114a: punctele (și deci temeiurile de pe puncte, citite prin join cu ele) sunt vizibile doar ownerului / responsabililor licitației.
     // Pentru alt cont join-ul ar întoarce 0 rânduri și adresa ar ieși FĂRĂ temeiurile de pe puncte, părând completă (B7) → refuz explicit.
+    // Verificarea e PE SERVER, acum, pentru fiecare întrebare exportată (poarta RLS a punctelor, fn_ofertare_clar_puncte_poarta) — nu heuristica
+    // UI cu drepturi posibil învechite (review Jakarinos #1210 r1 P1 #3); fără RPC (migrarea neaplicată) sau eroare = export blocat (fail-closed).
     if (!poateCheltuiUI(licitatii?.find(l => l.id === licId), profile)) {
       showToast('Export blocat: temeiurile de pe punctele întrebărilor le poate verifica doar ownerul sau un responsabil al licitației (punctele sunt vizibile doar lor) — roagă-l să genereze adresa.', 'err'); return
     }
+    const porti = await Promise.all(deTrimis.map(q => supabase.rpc('fn_ofertare_clar_puncte_poarta', { p_clarificare_id: q.id })))
+    const ePoarta = porti.find(p => p.error)
+    if (ePoarta) { showToast('Export blocat: poarta punctelor nu s-a putut verifica pe server (' + ePoarta.error.message + ')', 'err'); return }
+    if (porti.some(p => p.data !== true)) { showToast('Export blocat: nu mai ai drept pe punctele acestor întrebări (ownerul / responsabilul licitației generează adresa).', 'err'); return }
     const practica = []
     {
       // temeiurile de pe întrebări + cele de pe PUNCTELE întrebărilor (punct → întrebare) — B4 Jakarinos

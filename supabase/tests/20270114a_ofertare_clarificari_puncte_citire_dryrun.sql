@@ -14,9 +14,13 @@
 --   t_cu_drept    u_resp / u_resp2 vad EXACT punctele clarificarii C1 (2) si nimic de pe C2 / C3; u_resp scrie un punct pe C1 (si il vede), schimba
 --                 rezolutia (triggerul semneaza cu auth.uid() = u_resp), NU poate scrie pe C2 (42501); u_owner vede acelasi numar total ca postgres
 --                 (toate punctele clonei) si poate scrie pe orice clarificare; RPC-ul = true pe C1 pentru u_resp, false pe C2;
+--   t_parinte     garda pe ofertare_clarificari: u_of nu muta / nu sterge C1 (are puncte; 42501) dar muta / sterge o clarificare fara puncte (ca azi);
+--                 u_resp nu muta C1 (nici pe licitatia lui) dar o sterge (cascada = punctele licitatiei lui); C1 si punctele ei raman intacte pana atunci;
 --   t_anon        anon: nimic (0 randuri sau 42501).
 -- Rezultatul asteptat: fiecare sectiune tipareste „DRY 20270114a <nume> OK”, ultima linie „DRY 20270114a TOTUL OK”; orice FAIL opreste (ON_ERROR_STOP).
 -- FIXTURI: pe clona, daca ofertare_licitatii / profiles / user_module_access cer alte coloane NOT NULL sau alte valori, se completeaza DOAR aici.
+--   UUID-urile sintetice (f0000000-…-0000000114aN) nu trebuie sa existe pe clona (ON CONFLICT DO NOTHING pe profiles pastreaza un profil existent cu acel
+--   id — verifica inainte ca nu exista). ROLLBACK-ul readuce randurile si obiectele, nu si valorile secventelor identity (consumate; fara efect functional).
 BEGIN;
 SET LOCAL search_path = public, pg_temp;
 CREATE FUNCTION pg_temp.rd_u(k text) RETURNS uuid LANGUAGE sql IMMUTABLE AS $f$
@@ -238,6 +242,51 @@ BEGIN
   END IF;
   PERFORM pg_temp.rd_postgres();
   RAISE NOTICE 'DRY 20270114a t_cu_drept OK (total puncte ca postgres: %)', v_tot_pg + 2;
+END $t$;
+
+-- ── t_parinte (garda pe ofertare_clarificari: mutarea / stergerea unei clarificari cu puncte, de catre client) ──
+DO $t$
+DECLARE n_upd int; c_fara bigint;
+BEGIN
+  -- u_of (modul, fara poarta): nu muta si nu sterge C1 (are puncte); poate muta / sterge o clarificare FARA puncte (ca azi)
+  PERFORM pg_temp.rd_ca('of');
+  BEGIN
+    UPDATE public.ofertare_clarificari SET licitatie_id = pg_temp.rd_c('l2'), nr = 97 WHERE id = pg_temp.rd_c('c1');
+    RAISE EXCEPTION 't_parinte FAIL: u_of a mutat clarificarea C1 (cu puncte) pe L2';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  BEGIN
+    DELETE FROM public.ofertare_clarificari WHERE id = pg_temp.rd_c('c1');
+    RAISE EXCEPTION 't_parinte FAIL: u_of a sters clarificarea C1 (cu puncte)';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  INSERT INTO public.ofertare_clarificari (licitatie_id, nr, intrebare, status, origine) VALUES (pg_temp.rd_c('l1'), 98, 'DRY fara puncte', 'propunere', 'manual') RETURNING id INTO c_fara;
+  UPDATE public.ofertare_clarificari SET licitatie_id = pg_temp.rd_c('l2') WHERE id = c_fara;
+  GET DIAGNOSTICS n_upd = ROW_COUNT;
+  IF n_upd <> 1 THEN RAISE EXCEPTION 't_parinte FAIL: u_of nu a putut muta o clarificare fara puncte (% randuri)', n_upd; END IF;
+  DELETE FROM public.ofertare_clarificari WHERE id = c_fara;
+  GET DIAGNOSTICS n_upd = ROW_COUNT;
+  IF n_upd <> 1 THEN RAISE EXCEPTION 't_parinte FAIL: u_of nu a putut sterge o clarificare fara puncte (% randuri)', n_upd; END IF;
+  PERFORM pg_temp.rd_postgres();
+  IF (SELECT licitatie_id FROM public.ofertare_clarificari WHERE id = pg_temp.rd_c('c1')) <> pg_temp.rd_c('l1')
+     OR (SELECT count(*) FROM public.ofertare_clarificari_puncte WHERE clarificare_id = pg_temp.rd_c('c1')) <> 3 THEN
+    RAISE EXCEPTION 't_parinte FAIL: C1 sau punctele ei s-au schimbat';
+  END IF;
+  -- u_resp (poarta pe L1): nici el nu muta C1 (mutarea unei clarificari cu puncte nu e flux de client); poate sterge C1 (cascada = punctele lui)
+  PERFORM pg_temp.rd_ca('resp');
+  BEGIN
+    UPDATE public.ofertare_clarificari SET licitatie_id = pg_temp.rd_c('l2'), nr = 97 WHERE id = pg_temp.rd_c('c1');
+    RAISE EXCEPTION 't_parinte FAIL: u_resp a mutat clarificarea C1 (cu puncte) pe alta licitatie';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  DELETE FROM public.ofertare_clarificari WHERE id = pg_temp.rd_c('c1');
+  GET DIAGNOSTICS n_upd = ROW_COUNT;
+  IF n_upd <> 1 THEN RAISE EXCEPTION 't_parinte FAIL: u_resp nu a putut sterge clarificarea C1 a licitatiei lui (% randuri)', n_upd; END IF;
+  PERFORM pg_temp.rd_postgres();
+  IF EXISTS (SELECT 1 FROM public.ofertare_clarificari WHERE id = pg_temp.rd_c('c1')) OR EXISTS (SELECT 1 FROM public.ofertare_clarificari_puncte WHERE clarificare_id = pg_temp.rd_c('c1')) THEN
+    RAISE EXCEPTION 't_parinte FAIL: C1 sau punctele ei au ramas dupa stergerea de catre responsabil';
+  END IF;
+  RAISE NOTICE 'DRY 20270114a t_parinte OK';
 END $t$;
 
 -- ── t_anon ──
