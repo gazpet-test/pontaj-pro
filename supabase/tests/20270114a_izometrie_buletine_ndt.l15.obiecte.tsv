@@ -1,0 +1,174 @@
+# 20270114a: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase)
+coloana	coloana public.sud_buletin_randuri.buletin_id	creat
+coloana	coloana public.sud_buletin_randuri.cheie	creat
+coloana	coloana public.sud_buletin_randuri.cod_raw	creat
+coloana	coloana public.sud_buletin_randuri.data_inspectie	creat
+coloana	coloana public.sud_buletin_randuri.id	creat
+coloana	coloana public.sud_buletin_randuri.ind_adancime	creat
+coloana	coloana public.sud_buletin_randuri.ind_end	creat
+coloana	coloana public.sud_buletin_randuri.ind_inaltime	creat
+coloana	coloana public.sud_buletin_randuri.ind_lungime	creat
+coloana	coloana public.sud_buletin_randuri.ind_start	creat
+coloana	coloana public.sud_buletin_randuri.motiv_cod	creat
+coloana	coloana public.sud_buletin_randuri.nr	creat
+coloana	coloana public.sud_buletin_randuri.observatii	creat
+coloana	coloana public.sud_buletin_randuri.ordine	creat
+coloana	coloana public.sud_buletin_randuri.refacuta	creat
+coloana	coloana public.sud_buletin_randuri.rezultat	creat
+coloana	coloana public.sud_buletin_randuri.stare_cod	creat
+coloana	coloana public.sud_buletin_randuri.sufix	creat
+coloana	coloana public.sud_buletin_randuri.tronson_nr	creat
+coloana	coloana public.sud_buletine.anulat_de	creat
+coloana	coloana public.sud_buletine.anulat_la	creat
+coloana	coloana public.sud_buletine.anulat_motiv	creat
+coloana	coloana public.sud_buletine.citiri	creat
+coloana	coloana public.sud_buletine.confirmat_de	creat
+coloana	coloana public.sud_buletine.confirmat_la	creat
+coloana	coloana public.sud_buletine.data_buletin	creat
+coloana	coloana public.sud_buletine.firma_citita	creat
+coloana	coloana public.sud_buletine.fisier_nume	creat
+coloana	coloana public.sud_buletine.fisier_path	creat
+coloana	coloana public.sud_buletine.fisier_sha256	creat
+coloana	coloana public.sud_buletine.fortat_motiv	creat
+coloana	coloana public.sud_buletine.id	creat
+coloana	coloana public.sud_buletine.incarcat_de	creat
+coloana	coloana public.sud_buletine.incarcat_la	creat
+coloana	coloana public.sud_buletine.metoda	creat
+coloana	coloana public.sud_buletine.numar	creat
+coloana	coloana public.sud_buletine.numar_cheie	creat
+coloana	coloana public.sud_buletine.proiect_id	creat
+coloana	coloana public.sud_buletine.stare	creat
+coloana	coloana public.sud_buletine.tronson_id	creat
+coloana	coloana public.sud_buletine.versiune	creat
+coloana	coloana public.sud_export_deblocari.creat_de	creat
+coloana	coloana public.sud_export_deblocari.creat_la	creat
+coloana	coloana public.sud_export_deblocari.folosit_la	creat
+coloana	coloana public.sud_export_deblocari.id	creat
+coloana	coloana public.sud_export_deblocari.lipsuri	creat
+coloana	coloana public.sud_export_deblocari.motiv	creat
+coloana	coloana public.sud_export_deblocari.pachet_id	creat
+coloana	coloana public.sud_export_deblocari.proiect_id	creat
+coloana	coloana public.sud_export_deblocari.tip	creat
+coloana	coloana public.sud_exporturi.creat_de	creat
+coloana	coloana public.sud_exporturi.creat_la	creat
+coloana	coloana public.sud_exporturi.deblocare_id	creat
+coloana	coloana public.sud_exporturi.fisier_path	creat
+coloana	coloana public.sud_exporturi.fotografie	creat
+coloana	coloana public.sud_exporturi.id	creat
+coloana	coloana public.sud_exporturi.incomplet	creat
+coloana	coloana public.sud_exporturi.pachet_id	creat
+coloana	coloana public.sud_exporturi.proiect_id	creat
+coloana	coloana public.sud_exporturi.tip	creat
+coloana	coloana public.sud_metode_proiect.actualizat_de	creat
+coloana	coloana public.sud_metode_proiect.actualizat_la	creat
+coloana	coloana public.sud_metode_proiect.metode	creat
+coloana	coloana public.sud_metode_proiect.proiect_id	creat
+coloana	coloana public.sud_suduri_eliminate.activ	creat
+coloana	coloana public.sud_suduri_eliminate.cheie	creat
+coloana	coloana public.sud_suduri_eliminate.creat_de	creat
+coloana	coloana public.sud_suduri_eliminate.creat_la	creat
+coloana	coloana public.sud_suduri_eliminate.id	creat
+coloana	coloana public.sud_suduri_eliminate.inlocuita_de	creat
+coloana	coloana public.sud_suduri_eliminate.motiv	creat
+coloana	coloana public.sud_suduri_eliminate.proiect_id	creat
+coloana	coloana public.sud_suduri_eliminate.retras_de	creat
+coloana	coloana public.sud_suduri_eliminate.retras_la	creat
+coloana	coloana public.sud_suduri_eliminate.retras_motiv	creat
+coloana	coloana public.sud_suduri_eliminate.tronson_id	creat
+constrangere	constrangere tabel public.sud_buletin_randuri.sud_buletin_randuri_buletin_id_fkey	creat
+constrangere	constrangere tabel public.sud_buletin_randuri.sud_buletin_randuri_buletin_id_ordine_key	creat
+constrangere	constrangere tabel public.sud_buletin_randuri.sud_buletin_randuri_cheie_ck	creat
+constrangere	constrangere tabel public.sud_buletin_randuri.sud_buletin_randuri_cod_raw_check	creat
+constrangere	constrangere tabel public.sud_buletin_randuri.sud_buletin_randuri_observatii_check	creat
+constrangere	constrangere tabel public.sud_buletin_randuri.sud_buletin_randuri_pkey	creat
+constrangere	constrangere tabel public.sud_buletin_randuri.sud_buletin_randuri_rezultat_check	creat
+constrangere	constrangere tabel public.sud_buletin_randuri.sud_buletin_randuri_stare_cod_check	creat
+constrangere	constrangere tabel public.sud_buletine.sud_buletine_firma_citita_check	creat
+constrangere	constrangere tabel public.sud_buletine.sud_buletine_fisier_nume_check	creat
+constrangere	constrangere tabel public.sud_buletine.sud_buletine_fisier_path_check	creat
+constrangere	constrangere tabel public.sud_buletine.sud_buletine_fisier_sha256_check	creat
+constrangere	constrangere tabel public.sud_buletine.sud_buletine_fortat_motiv_check	creat
+constrangere	constrangere tabel public.sud_buletine.sud_buletine_metoda_check	creat
+constrangere	constrangere tabel public.sud_buletine.sud_buletine_numar_check	creat
+constrangere	constrangere tabel public.sud_buletine.sud_buletine_pkey	creat
+constrangere	constrangere tabel public.sud_buletine.sud_buletine_stare_check	creat
+constrangere	constrangere tabel public.sud_buletine.sud_buletine_stare_ck	creat
+constrangere	constrangere tabel public.sud_export_deblocari.sud_export_deblocari_lipsuri_check	creat
+constrangere	constrangere tabel public.sud_export_deblocari.sud_export_deblocari_motiv_check	creat
+constrangere	constrangere tabel public.sud_export_deblocari.sud_export_deblocari_pkey	creat
+constrangere	constrangere tabel public.sud_export_deblocari.sud_export_deblocari_tip_check	creat
+constrangere	constrangere tabel public.sud_exporturi.sud_exporturi_deblocare_ck	creat
+constrangere	constrangere tabel public.sud_exporturi.sud_exporturi_deblocare_id_fkey	creat
+constrangere	constrangere tabel public.sud_exporturi.sud_exporturi_fisier_path_check	creat
+constrangere	constrangere tabel public.sud_exporturi.sud_exporturi_fotografie_check	creat
+constrangere	constrangere tabel public.sud_exporturi.sud_exporturi_pkey	creat
+constrangere	constrangere tabel public.sud_exporturi.sud_exporturi_tip_check	creat
+constrangere	constrangere tabel public.sud_metode_proiect.sud_metode_proiect_metode_check	creat
+constrangere	constrangere tabel public.sud_metode_proiect.sud_metode_proiect_pkey	creat
+constrangere	constrangere tabel public.sud_suduri_eliminate.sud_suduri_eliminate_motiv_check	creat
+constrangere	constrangere tabel public.sud_suduri_eliminate.sud_suduri_eliminate_pkey	creat
+constrangere	constrangere tabel public.sud_suduri_eliminate.sud_suduri_eliminate_retras_ck	creat
+functie	functie public.fn_sud_buletin_anuleaza(bigint,text)	creat
+functie	functie public.fn_sud_buletin_confirma(bigint,integer,jsonb)	creat
+functie	functie public.fn_sud_buletin_incarca(bigint,text,text,date,text,text,text,text,jsonb,text)	creat
+functie	functie public.fn_sud_cod_normalizeaza(text,integer)	creat
+functie	functie public.fn_sud_drept(bigint,boolean)	creat
+functie	functie public.fn_sud_export_deblocheaza(bigint,text,text,jsonb)	creat
+functie	functie public.fn_sud_export_inregistreaza(bigint,text,jsonb,bigint,text)	creat
+functie	functie public.fn_sud_metode_seteaza(bigint,text[])	creat
+functie	functie public.fn_sud_sudura_elimina(bigint,text,text,text[])	creat
+functie	functie public.fn_sud_sudura_eliminare_retrage(bigint,text)	creat
+functie	functie public.fn_sud_tronson_nr(text)	creat
+politica	politica public.sud_buletin_randuri.sud_buletin_randuri_citire	creat
+politica	politica public.sud_buletine.sud_buletine_citire	creat
+politica	politica public.sud_export_deblocari.sud_export_deblocari_citire	creat
+politica	politica public.sud_exporturi.sud_exporturi_citire	creat
+politica	politica public.sud_metode_proiect.sud_metode_proiect_citire	creat
+politica	politica public.sud_suduri_eliminate.sud_suduri_eliminate_citire	creat
+politica	politica storage.objects.sud_ndt_citire	creat
+politica	politica storage.objects.sud_ndt_incarcare	creat
+relatie	relatie public.sud_buletin_randuri	creat
+relatie	relatie public.sud_buletin_randuri_buletin_id_ordine_key	creat
+relatie	relatie public.sud_buletin_randuri_cheie_ix	creat
+relatie	relatie public.sud_buletin_randuri_id_seq	creat
+relatie	relatie public.sud_buletin_randuri_pkey	creat
+relatie	relatie public.sud_buletine	creat
+relatie	relatie public.sud_buletine_cheie_uq	creat
+relatie	relatie public.sud_buletine_fisier_uq	creat
+relatie	relatie public.sud_buletine_id_seq	creat
+relatie	relatie public.sud_buletine_pkey	creat
+relatie	relatie public.sud_buletine_tronson_ix	creat
+relatie	relatie public.sud_export_deblocari	creat
+relatie	relatie public.sud_export_deblocari_id_seq	creat
+relatie	relatie public.sud_export_deblocari_pkey	creat
+relatie	relatie public.sud_exporturi	creat
+relatie	relatie public.sud_exporturi_deblocare_uq	creat
+relatie	relatie public.sud_exporturi_id_seq	creat
+relatie	relatie public.sud_exporturi_pachet_ix	creat
+relatie	relatie public.sud_exporturi_pkey	creat
+relatie	relatie public.sud_metode_proiect	creat
+relatie	relatie public.sud_metode_proiect_pkey	creat
+relatie	relatie public.sud_suduri_eliminate	creat
+relatie	relatie public.sud_suduri_eliminate_id_seq	creat
+relatie	relatie public.sud_suduri_eliminate_pkey	creat
+relatie	relatie public.sud_suduri_eliminate_uq	creat
+tip	tip public.sud_buletin_randuri	creat
+tip	tip public.sud_buletin_randuri[]	creat
+tip	tip public.sud_buletine	creat
+tip	tip public.sud_buletine[]	creat
+tip	tip public.sud_export_deblocari	creat
+tip	tip public.sud_export_deblocari[]	creat
+tip	tip public.sud_exporturi	creat
+tip	tip public.sud_exporturi[]	creat
+tip	tip public.sud_metode_proiect	creat
+tip	tip public.sud_metode_proiect[]	creat
+tip	tip public.sud_suduri_eliminate	creat
+tip	tip public.sud_suduri_eliminate[]	creat
+trigger	trigger public.sud_buletin_randuri intern sud_buletin_randuri_buletin_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.sud_buletin_randuri intern sud_buletin_randuri_buletin_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.sud_buletine intern sud_buletin_randuri_buletin_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.sud_buletine intern sud_buletin_randuri_buletin_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.sud_export_deblocari intern sud_exporturi_deblocare_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.sud_export_deblocari intern sud_exporturi_deblocare_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.sud_exporturi intern sud_exporturi_deblocare_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.sud_exporturi intern sud_exporturi_deblocare_id_fkey "RI_FKey_check_upd"() 17	creat
