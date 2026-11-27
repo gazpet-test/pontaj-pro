@@ -1,5 +1,5 @@
 # L15 v2 - manifestul diferentelor pentru 20270114a_izometrie_buletine_ndt (AMPRENTA_GLOBALA v2); familie TAB eticheta TAB operatie TAB amprenta
-# generat pe clona cu scripts/livrare_l15_manifest.sh (ROLLBACK, nimic comis); migrarea sha256 d534742fdbe49303df1a7f8997ca2091675a44e6ccafecc93b6abbdcda378a3d
+# generat pe clona cu scripts/livrare_l15_manifest.sh (ROLLBACK, nimic comis); migrarea sha256 953a43f320c13bd8b855b8ee42f1276aa14081b0ceb9259aac1f946f84365458
 # clona: server_version_num 170006, rol postgres
 # clona: GLOBAL inainte b6fa8e2247a34cad5780e099497b5231 (27302 randuri), dupa e38180899cb4939cbc0600fea5950138 (27481 randuri); 179 obiecte
 coloana	coloana public.sud_buletin_randuri.buletin_id	creat	6dcdd6ddbc66ed57220086a84e1aa7dc
