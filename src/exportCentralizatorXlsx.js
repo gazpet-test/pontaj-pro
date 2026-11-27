@@ -22,7 +22,39 @@ import {
   TRANSGAZ_RAND_N_CELLS, TRANSGAZ_RAND_N_MERGES, TRANSGAZ_RAND_N_ROW_HEIGHTS,
   TRANSGAZ_COL_WIDTHS,
 } from './transgazTemplate.js'
+import { codDocumentAfisat, codDocumentFisier, coloaneAfisate } from './lib/izoExportIzo.js'
 const XLSX = XLSX_mod.default || XLSX_mod
+
+// ---------------------------------------------------------------------------
+// 27.11.2026 (PR3 „Export IZO înainte de lansare”, docs/izometrie/BULETINE_NDT_SPEC.md §7 + auditul T12):
+//   • desenul IZOMETRIE conține țevile ȘI curbele, în ordinea rândurilor (aprobatul Transgaz le are ca blocuri);
+//     tabela BR–BY urmează aceeași ordine; legările (fără element) rămân la coada tabelei, cu valori directe
+//   • PM / PA-UT / UT din arhiva de buletine (când există buletin valabil), altfel textul din rând (input `ndt`)
+//   • foaia BULETINE (doar cu `ndt`): metodă, număr, dată, suduri acoperite, fișierul din ZIP; la export incomplet, lipsurile
+//   • fără „_x000d_” (Enter = '\n'), fără „0” în celulele goale (nicio formulă spre o celulă goală; LOT valoare directă)
+//   • codul documentului într-o singură formă (codDocumentAfisat: revizia nu se mai dublează)
+// ---------------------------------------------------------------------------
+/** Elementele desenate (țevi + curbe) în ordinea rândurilor + rândul lor în tabela BR–BY. */
+const ESTE_ELEMENT = t => t.tip_rand === 'teava' || t.tip_rand === 'curba'
+const rowMaster = (i) => 17 + Math.floor(i / 10) * 13 + (i % 10)
+function planDesen(tevi) {
+  const elemente = tevi.filter(ESTE_ELEMENT)
+  const n = elemente.length
+  const ultimElement = n > 0 ? rowMaster(n - 1) : 16
+  const randLookup = []   // indice în tevi → rândul din BR–BY
+  let ie = 0, io = 0
+  tevi.forEach((t, idx) => { randLookup[idx] = ESTE_ELEMENT(t) ? rowMaster(ie++) : ultimElement + (++io) })
+  return { elemente, n, randLookup, ultimRand: ultimElement + io }
+}
+/** Dimensiunea afișată: la curbe cu unghiul (dacă nu e deja în text). */
+function dimensiuneAfisata(row) {
+  let dim = row.dimensiune || ''
+  if (row.tip_rand === 'curba' && row.unghi_curba && !String(dim).includes(row.unghi_curba)) {
+    dim = dim ? `${dim} ${row.unghi_curba}` : String(row.unghi_curba)
+  }
+  return dim
+}
+const esteGol = v => v === null || v === undefined || String(v).trim() === ''
 
 // ---------------------------------------------------------------------------
 // STYLE CONSTANTS (Segoe UI 10pt, fill grey nuante, borders thin)
@@ -122,7 +154,7 @@ function setNumCell(ws, addr, num, style = {}) {
 // ---------------------------------------------------------------------------
 // BUILD SHEET 1 — CENTRALIZATOR (pixel-perfect)
 // ---------------------------------------------------------------------------
-function buildSheet1Centralizator({ pachet, tronson, proiect, tevi }) {
+function buildSheet1Centralizator({ pachet, tronson, proiect, tevi, ndt }) {
   const ws = {}
 
   // ========== HEADER ZONE R1-R10 ==========
@@ -202,12 +234,12 @@ function buildSheet1Centralizator({ pachet, tronson, proiect, tevi }) {
   const cellStyleSmall = { font: FONT_SMALL, alignment: ALIGN_CENTER, border: BORDER_THIN }
   const cellStyleObs = { font: FONT_BASE, alignment: ALIGN_CENTER }
 
-  // Calc lastRow tabela master pentru range VLOOKUP dinamic
-  const teviRealeCount = tevi.filter(t => t.tip_rand === 'teava').length
-  const lastMasterTeavaRowS1 = teviRealeCount > 0 ? 17 + Math.floor((teviRealeCount - 1) / 10) * 13 + ((teviRealeCount - 1) % 10) : 17
-  const nrCurbeLegariS1 = tevi.length - teviRealeCount
-  const lastMasterRowS1 = lastMasterTeavaRowS1 + nrCurbeLegariS1
+  // Range VLOOKUP dinamic = tot ce ocupă tabela BR–BY (elementele desenate + legările de la coadă)
+  const lastMasterRowS1 = Math.max(17, planDesen(tevi).ultimRand)
   const vlookupRange = `IZOMETRIE!$BR$17:$BY$${lastMasterRowS1}`
+  // coloanele text: VLOOKUP pe o celulă goală dă 0 în Excel / LibreOffice → „&""” (audit 27.11, G4)
+  const vlookupText = (r, col) => `VLOOKUP($A${r},${vlookupRange},${col},FALSE)&""`
+  const codDoc = codDocumentAfisat(pachet)
 
   tevi.forEach((row, idx) => {
     const r = 14 + idx
@@ -216,25 +248,17 @@ function buildSheet1Centralizator({ pachet, tronson, proiect, tevi }) {
     // A: POZ counter (valoare directă)
     setCell(ws, `A${r}`, poz, cellStyleNum)
 
-    // B: LOT — B14 = valoare directă, B15+ = =B{r-1} cascadă
-    if (idx === 0) {
-      setCell(ws, `B${r}`, row.lot || '', cellStyleText)
-    } else {
-      ws[`B${r}`] = { f: `B${r - 1}`, v: row.lot || '', t: 's', s: cellStyleText }
-    }
+    // B: LOT — valoare directă pe fiecare rând (cascada =B{r-1} arăta 0 pe rândurile fără lot)
+    setCell(ws, `B${r}`, esteGol(row.lot) ? '' : String(row.lot), cellStyleText)
 
     // C: SERIE UNICĂ = VLOOKUP col 2
-    ws[`C${r}`] = { f: `VLOOKUP($A${r},${vlookupRange},2,FALSE)`, v: row.serie_unica || '', t: 's', s: cellStyleText }
+    ws[`C${r}`] = { f: vlookupText(r, 2), v: row.serie_unica || '', t: 's', s: cellStyleText }
     // D: TIP = VLOOKUP col 3
-    ws[`D${r}`] = { f: `VLOOKUP($A${r},${vlookupRange},3,FALSE)`, v: row.tip || '', t: 's', s: cellStyleText }
+    ws[`D${r}`] = { f: vlookupText(r, 3), v: row.tip || '', t: 's', s: cellStyleText }
     // E: DIMENSIUNE = VLOOKUP col 4
-    let dim = row.dimensiune || ''
-    if (row.tip_rand === 'curba' && row.unghi_curba && !dim.includes(row.unghi_curba)) {
-      dim = dim ? `${dim} ${row.unghi_curba}` : row.unghi_curba
-    }
-    ws[`E${r}`] = { f: `VLOOKUP($A${r},${vlookupRange},4,FALSE)`, v: dim, t: 's', s: cellStyleText }
+    ws[`E${r}`] = { f: vlookupText(r, 4), v: dimensiuneAfisata(row), t: 's', s: cellStyleText }
     // F: ȘARJĂ = VLOOKUP col 5
-    ws[`F${r}`] = { f: `VLOOKUP($A${r},${vlookupRange},5,FALSE)`, v: row.sarja || '', t: 's', s: cellStyleText }
+    ws[`F${r}`] = { f: vlookupText(r, 5), v: row.sarja || '', t: 's', s: cellStyleText }
     // G: CANT = VLOOKUP col 6
     if (row.lungime_m != null && row.lungime_m !== '') {
       ws[`G${r}`] = { f: `VLOOKUP($A${r},${vlookupRange},6,FALSE)`, v: Number(row.lungime_m), t: 'n', s: { ...cellStyleNumData, numFmt: '#,##0.00' } }
@@ -243,7 +267,7 @@ function buildSheet1Centralizator({ pachet, tronson, proiect, tevi }) {
     }
 
     // H: TRONSON — H14 = valoare, H15+ = =H{r-1} cascadă
-    if (idx === 0) {
+    if (idx === 0 || esteGol(tronson?.cod)) {
       setCell(ws, `H${r}`, tronson?.cod || '', cellStyleText)
     } else {
       ws[`H${r}`] = { f: `H${r - 1}`, v: tronson?.cod || '', t: 's', s: cellStyleText }
@@ -251,18 +275,18 @@ function buildSheet1Centralizator({ pachet, tronson, proiect, tevi }) {
 
     // I: POZ. KM = VLOOKUP col 7 (NU mai e valoare directă în model NOU _00033)
     const pozKmVal = row._poz_km != null ? row._poz_km : row.poz_km_m
-    ws[`I${r}`] = { f: `VLOOKUP($A${r},${vlookupRange},7,FALSE)`, v: formatPozKm(pozKmVal), t: 's', s: cellStyleText }
+    ws[`I${r}`] = { f: vlookupText(r, 7), v: formatPozKm(pozKmVal), t: 's', s: cellStyleText }
 
-    // J: SUDURĂ = VLOOKUP col 8
-    ws[`J${r}`] = { f: `VLOOKUP($A${r},${vlookupRange},8,FALSE)`, v: formatSudura(row), t: 's', s: cellStyleText }
+    // J: SUDURĂ = VLOOKUP col 8 (sudura goală rămâne goală, nu 0)
+    ws[`J${r}`] = { f: vlookupText(r, 8), v: formatSudura(row), t: 's', s: cellStyleText }
 
-    // K, L, M: PM, PA-UT, UT (valori directe)
-    setCell(ws, `K${r}`, row.pm_cod || '', cellStyleSmall)
-    setCell(ws, `L${r}`, row.pa_ut_cod || '', cellStyleSmall)
-    setCell(ws, `M${r}`, row.ut_cod || '', cellStyleText)
+    // K, L, M: PM, PA-UT, UT — din arhiva de buletine când există buletin valabil, altfel textul din rând (aceeași regulă ca editorul)
+    const col = ndt ? coloaneAfisate(row, ndt.stare, ndt.tronsonCtx) : row
+    setCell(ws, `K${r}`, col.pm_cod || '', cellStyleSmall)
+    setCell(ws, `L${r}`, col.pa_ut_cod || '', cellStyleSmall)
+    setCell(ws, `M${r}`, col.ut_cod || '', cellStyleText)
 
     // N: DOCUMENT — N14 = valoare, N15+ = =N{r-1} cascadă
-    const codDoc = pachet.cod_document_full + (pachet.revizie > 0 ? ` rev.${pachet.revizie}` : '')
     if (idx === 0) {
       setCell(ws, `N${r}`, codDoc, cellStyleText)
     } else {
@@ -369,8 +393,7 @@ function buildSheet2FromTemplate({ pachet, tronson, proiect, tevi }) {
   }
   // Override B8 cu cod document curent (template avea formula `="..."&CENTRALIZATOR!N14`)
   if (ws['B8']) {
-    const codDoc = pachet.cod_document_full + (pachet.revizie > 0 ? ` rev.${pachet.revizie}` : '')
-    ws['B8'].v = `SCHEMĂ DE MONTAJ ÎNAINTE DE LANSARE ${codDoc}`
+    ws['B8'].v = `SCHEMĂ DE MONTAJ ÎNAINTE DE LANSARE ${codDocumentAfisat(pachet)}`
     ws['B8'].t = 's'
     delete ws['B8'].f
   }
@@ -379,8 +402,11 @@ function buildSheet2FromTemplate({ pachet, tronson, proiect, tevi }) {
     allMerges.push({ s: { r: m.s.r, c: m.s.c }, e: { r: m.e.r, c: m.e.c } })
   }
 
-  // ========== 2. Filter tevi reale + calc nrRanduri ==========
-  const teviReale = tevi.filter(t => t.tip_rand === 'teava')
+  // ========== 2. Elementele desenate (țevi + curbe, în ordinea rândurilor) + calc nrRanduri ==========
+  // Aprobatul Transgaz desenează și curbele ca blocuri (audit 27.11, G2): fără ele, sudura de după curbă dispărea din desen
+  // și blocurile se decalau. Numele vechi (teviReale) rămâne pentru diff mic: aici înseamnă „elementele desenate”.
+  const desen = planDesen(tevi)
+  const teviReale = desen.elemente
   const nrTeviReale = teviReale.length
   if (nrTeviReale === 0) {
     // Edge case: pachet fără țevi reale — doar header
@@ -504,9 +530,9 @@ function buildSheet2FromTemplate({ pachet, tronson, proiect, tevi }) {
       const fields = [
         [`${col_serie}${serieRow}`, pipe.serie_unica || '', 's'],
         [`${col_serie}${tipRow}`, pipe.tip || '', 's'],
-        [`${col_serie}${dimRow}`, pipe.dimensiune || '', 's'],
+        [`${col_serie}${dimRow}`, dimensiuneAfisata(pipe), 's'],
         [`${col_serie}${sarjaRow}`, pipe.sarja || '', 's'],
-        [`${col_serie}${lungRow}`, pipe.lungime_m != null ? Number(pipe.lungime_m) : '', pipe.lungime_m != null ? 'n' : 's'],
+        [`${col_serie}${lungRow}`, !esteGol(pipe.lungime_m) ? Number(pipe.lungime_m) : '', !esteGol(pipe.lungime_m) ? 'n' : 's'],
       ]
       for (const [addr, val, type] of fields) {
         if (ws[addr]) {
@@ -533,15 +559,12 @@ function buildSheet2FromTemplate({ pachet, tronson, proiect, tevi }) {
   const dataStyle = { font: FONT_BASE, alignment: ALIGN_CENTER, border: BORDER_THIN }
   const dataNumStyle = { font: FONT_BASE, alignment: ALIGN_CENTER, border: BORDER_THIN, numFmt: '#,##0.00' }
 
-  // Helper: calc row în tabela master pentru POZ i (0-indexed)
-  const rowMaster = (i) => 17 + Math.floor(i / 10) * 13 + (i % 10)
-
   // 4a. Header repetat la R14, R27, R40, ... per rand vizual
   // În model header e MERGE pe 3 rânduri vertical (R14:R16, R27:R29, etc.) — fără gap între header și POZ-uri
   for (let randIdx = 0; randIdx < nrRanduriVizuale; randIdx++) {
     const headerRow = 14 + randIdx * 13
     setCell(ws, `BR${headerRow}`, 'POZ.', lookupHeaderStyle)
-    setCell(ws, `BS${headerRow}`, 'SERIE\r\nUNICĂ DE\r\nIDENTIFICARE', lookupHeaderStyle)
+    setCell(ws, `BS${headerRow}`, 'SERIE\nUNICĂ DE\nIDENTIFICARE', lookupHeaderStyle)   // '\n' ca în foaia 1 ('\r' ieșea „_x000d_”)
     setCell(ws, `BT${headerRow}`, 'TIP', lookupHeaderStyle)
     setCell(ws, `BU${headerRow}`, 'DIMENSIUNE', lookupHeaderStyle)
     setCell(ws, `BV${headerRow}`, 'ȘARJĂ', lookupHeaderStyle)
@@ -558,61 +581,50 @@ function buildSheet2FromTemplate({ pachet, tronson, proiect, tevi }) {
     }
   }
 
-  // 4b. POZ-uri rânduri — formule la schema vizuală pentru țevi, valori directe pentru curbe/legări
+  // 4b. POZ-uri rânduri — formule la schema vizuală pentru elementele desenate (țevi + curbe, în ordinea rândurilor),
+  // valori directe pentru legări (fără element, la coada tabelei). O celulă fără valoare primește '' direct, nu o
+  // formulă spre o celulă goală din desen (aceea dă 0 la recalculare, audit 27.11 G4).
   const tableMasterRows = tevi
 
-  let teavaIdx = 0
+  let elemIdx = 0
   tableMasterRows.forEach((row, idx) => {
-    let r
-    if (row.tip_rand === 'teava') {
-      r = rowMaster(teavaIdx)
-    } else {
-      r = rowMaster(nrTeviReale - 1) + (idx - teavaIdx) + 1
-    }
+    const r = desen.randLookup[idx]
+    const element = ESTE_ELEMENT(row)
 
-    // BR = POZ counter (formulă cascadă)
+    // BR = POZ counter (formulă cascadă între elemente desenate consecutive)
     const poz = idx + 1
-    if (idx === 0) {
-      setNumCell(ws, `BR${r}`, poz, { ...dataStyle, font: FONT_BOLD })
+    if (idx > 0 && element && ESTE_ELEMENT(tableMasterRows[idx - 1])) {
+      ws[`BR${r}`] = { f: `BR${desen.randLookup[idx - 1]}+1`, v: poz, t: 'n', s: { ...dataStyle, font: FONT_BOLD } }
     } else {
-      // Formula =BR{r_prev}+1
-      let r_prev
-      if (row.tip_rand === 'teava' && tableMasterRows[idx - 1].tip_rand === 'teava') {
-        r_prev = rowMaster(teavaIdx - 1)
-        ws[`BR${r}`] = { f: `BR${r_prev}+1`, v: poz, t: 'n', s: { ...dataStyle, font: FONT_BOLD } }
-      } else {
-        // Mixed scenario sau curbă/legare — valoare directă
-        setNumCell(ws, `BR${r}`, poz, { ...dataStyle, font: FONT_BOLD })
-      }
+      setNumCell(ws, `BR${r}`, poz, { ...dataStyle, font: FONT_BOLD })
     }
 
-    if (row.tip_rand === 'teava') {
-      // Formule la schema vizuală
-      const rand_idx = Math.floor(teavaIdx / 10)
-      const pos = teavaIdx % 10
+    if (element) {
+      // Formule la schema vizuală (doar spre celulele care au valoare)
+      const rand_idx = Math.floor(elemIdx / 10)
+      const pos = elemIdx % 10
       const schema_pozkm_row = 17 + rand_idx * 13
       const schema_sud_row = schema_pozkm_row + 1
       const schema_serie_row = schema_pozkm_row + 4
       const col_km = RAND_1_POZ_KM_COLS[pos]
       const col_serie = RAND_1_SERIE_COLS[pos]
-
-      ws[`BS${r}`] = { f: `${col_serie}${schema_serie_row}`, v: row.serie_unica || '', t: 's', s: dataStyle }
-      ws[`BT${r}`] = { f: `${col_serie}${schema_serie_row + 1}`, v: row.tip || '', t: 's', s: dataStyle }
-      ws[`BU${r}`] = { f: `${col_serie}${schema_serie_row + 2}`, v: row.dimensiune || '', t: 's', s: dataStyle }
-      ws[`BV${r}`] = { f: `${col_serie}${schema_serie_row + 3}`, v: row.sarja || '', t: 's', s: dataStyle }
-      ws[`BW${r}`] = { f: `${col_serie}${schema_serie_row + 4}`, v: row.lungime_m != null ? Number(row.lungime_m) : '', t: 'n', s: dataNumStyle }
-      ws[`BX${r}`] = { f: `${col_km}${schema_pozkm_row}`, v: formatPozKm(row._poz_km != null ? row._poz_km : row.poz_km_m), t: 's', s: dataStyle }
-      ws[`BY${r}`] = { f: `${col_km}${schema_sud_row}`, v: formatSudura(row), t: 's', s: dataStyle }
-      teavaIdx++
+      const leaga = (addr, ref, v, style = dataStyle, t = 's') => {
+        if (esteGol(v)) setCell(ws, addr, '', dataStyle)
+        else ws[addr] = { f: ref, v, t, s: style }
+      }
+      leaga(`BS${r}`, `${col_serie}${schema_serie_row}`, row.serie_unica || '')
+      leaga(`BT${r}`, `${col_serie}${schema_serie_row + 1}`, row.tip || '')
+      leaga(`BU${r}`, `${col_serie}${schema_serie_row + 2}`, dimensiuneAfisata(row))
+      leaga(`BV${r}`, `${col_serie}${schema_serie_row + 3}`, row.sarja || '')
+      leaga(`BW${r}`, `${col_serie}${schema_serie_row + 4}`, esteGol(row.lungime_m) ? '' : Number(row.lungime_m), dataNumStyle, 'n')
+      leaga(`BX${r}`, `${col_km}${schema_pozkm_row}`, formatPozKm(row._poz_km != null ? row._poz_km : row.poz_km_m))
+      leaga(`BY${r}`, `${col_km}${schema_sud_row}`, formatSudura(row))
+      elemIdx++
     } else {
-      // Curbă/legare — valori directe
+      // Legare — valori directe
       setCell(ws, `BS${r}`, row.serie_unica || '', dataStyle)
       setCell(ws, `BT${r}`, row.tip || '', dataStyle)
-      let dim = row.dimensiune || ''
-      if (row.tip_rand === 'curba' && row.unghi_curba && !dim.includes(row.unghi_curba)) {
-        dim = dim ? `${dim} ${row.unghi_curba}` : row.unghi_curba
-      }
-      setCell(ws, `BU${r}`, dim, dataStyle)
+      setCell(ws, `BU${r}`, dimensiuneAfisata(row), dataStyle)
       setCell(ws, `BV${r}`, row.sarja || '', dataStyle)
       if (row.lungime_m != null && row.lungime_m !== '') {
         setNumCell(ws, `BW${r}`, row.lungime_m, dataNumStyle)
@@ -717,7 +729,52 @@ function buildSheet2FromTemplate({ pachet, tronson, proiect, tevi }) {
 // ---------------------------------------------------------------------------
 // MAIN: Generate workbook + return as Uint8Array (bytes)
 // ---------------------------------------------------------------------------
-export async function generateCentralizatorXlsx({ pachet, tronson, proiect, tevi }) {
+// ---------------------------------------------------------------------------
+// SHEET 3 — BULETINE (doar la „Export IZO înainte de lansare”, cu `ndt`)
+// ---------------------------------------------------------------------------
+// ndt.buletine = planBuletineZip (metodă, număr, dată, suduri acoperite, fișierul din ZIP); ndt.incomplet + ndt.lipsuri =
+// exportul deblocat de MP (§8): foaia listează ce lipsea. `pozPeRand` traduce poz_in_pachet în POZ-ul din CENTRALIZATOR.
+function buildSheetBuletine({ pachet, ndt, pozPeRand }) {
+  const ws = {}
+  const titlu = { font: { ...FONT_BOLD, sz: 11 }, alignment: ALIGN_LEFT }
+  const cap = { font: FONT_BOLD, fill: FILL_DARKER, alignment: ALIGN_CENTER_WRAP, border: BORDER_THIN }
+  const cel = { font: FONT_BASE, alignment: ALIGN_CENTER, border: BORDER_THIN }
+  const celSt = { font: FONT_BASE, alignment: { horizontal: 'left', vertical: 'center', wrapText: true }, border: BORDER_THIN }
+  let r = 1
+  setCell(ws, `A${r}`, `BULETINE NDT — ${codDocumentAfisat(pachet)}`, titlu); r += 1
+  if (ndt.incomplet) { setCell(ws, `A${r}`, 'EXPORT INCOMPLET: lipsesc documente (lista de mai jos).', { font: { ...FONT_BOLD, color: { rgb: 'C00000' } }, alignment: ALIGN_LEFT }); r += 1 }
+  r += 1
+  ;['METODĂ', 'NUMĂR', 'DATA', 'SUDURI ACOPERITE DIN PACHET', 'FIȘIER ÎN ARHIVĂ'].forEach((l, i) => setCell(ws, `${'ABCDE'[i]}${r}`, l, cap))
+  r += 1
+  const lista = ndt.buletine || []
+  if (!lista.length) { setCell(ws, `A${r}`, 'Niciun buletin în arhivă pentru sudurile pachetului.', { font: FONT_BASE, alignment: ALIGN_LEFT }); r += 1 }
+  for (const b of lista) {
+    setCell(ws, `A${r}`, String(b.metoda || ''), cel)
+    setCell(ws, `B${r}`, String(b.numar || ''), cel)
+    setCell(ws, `C${r}`, String(b.data || ''), cel)
+    setNumCell(ws, `D${r}`, b.suduri, cel)
+    setCell(ws, `E${r}`, String(b.fisierZip || ''), celSt)
+    r += 1
+  }
+  if (ndt.incomplet) {
+    r += 1
+    setCell(ws, `A${r}`, 'LIPSURI LA EXPORT', titlu); r += 1
+    ;['POZ.', 'DESCRIERE'].forEach((l, i) => setCell(ws, `${'AB'[i]}${r}`, l, cap))
+    r += 1
+    for (const x of ndt.lipsuri || []) {
+      const poz = x.rand == null ? '' : (pozPeRand.get(x.rand) ?? '')
+      if (poz === '') setCell(ws, `A${r}`, '', cel); else setNumCell(ws, `A${r}`, poz, cel)
+      setCell(ws, `B${r}`, String(x.mesaj || x.cod || ''), celSt)
+      ws['!merges'] = [...(ws['!merges'] || []), { s: { r: r - 1, c: 1 }, e: { r: r - 1, c: 4 } }]
+      r += 1
+    }
+  }
+  ws['!cols'] = [{ wch: 10 }, { wch: 16 }, { wch: 12 }, { wch: 16 }, { wch: 46 }]
+  ws['!ref'] = `A1:E${Math.max(1, r - 1)}`
+  return ws
+}
+
+export async function generateCentralizatorXlsx({ pachet, tronson, proiect, tevi, ndt = null }) {
   if (!pachet) throw new Error('Pachet obligatoriu')
   if (!Array.isArray(tevi)) throw new Error('Lista tevi obligatorie')
 
@@ -729,11 +786,15 @@ export async function generateCentralizatorXlsx({ pachet, tronson, proiect, tevi
 
   // Build workbook
   const wb = XLSX.utils.book_new()
-  const ws1 = buildSheet1Centralizator({ pachet, tronson, proiect, tevi: teviWithPozKm })
+  const ws1 = buildSheet1Centralizator({ pachet, tronson, proiect, tevi: teviWithPozKm, ndt })
   const ws2 = buildSheet2FromTemplate({ pachet, tronson, proiect, tevi: teviWithPozKm })
 
   XLSX.utils.book_append_sheet(wb, ws1, 'CENTRALIZATOR')
   XLSX.utils.book_append_sheet(wb, ws2, 'IZOMETRIE')
+  if (ndt) {
+    const pozPeRand = new Map(teviFiltered.map((t, i) => [t.poz_in_pachet, i + 1]))
+    XLSX.utils.book_append_sheet(wb, buildSheetBuletine({ pachet, ndt, pozPeRand }), 'BULETINE')
+  }
 
   // Write to Uint8Array
   const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array', cellStyles: true })
@@ -815,6 +876,6 @@ function computePozKmCascade(tevi, kmStart) {
 // FILENAME helper
 // ---------------------------------------------------------------------------
 export function buildCentralizatorFilename(pachet) {
-  const rev = pachet.revizie > 0 ? `_rev${pachet.revizie}` : '_rev0'
-  return `${pachet.cod_document_full}${rev}_Centralizator.xlsx`
+  // „COD_revN_Centralizator.xlsx”; revizia nu se mai adaugă a doua oară dacă e deja în cod (…_rev_1_rev1_…, audit G6)
+  return `${codDocumentFisier(pachet)}_Centralizator.xlsx`
 }

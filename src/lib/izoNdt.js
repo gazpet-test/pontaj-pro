@@ -461,10 +461,12 @@ export function verificaExport({ pachet, randuri, stare, metodeObligatorii, pach
   const areStare = !!(stare && typeof stare.suduri === 'object' && stare.suduri !== null)
   const vazutSerie = new Map(), vazutSudura = new Map()
   const buletineFolosite = new Map()   // identitate buletin → primul rând care îl folosește
+  let nrSuduri = 0                     // rânduri cu cod de sudură (orice formă): 0 = pachetul n-are nicio sudură (audit 27.11, G13)
 
   for (const r of randuri) {
     if (!r || r.tip_rand === 'separator') continue
     const poz = r.poz_in_pachet ?? null
+    if (areText(r.sudura_cod)) nrSuduri++
 
     // ── elementul (țeavă / curbă): serie, șarjă, lungime, dimensiune
     if (r.tip_rand === 'teava' || r.tip_rand === 'curba') {
@@ -534,6 +536,8 @@ export function verificaExport({ pachet, randuri, stare, metodeObligatorii, pach
         .push(el('buletin_fara_pdf', poz, `Buletinul ${b.metoda} ${txt(b.numar)}${d ? `/${d}` : ''} n-are PDF.`))
     }
   }
+  // ── pachet fără nicio sudură: exportul merge, dar nu trece tăcut (L12)
+  if (!nrSuduri) avertismente.push(el('pachet_fara_suduri', null, 'Pachetul n-are nicio sudură: verifică dacă rândurile sunt complete.'))
   return { blocaje, blocajeDeblocabile, avertismente }
 }
 
