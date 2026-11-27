@@ -537,7 +537,8 @@ def text_plan(plan_dir, doc):
     text, st = asambleaza_document(plan_dir.parent, plan_dir.name, pagini_native=native)
     (plan_dir / 'text_conv.txt').write_text(text, encoding='utf-8', newline='\n')
     return {'cale': str(plan_dir / 'text_conv.txt'), 'caractere': st['caractere'], 'sha256': st['sha256'],
-            'pagini_native': st.get('native'), 'pagini_ocr': st.get('ocr')}
+            'pagini_native': st.get('native'), 'pagini_ocr': st.get('ocr'),
+            'aliniere_de_verificat': st.get('aliniere_de_verificat'), 'lista_aliniere': st.get('lista_aliniere')}  # aliniere.py (27.11.2026)
 
 
 # --- procesul unic -------------------------------------------------------------------------------------------------------

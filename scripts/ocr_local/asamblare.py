@@ -6,6 +6,7 @@ o bandă oprită de gardă (ok = false, ex. buclă) nu intră niciodată, rămâ
 Paginile cu text nativ (> 50 de caractere) iau textul nativ. Fără rețea, fără modele, fără BD."""
 import hashlib, json, pathlib, re
 
+from .aliniere import marcaj, semnale_citire
 from .banda_goala import e_gol
 from .compare import segments
 from .reconcile import join_bands, render
@@ -82,11 +83,29 @@ def text_banda(raw):
     return render(desparte_nr_cod(fara_tabele_o_coloana(segments(raw))))
 
 
-def asambleaza_pagina(benzi_dirs, st):
+def avertismente_aliniere(bid, d, cititor_text, pagina, st):
+    """Etichete / valori decalate (aliniere.semnale_citire) pe TOATE citirile valide ale benzii (ok = true și raw_sha256 corect), nu
+    doar pe cea folosită în text (Jakarinos r1 P2): aceleași segmente ca în comparație, deci aceleași semnale ca în dezacorduri.jsonl.
+    Întoarce textele avertismentelor; numără în st (cu proveniența: banda, cititorul, segmentul, dacă textul paginii e al lui)."""
+    out = []
+    for c, raw, res in _citiri(d):
+        if res.get('ok') is not True: continue
+        segs = segments(raw)
+        for si, det in semnale_citire(segs):
+            out.append(marcaj(det, segs[si][1], pagina, bid, c, cititor_text, si))
+            st['aliniere_de_verificat'] += 1
+            st['lista_aliniere'].append({'banda': bid, 'cititor': c, 'segment': si, 'semnal': det['semnal'], 'k': det['k'],
+                                         'in_text': c == cititor_text})
+    return out
+
+
+def asambleaza_pagina(benzi_dirs, st, pagina=None):
     """Benzile unei pagini OCR (în ordine) -> text. Tabelele sunt deja rânduri „| … |” când ajung la join_bands.
     Bandă cu ieșire goală la un cititor: numărată în benzi_goale_de_verificat; dacă niciun cititor n-are citire validă, în text intră
-    marcajul „BANDĂ GOALĂ DE VERIFICAT” (nu se sare tăcut), altfel textul celuilalt cititor, ca fallback-ul de până acum."""
-    tx = []
+    marcajul „BANDĂ GOALĂ DE VERIFICAT” (nu se sare tăcut), altfel textul celuilalt cititor, ca fallback-ul de până acum.
+    Tabelele cu etichete / valori decalate (orice citire validă): avertismentul + propunerea se pun la ÎNCEPUTUL paginii, DUPĂ
+    cusătură — join_bands vede textele benzilor exact ca înainte (Jakarinos r1 P2: un marcaj în bandă strica suprapunerea)."""
+    tx = []; avert = []
     for bid, d in benzi_dirs:
         c, raw = citire_valida(d)
         if goale_de_verificat(d): st['benzi_goale_de_verificat'] += 1; st['lista_goale_de_verificat'].append(bid)
@@ -94,17 +113,19 @@ def asambleaza_pagina(benzi_dirs, st):
             if goale_de_verificat(d): tx.append(MARCAJ_GOL % bid); continue
             st['benzi_necitite'] += 1; st['lista_necitite'].append(bid); tx.append(MARCAJ_NECITITA % bid); continue
         if c == 'mineru': st['benzi_din_mineru'] += 1; st['lista_din_mineru'].append(bid)
+        avert += avertismente_aliniere(bid, d, c, pagina, st)
         tx.append(text_banda(raw))
     if not tx: return ''
     t = join_bands(tx, [], nu_numara=frozenset({'|'}))
     if t is None: st['cusaturi_nesigure'] += 1; t = '\n'.join(tx)
     if '<td' in t.lower() or '<tr' in t.lower(): st['html_ramas'] += 1
-    return t
+    return '\n\n'.join(avert + [t]) if avert else t
 
 
 def stare_noua():
     return {'native': 0, 'ocr': 0, 'cusaturi_nesigure': 0, 'html_ramas': 0, 'benzi_necitite': 0, 'lista_necitite': [],
-            'benzi_din_mineru': 0, 'lista_din_mineru': [], 'benzi_goale_de_verificat': 0, 'lista_goale_de_verificat': []}
+            'benzi_din_mineru': 0, 'lista_din_mineru': [], 'benzi_goale_de_verificat': 0, 'lista_goale_de_verificat': [],
+            'aliniere_de_verificat': 0, 'lista_aliniere': []}
 
 
 def asambleaza_document(rulare_dir, doc, pagini_native=None):
@@ -120,7 +141,7 @@ def asambleaza_document(rulare_dir, doc, pagini_native=None):
         nativ = (pagini_native[n] or '').strip()
         if len(nativ) > PRAG_NATIV: t = nativ; st['native'] += 1
         else:
-            t = asambleaza_pagina([(b['id'], rd / doc / ('page%04d' % n) / b['id']) for b in sorted(benzi.get(n, []), key=lambda b: b['index'])], st)
+            t = asambleaza_pagina([(b['id'], rd / doc / ('page%04d' % n) / b['id']) for b in sorted(benzi.get(n, []), key=lambda b: b['index'])], st, n)
             st['ocr'] += 1
         parti.append('⟦PAGINA %d⟧\n%s' % (n, t.strip('\n')))
     text = '\n\n'.join(parti)

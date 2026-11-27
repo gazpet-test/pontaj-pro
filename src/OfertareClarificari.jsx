@@ -20,6 +20,7 @@ import { mesajFaraText, citesteCuAi, avertismentCitire } from './ofertareCitireD
 import { eCiornaAutomata, stareBazaCiorna, textDiferente, poateAcceptaExceptieIdentitate } from './ofertareClarificariBaza.js'
 import { primiteVizibile, rezumatExtrase } from './ofertareExtrase.js'
 import { poateCheltuiUI } from './ofertareResponsabili.js'
+import { mesajInvoke } from './lib/mesajInvoke.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -60,6 +61,10 @@ export const necesitaRevizie = (q) => tokeniRevizie(q?.sursa).length > 0
 // corespunde planșelor — textul și statusul ei nu se ating automat. Omul îl scoate după revizie („✓ revizuită”); alte marcaje rămân.
 export const MARCAJ_REVIZIE_AUTO = 'revizie_planse_auto'
 export const faraMarcajRevizieAuto = (sursa) => { const p = String(sursa || '').split(','); return [p[0], ...p.slice(1).filter(t => t.trim() !== MARCAJ_REVIZIE_AUTO)].join(',') }
+// 27.11.2026 (decizia Răzvan, după review-ul #1204): citirea AI a PDF-ului unei clarificări costă → o pornește doar cine trece poarta pe
+// cheltuială (owner / responsabil numit de owner sau de un admin Ofertare). Serverul decide (edge-ul ofertare-clarificare-citeste refuză cu 403);
+// UI-ul nu arată butonul celui care evident nu trece (poateCheltuiUI, din datele licitației deja în ecran) și afișează motivul real al refuzului.
+export const MESAJ_CITIRE_PDF = 'Citirea PDF-ului cu AI costă — o pornește doar ownerul sau un responsabil al licitației numit de owner / un admin Ofertare.'
 
 export default function ClarificariPanel({ licitatii, profile, showToast, initialLicId = null, onInapoi = null, onDeschideAnaliza = null }) {
   const active = (licitatii || []).filter(l => !['castigata', 'pierduta', 'abandonata'].includes(l.status))
@@ -90,11 +95,14 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
   const poateDecide = dreptDecizie?.licId === licId && dreptDecizie?.profileId === profile?.id && dreptDecizie?.permis === true
   const numeProfil = (id) => profiles.find(p => p.id === id)?.name || '—'
   // Răzvan 07.09.2026: clarificările încărcate manual (PDF) sunt citite de platformă cu AI → citita_la + rezumat
+  // 27.11.2026: doar cine trece poarta pe cheltuială (vezi MESAJ_CITIRE_PDF); refuzul serverului (403) se arată cu mesajul lui real
+  const poateCitiPdf = () => poateCheltuiUI(active.find(l => l.id === licId), profile)
   const citesteClarificare = async (q) => {
+    if (!poateCitiPdf()) return showToast(MESAJ_CITIRE_PDF, 'err')
     setCitind(q.id)
     const { data, error } = await supabase.functions.invoke('ofertare-clarificare-citeste', { body: { clarificare_id: q.id } })
     setCitind(null)
-    if (error || data?.error) return showToast('Citire AI: ' + (data?.error || error?.message), 'err')
+    if (error || data?.error) return showToast('Citire AI: ' + await mesajInvoke(error, data), 'err')
     showToast('✓ Platforma a citit clarificarea: ' + (data?.rezumat || '').slice(0, 120))
     load()
   }
@@ -609,9 +617,11 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
                   intrebare: `(clarificare depusă extern — ${file.name}; completează aici pe scurt ce s-a întrebat)`,
                 }).select('id').single()
                 if (error) return showToast('Eroare: ' + error.message, 'err')
-                showToast('✓ PDF-ul e în platformă — îl citesc acum cu AI…')
+                // citirea AI costă: pornește automat doar pentru cine trece poarta; altfel PDF-ul rămâne „necitit”, îl citește ownerul / responsabilul
+                const citesc = !!ins?.id && poateCitiPdf()
+                showToast(citesc ? '✓ PDF-ul e în platformă — îl citesc acum cu AI…' : '✓ PDF-ul e în platformă (necitit). ' + MESAJ_CITIRE_PDF)
                 await load()
-                if (ins?.id) citesteClarificare({ id: ins.id })
+                if (citesc) citesteClarificare({ id: ins.id })
               }} />
             </label>
             <button style={{ ...S.btnS, padding:'5px 14px', fontSize:12 }} onClick={propuneServer} disabled={!!busy} title="Generatorul rulează pe workerul NAS: goluri din acoperire, ambiguități din registru, diferențe de cantități, răspunsuri primite — propuneri de verificat, le verifici tu">☁️ Propune clarificări (Sonnet)</button>
@@ -636,7 +646,9 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
                         : <span title="Generată de platformă din analiza documentației" style={{ fontSize:10.5, fontWeight:700, color:G.blue, background:G.blue + '1A', border:`1px solid ${G.blue}55`, borderRadius:5, padding:'1px 7px' }}>🤖 generată de platformă</span>}
                       {q.origine === 'manual' && q.fisier_path && (q.citita_la
                         ? <span title={q.citita_rezumat || ''} style={{ fontSize:10.5, fontWeight:700, color:G.green }}>✓ citită de platformă {new Date(q.citita_la).toLocaleString('ro-RO', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' })}</span>
-                        : <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.yellow, borderColor:G.yellow + '66' }} disabled={citind === q.id} onClick={() => citesteClarificare(q)}>{citind === q.id ? '⏳ citesc…' : '⚠ necitită — 🤖 citește PDF-ul'}</button>)}
+                        : poateCitiPdf()
+                        ? <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.yellow, borderColor:G.yellow + '66' }} disabled={citind === q.id} onClick={() => citesteClarificare(q)}>{citind === q.id ? '⏳ citesc…' : '⚠ necitită — 🤖 citește PDF-ul'}</button>
+                        : <span title={MESAJ_CITIRE_PDF} style={{ fontSize:10.5, fontWeight:700, color:G.yellow }}>⚠ necitită — o citește ownerul / responsabilul licitației</span>)}
                       {q.status === 'propunere' && <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.green, borderColor:G.green + '66' }}
                         title="Ai verificat că datele chiar lipsesc (nu sunt în memoriu, F3 sau alt document) — ciorna trece la „de trimis”"
                         onClick={() => { setQ(q.id, 'status', 'de_trimis'); saveQ({ ...q, status: 'de_trimis', _mod: true }) }}>✅ Confirm motivul — de trimis</button>}

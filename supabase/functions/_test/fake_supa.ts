@@ -7,8 +7,9 @@ export type Tabele = Record<string, Record<string, unknown>[]>
 export function fakeSupa(tabele: Tabele, opt: { radarSecret?: string; eroareCheltuiala?: boolean } = {}) {
   // upsertate: payload-urile trimise la upsert, pe tabel (ca testele să verifice CE s-ar scrie, ex. tip_sursa)
   // inserate (TKT-0390): payload-urile trimise la insert, pe tabel (ex. rulat_de = utilizatorul verificat)
+  // actualizate (clarificare-citeste, 27.11.2026): payload-urile trimise la update, pe tabel (ex. citita_la / citita_rezumat scrise după poartă)
   const n = { scrieri: 0, storage: 0, ai: 0, rpcSecret: 0, rpcCheltuiala: 0, citiri: [] as string[], upsertate: [] as { tabel: string; rows: any[] }[],
-    inserate: [] as { tabel: string; rows: any[] }[] }
+    inserate: [] as { tabel: string; rows: any[] }[], actualizate: [] as { tabel: string; patch: any }[] }
   const from = (t: string) => {
     let rows = [...(tabele[t] || [])]
     let scriere = false
@@ -18,7 +19,7 @@ export function fakeSupa(tabele: Tabele, opt: { radarSecret?: string; eroareChel
       in: (c: string, vs: unknown[]) => { rows = rows.filter((r) => vs.includes(r[c])); return b },
       is: (c: string, v: unknown) => { rows = rows.filter((r) => (r[c] ?? null) === v); return b },
       insert: (r: unknown) => { scriere = true; n.scrieri++; n.inserate.push({ tabel: t, rows: Array.isArray(r) ? r : [r] }); return b },
-      update: () => { scriere = true; n.scrieri++; return b },
+      update: (p: unknown) => { scriere = true; n.scrieri++; n.actualizate.push({ tabel: t, patch: p }); return b },
       upsert: (r: unknown) => { scriere = true; n.scrieri++; n.upsertate.push({ tabel: t, rows: Array.isArray(r) ? r : [r] }); return b },
       delete: () => { scriere = true; n.scrieri++; return b },
       maybeSingle: () => Promise.resolve({ data: rows[0] ?? null, error: null }),
