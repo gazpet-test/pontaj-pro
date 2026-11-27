@@ -2,7 +2,7 @@
 Niveluri (spec §2): cuvant (ș/ş, ț/ţ unificate DOAR la comparare), cifra (separatorul zecimal NICIODATA normalizat),
 rand de tabel (celule, cu rolurile cod / UM / cantitate cand se pot deduce). Textul citit ramane literal; nimic nu se corecteaza aici."""
 import difflib, hashlib, html, json, pathlib, re, threading
-from .aliniere import SEMNAL_ALUNECARE, detecteaza as detecteaza_aliniere, text_tabel
+from .aliniere import SEMNAL_ALUNECARE, semnale_citire, text_tabel
 from .banda_goala import e_gol, probabil_alba
 
 CEDILLA = str.maketrans({'ş': 'ș', 'ţ': 'ț', 'Ş': 'Ș', 'Ţ': 'Ț'})
@@ -350,10 +350,8 @@ def aliniere_items(base, cititor, segs):
     difera acolo: un rand pe tabel semnalat. Tipul e structura_tabele (existent in BD: nu se arbitreaza automat, merge la om, la
     reconciliere banda ramane la om fara „ales_lighton” explicit); `semnal` spune ce s-a gasit. Citirea cititorului = tabelul exact."""
     out = []
-    for si, (kind, val) in enumerate(segs):
-        if kind != 'table': continue
-        det = detecteaza_aliniere(val)
-        if not det: continue
+    for si, det in semnale_citire(segs):
+        val = segs[si][1]
         if det['semnal'] == SEMNAL_ALUNECARE:
             motiv = ('etichete si valori decalate cu k=%d randuri in tabelul citit de %s (segment %d): %d din %d perechi au simboluri '
                      'diferite pe acelasi rand - verificare pe imagine' % (det['k'], cititor, si, det['perechi'] - det['potrivite'], det['perechi']))

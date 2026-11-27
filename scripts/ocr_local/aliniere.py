@@ -9,8 +9,9 @@ separate. Detectorul se uita la tabelul UNUI cititor, singur:
 - deplasarea k (valoarea etichetei de pe randul i sta pe randul i + k, k in DEPLASARI) e sigura doar daca e UNICA, cu >= PRAG_PERECHI
   perechi deplasate potrivite si cel mult o contradictie -> semnal ALUNECARE + propunere de realiniere;
 - altfel (nicio deplasare sau mai multe) -> semnal NECLAR, fara propunere.
-Textul cititorului nu se schimba niciodata aici: propunerea e separata si marcata ca propunere. O singura definitie, folosita de
-compare.compare_band (semnalul din dezacorduri.jsonl) si de asamblare.text_banda (marcajul din text_conv.txt). Fara retea, fara BD."""
+Textul cititorului nu se schimba niciodata aici: propunerea e separata si marcata ca propunere. O singura definitie (semnale_citire,
+pe segmentele compare.segments ale fiecarei citiri), folosita de compare.compare_band (semnalul din dezacorduri.jsonl) si de
+asamblare.asambleaza_pagina (avertismentul din text_conv.txt, pentru TOATE citirile valide, nu doar cea folosita). Fara retea, fara BD."""
 import re
 import unicodedata
 
@@ -119,31 +120,41 @@ def text_tabel(rows):
     return '\n'.join(' | '.join(r) for r in rows)
 
 
-def marcaj(det, pagina=None, banda=None, cititor=None):
-    """Textul vizibil pus INAINTEA tabelului in text_conv.txt (inainte, ca sa nu schimbe randurile de la coada benzii, pe care se
-    face cusatura cu banda urmatoare). Propunerea e pe linii care NU incep cu „|”, deci nu poate fi luata drept rand citit."""
-    unde = ', '.join(x for x in (('citirea %s' % cititor) if cititor else '', ('banda %s' % banda) if banda else '') if x)
-    pag = (' pag. %s' % pagina) if pagina is not None else ''
+def semnale_citire(segs):
+    """[(indice_segment, det)] pentru tabelele semnalate ale UNEI citiri, pe segmentele compare.segments(raw) (aceleasi in
+    comparatie si in asamblare: indicii de segment coincid cu cei din dezacorduri.jsonl)."""
+    out = []
+    for si, (kind, val) in enumerate(segs):
+        if kind != 'table': continue
+        det = detecteaza(val)
+        if det: out.append((si, det))
+    return out
+
+
+def _inceput_tabel(rows, n=60):
+    for r in rows:
+        for c in r:
+            if (c or '').strip():
+                c = ' '.join(c.split())
+                return c if len(c) <= n else c[:n] + '…'
+    return ''
+
+
+def marcaj(det, rows, pagina=None, banda=None, cititor=None, cititor_text=None, segment=None):
+    """Avertismentul vizibil din text_conv.txt, pus la INCEPUTUL paginii (r2, Jakarinos r1 P2: in interiorul benzii ar fi stricat
+    cusatura cu banda vecina), cu tabelul identificat prin banda, cititor, segment si primul lui rand. cititor_text = cititorul al
+    carui text e in pagina (poate fi altul decat cel semnalat). Propunerea e pe linii care NU incep cu „|” (nu arata ca rand citit)."""
+    pag = ('pag. %s, ' % pagina) if pagina is not None else ''
+    unde = '%sbanda %s, citirea %s%s' % (pag, banda or '?', cititor or '?', (', segmentul %d' % segment) if segment is not None else '')
+    if cititor_text and cititor_text != cititor:
+        unde += ' (textul de mai jos e din citirea %s)' % cititor_text
+    tab = ' care începe cu „%s”' % _inceput_tabel(rows)
     if det['semnal'] == SEMNAL_ALUNECARE:
         n = abs(det['k'])
-        linii = ['⟦ATENȚIE: în tabelul de mai jos%s etichetele și valorile pot fi decalate cu %d %s — verifică pe imagine%s⟧'
-                 % ((' (' + unde + ')') if unde else '', n, 'rând' if n == 1 else 'rânduri', pag),
+        linii = ['⟦ATENȚIE (%s): în tabelul%s etichetele și valorile pot fi decalate cu %d %s — verifică pe imagine⟧'
+                 % (unde, tab, n, 'rând' if n == 1 else 'rânduri'),
                  '⟦PROPUNERE de realiniere după simboluri (NU e citirea; se confirmă pe imagine):⟧']
         linii += ['⟦propunere⟧ ' + ' | '.join(r) for r in det['propunere']]
         return '\n'.join(linii)
-    return ('⟦ATENȚIE: în tabelul de mai jos%s etichetele și valorile nu se potrivesc după simboluri (deplasare neclară) — '
-            'verifică pe imagine%s⟧' % ((' (' + unde + ')') if unde else '', pag))
-
-
-def adnoteaza(segs, pagina=None, banda=None, cititor=None, gasite=None):
-    """Segmentele unei benzi cu marcajul inserat inaintea fiecarui tabel semnalat; segmentele citite raman neschimbate.
-    gasite (lista, optional) primeste (indice_segment, det) pentru statistici."""
-    out = []
-    for si, (kind, val) in enumerate(segs):
-        if kind == 'table':
-            det = detecteaza(val)
-            if det:
-                out.append(('text', marcaj(det, pagina, banda, cititor)))
-                if gasite is not None: gasite.append((si, det))
-        out.append((kind, val))
-    return out
+    return ('⟦ATENȚIE (%s): în tabelul%s etichetele și valorile nu se potrivesc după simboluri (deplasare neclară) — '
+            'verifică pe imagine⟧' % (unde, tab))

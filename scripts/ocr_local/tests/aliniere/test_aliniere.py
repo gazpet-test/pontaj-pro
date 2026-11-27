@@ -92,6 +92,15 @@ class Detector(unittest.TestCase):
         rows = deplaseaza(tabel([('a', 'a'), ('b', 'b')]), -1)
         self.assertIsNone(AL.detecteaza(rows))
 
+    def test_egalitate_doua_potrivite_doua_nepotrivite_nimic(self):
+        # „majoritatea NU se potrivesc” e STRICTA: 2 / 2 nu e semnal, chiar daca o deplasare ar explica jumatatea de jos
+        # (Jakarinos r1 P3: mutantul <= -> < trecea toate testele)
+        rows = [['Marime 0, a', 'a = 0 u'], ['Marime 1, b', 'b = 1 u'], ['Marime 2, c', 'd = 3 u'], ['Marime 3, d', 'e = 4 u'],
+                ['Marime 4, e', '= 5 u']]
+        self.assertIsNone(AL.detecteaza(rows))
+        rows[1][1] = 'z = 1 u'  # 1 potrivita / 3 nepotrivite -> semnal (aceeasi forma, doar majoritatea schimbata)
+        self.assertIsNotNone(AL.detecteaza(rows))
+
     def test_majoritatea_potrivite_nu_e_alunecare(self):
         rows = tabel([('a', 'a'), ('b', 'b'), ('c', 'c'), ('d', 'x')])  # o greseala izolata = treaba comparatiei
         self.assertIsNone(AL.detecteaza(rows))
@@ -175,6 +184,12 @@ class Detector(unittest.TestCase):
         self.assertEqual(E('Coeﬁcient de siguranță, F:'), 'f')
         self.assertIsNone(E('Material conductă (tub protecție)'))
         self.assertIsNone(E('Date de proiectare (intrare):'))
+        # L13: simbolul e la COADA etichetei (dupa ultima virgula), iar valoarea INCEPE cu simbolul
+        self.assertIsNone(E('Diametru, D exterior'))
+        self.assertIsNone(E('Presiunea, p (bar)'))
+        self.assertIsNone(E('Lungime, L totala in m'))
+        self.assertIsNone(V('Valoarea p = 3'))
+        self.assertIsNone(V('rezulta p = 3'))
 
 
 class Comparatie(unittest.TestCase):
@@ -207,38 +222,77 @@ class Comparatie(unittest.TestCase):
         self.assertTrue(all(k == 'OM' for k, _ in triaza_banda(P120, P120, items).values()))
 
 
+TABEL_P120 = re.search(r'<table>.*?</table>', P120, re.S).group(0)
+TR_P120 = re.findall(r'<tr>.*?</tr>', TABEL_P120, re.S)
+
+
 class Asamblare(unittest.TestCase):
-    def rulare(self, raw):
-        tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup); rd = pathlib.Path(tmp.name)
-        (rd / 'd1').mkdir(); (rd / 'd1' / 'plan.json').write_text(json.dumps({'bands': [{'id': 'p0120_b0', 'page': 120, 'index': 0}]}), encoding='utf-8')
+    def rulare(self, benzi):
+        """benzi = [(bid, {cititor: raw})] pe pagina 120; fiecare citire ok = true cu raw_sha256 corect."""
         import hashlib
-        d = rd / 'd1' / 'page0120' / 'p0120_b0' / 'lighton'; d.mkdir(parents=True)
-        (d / 'raw.txt').write_bytes(raw.encode('utf-8'))
-        (d / 'result.json').write_text(json.dumps({'ok': True, 'raw_sha256': hashlib.sha256(raw.encode()).hexdigest()}), encoding='utf-8')
+        tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup); rd = pathlib.Path(tmp.name)
+        (rd / 'd1').mkdir()
+        (rd / 'd1' / 'plan.json').write_text(json.dumps({'bands': [{'id': b, 'page': 120, 'index': i} for i, (b, _) in enumerate(benzi)]}),
+                                             encoding='utf-8')
+        for bid, citiri in benzi:
+            for c, raw in citiri.items():
+                d = rd / 'd1' / 'page0120' / bid / c; d.mkdir(parents=True)
+                (d / 'raw.txt').write_bytes(raw.encode('utf-8'))
+                (d / 'result.json').write_text(json.dumps({'ok': True, 'raw_sha256': hashlib.sha256(raw.encode()).hexdigest()}), encoding='utf-8')
         return A.asambleaza_document(rd, 'd1', pagini_native={120: ''})
 
     def test_p0120_marcaj_si_propunere_separata_citirea_neschimbata(self):
-        text, st = self.rulare(P120)
-        self.assertIn('etichetele și valorile pot fi decalate cu 1 rând', text)
-        self.assertIn('verifică pe imagine pag. 120', text)
+        text, st = self.rulare([('p0120_b0', {'lighton': P120, 'mineru': P120_MINERU})])
+        self.assertIn('⟦ATENȚIE (pag. 120, banda p0120_b0, citirea lighton, segmentul 1): în tabelul care începe cu '
+                      '„Date de protectare (intrare):” etichetele și valorile pot fi decalate cu 1 rând — verifică pe imagine⟧', text)
         self.assertIn('⟦propunere⟧ Présiunea, p | p = | 0 MPa', text)
         self.assertIn('| Présiunea, p | = | 355 MPa |', text)  # randul citit ramane cum l-a citit LightOn
-        # marcajul + propunerea stau INAINTEA tabelului; nicio linie de propunere nu arata ca un rand de tabel citit
+        # avertismentul + propunerea stau la inceputul paginii; nicio linie de propunere nu arata ca un rand de tabel citit
         self.assertLess(text.index('⟦ATENȚIE'), text.index('| Date de protectare'))
+        self.assertTrue(text.startswith('⟦PAGINA 120⟧\n⟦ATENȚIE'))
         self.assertFalse([l for l in text.split('\n') if 'propunere' in l.lower() and l.lstrip().startswith('|')])
         self.assertEqual(st['aliniere_de_verificat'], 1)
         self.assertEqual(st['lista_aliniere'], [{'banda': 'p0120_b0', 'cititor': 'lighton', 'segment': 1,
-                                                 'semnal': AL.SEMNAL_ALUNECARE, 'k': -1}])
+                                                 'semnal': AL.SEMNAL_ALUNECARE, 'k': -1, 'in_text': True}])
+
+    def test_semnalul_mineru_ajunge_in_text_cand_textul_e_din_lighton(self):
+        # Jakarinos r1 P2: LightOn valid fara tabel, MinerU cu tabelul decalat -> comparatia semnaleaza, deci si textul + contorul
+        lighton = 'Breviar de calcul\n\nDate de proiectare citite ca text, fara tabel.'
+        text, st = self.rulare([('p0120_b0', {'lighton': lighton, 'mineru': P120})])
+        self.assertIn('Date de proiectare citite ca text', text)  # textul paginii ramane din LightOn
+        self.assertIn('citirea mineru, segmentul 1 (textul de mai jos e din citirea lighton)', text)
+        self.assertIn('⟦propunere⟧ Présiunea, p | p = | 0 MPa', text)
+        self.assertEqual(st['lista_aliniere'], [{'banda': 'p0120_b0', 'cititor': 'mineru', 'segment': 1,
+                                                 'semnal': AL.SEMNAL_ALUNECARE, 'k': -1, 'in_text': False}])
+
+    def test_paritate_cu_comparatia(self):
+        # aceleasi semnale (cititor, segment, semnal, k) in dezacorduri.jsonl si in text_conv, pe aceleasi citiri
+        for la, lm in ((P120, P120_MINERU), (P120_MINERU, P120), (P120, P120)) + tuple((r, r) for r in CORECTE.values()):
+            _, items = compare_band(banda(), la, OK, lm, OK)
+            din_cmp = sorted((i['cititor'], i['segment'], i['semnal'], i['k']) for i in items if i.get('semnal') in AL.SEMNALE)
+            _, st = self.rulare([('p0120_b0', {'lighton': la, 'mineru': lm})])
+            self.assertEqual(sorted((x['cititor'], x['segment'], x['semnal'], x['k']) for x in st['lista_aliniere']), din_cmp)
+
+    def test_cusatura_cu_banda_precedenta_nu_se_strica(self):
+        # Jakarinos r1 P2: tabelul decalat DESCHIDE banda a doua, iar primele lui doua randuri sunt suprapunerea cu banda intai.
+        # Cusatura se face pe textul neadnotat: reuseste, randurile suprapuse apar o singura data, avertismentul e in pagina.
+        b0 = 'Verificarea tubului de protectie\n\n<table>' + ''.join(TR_P120[:2]) + '</table>'
+        b1 = TABEL_P120
+        text, st = self.rulare([('p0120_b0', {'lighton': b0}), ('p0120_b1', {'lighton': b1})])
+        self.assertEqual(st['cusaturi_nesigure'], 0)
+        self.assertEqual(text.count('| Material conductă (tub protecție) | D = | 813 mm |'), 1)
+        self.assertIn('banda p0120_b1, citirea lighton', text)
+        self.assertEqual([x['banda'] for x in st['lista_aliniere']], ['p0120_b1'])
 
     def test_aliniat_corect_fara_marcaj(self):
         for n, raw in CORECTE.items():
-            text, st = self.rulare(raw)
+            text, st = self.rulare([('p0120_b0', {'lighton': raw, 'mineru': raw})])
             self.assertNotIn('⟦ATENȚIE', text, n); self.assertNotIn('propunere', text, n); self.assertEqual(st['aliniere_de_verificat'], 0)
 
     def test_neclar_marcaj_fara_propunere(self):
         rows = tabel([('a', 'c'), ('b', 'e'), ('c', 'a'), ('d', 'b'), ('e', 'd')])
         raw = '<table>' + ''.join('<tr>' + ''.join('<td>%s</td>' % c for c in r) + '</tr>' for r in rows) + '</table>'
-        text, st = self.rulare(raw)
+        text, st = self.rulare([('p0120_b0', {'lighton': raw})])
         self.assertIn('deplasare neclară', text); self.assertNotIn('PROPUNERE', text)
         self.assertEqual(st['lista_aliniere'][0]['semnal'], AL.SEMNAL_NECLAR)
 

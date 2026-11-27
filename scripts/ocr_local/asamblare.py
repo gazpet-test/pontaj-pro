@@ -6,7 +6,7 @@ o bandă oprită de gardă (ok = false, ex. buclă) nu intră niciodată, rămâ
 Paginile cu text nativ (> 50 de caractere) iau textul nativ. Fără rețea, fără modele, fără BD."""
 import hashlib, json, pathlib, re
 
-from .aliniere import adnoteaza
+from .aliniere import marcaj, semnale_citire
 from .banda_goala import e_gol
 from .compare import segments
 from .reconcile import join_bands, render
@@ -79,18 +79,33 @@ def goale_de_verificat(banda_dir):
     return [c for c, raw, res in _citiri(banda_dir) if e_gol(raw, res)]
 
 
-def text_banda(raw, pagina=None, banda=None, cititor=None, gasite=None):
-    """Tabelul cu etichete și valori decalate (aliniere.py) primește înainte un marcaj vizibil + propunerea de realiniere, marcată ca
-    propunere; rândurile citite rămân exact cum le-a citit cititorul (nu se suprascriu)."""
-    return render(adnoteaza(desparte_nr_cod(fara_tabele_o_coloana(segments(raw))), pagina, banda, cititor, gasite))
+def text_banda(raw):
+    return render(desparte_nr_cod(fara_tabele_o_coloana(segments(raw))))
+
+
+def avertismente_aliniere(bid, d, cititor_text, pagina, st):
+    """Etichete / valori decalate (aliniere.semnale_citire) pe TOATE citirile valide ale benzii (ok = true și raw_sha256 corect), nu
+    doar pe cea folosită în text (Jakarinos r1 P2): aceleași segmente ca în comparație, deci aceleași semnale ca în dezacorduri.jsonl.
+    Întoarce textele avertismentelor; numără în st (cu proveniența: banda, cititorul, segmentul, dacă textul paginii e al lui)."""
+    out = []
+    for c, raw, res in _citiri(d):
+        if res.get('ok') is not True: continue
+        segs = segments(raw)
+        for si, det in semnale_citire(segs):
+            out.append(marcaj(det, segs[si][1], pagina, bid, c, cititor_text, si))
+            st['aliniere_de_verificat'] += 1
+            st['lista_aliniere'].append({'banda': bid, 'cititor': c, 'segment': si, 'semnal': det['semnal'], 'k': det['k'],
+                                         'in_text': c == cititor_text})
+    return out
 
 
 def asambleaza_pagina(benzi_dirs, st, pagina=None):
     """Benzile unei pagini OCR (în ordine) -> text. Tabelele sunt deja rânduri „| … |” când ajung la join_bands.
     Bandă cu ieșire goală la un cititor: numărată în benzi_goale_de_verificat; dacă niciun cititor n-are citire validă, în text intră
     marcajul „BANDĂ GOALĂ DE VERIFICAT” (nu se sare tăcut), altfel textul celuilalt cititor, ca fallback-ul de până acum.
-    Tabelele cu etichete / valori decalate: numărate în aliniere_de_verificat (lista: banda + semnal + k)."""
-    tx = []
+    Tabelele cu etichete / valori decalate (orice citire validă): avertismentul + propunerea se pun la ÎNCEPUTUL paginii, DUPĂ
+    cusătură — join_bands vede textele benzilor exact ca înainte (Jakarinos r1 P2: un marcaj în bandă strica suprapunerea)."""
+    tx = []; avert = []
     for bid, d in benzi_dirs:
         c, raw = citire_valida(d)
         if goale_de_verificat(d): st['benzi_goale_de_verificat'] += 1; st['lista_goale_de_verificat'].append(bid)
@@ -98,15 +113,13 @@ def asambleaza_pagina(benzi_dirs, st, pagina=None):
             if goale_de_verificat(d): tx.append(MARCAJ_GOL % bid); continue
             st['benzi_necitite'] += 1; st['lista_necitite'].append(bid); tx.append(MARCAJ_NECITITA % bid); continue
         if c == 'mineru': st['benzi_din_mineru'] += 1; st['lista_din_mineru'].append(bid)
-        gasite = []; tx.append(text_banda(raw, pagina, bid, c, gasite))
-        for si, det in gasite:
-            st['aliniere_de_verificat'] += 1
-            st['lista_aliniere'].append({'banda': bid, 'cititor': c, 'segment': si, 'semnal': det['semnal'], 'k': det['k']})
+        avert += avertismente_aliniere(bid, d, c, pagina, st)
+        tx.append(text_banda(raw))
     if not tx: return ''
     t = join_bands(tx, [], nu_numara=frozenset({'|'}))
     if t is None: st['cusaturi_nesigure'] += 1; t = '\n'.join(tx)
     if '<td' in t.lower() or '<tr' in t.lower(): st['html_ramas'] += 1
-    return t
+    return '\n\n'.join(avert + [t]) if avert else t
 
 
 def stare_noua():
