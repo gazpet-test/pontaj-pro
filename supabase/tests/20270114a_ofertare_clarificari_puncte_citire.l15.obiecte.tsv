@@ -1,0 +1,4 @@
+# 20270114a: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase)
+functie	functie public.fn_ofertare_clar_puncte_poarta(bigint)	creat
+politica	politica public.ofertare_clarificari_puncte.clar_puncte_rw	schimbat
+politica	politica public.ofertare_clarificari_puncte.clar_puncte_sel	schimbat

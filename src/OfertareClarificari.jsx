@@ -233,6 +233,11 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
     // Pasul B: practica CNSC invocată — DOAR temeiurile confirmate și bifate „include în adresă”, cu pagină și link (formatul unic §4).
     // Tabelul poate lipsi până la aplicarea migrării 20261014b → secțiunea pur și simplu nu apare.
     const nrExport = new Set(deTrimis.map(q => q.nr))
+    // 20270114a: punctele (și deci temeiurile de pe puncte, citite prin join cu ele) sunt vizibile doar ownerului / responsabililor licitației.
+    // Pentru alt cont join-ul ar întoarce 0 rânduri și adresa ar ieși FĂRĂ temeiurile de pe puncte, părând completă (B7) → refuz explicit.
+    if (!poateCheltuiUI(licitatii?.find(l => l.id === licId), profile)) {
+      showToast('Export blocat: temeiurile de pe punctele întrebărilor le poate verifica doar ownerul sau un responsabil al licitației (punctele sunt vizibile doar lor) — roagă-l să genereze adresa.', 'err'); return
+    }
     const practica = []
     {
       // temeiurile de pe întrebări + cele de pe PUNCTELE întrebărilor (punct → întrebare) — B4 Jakarinos
