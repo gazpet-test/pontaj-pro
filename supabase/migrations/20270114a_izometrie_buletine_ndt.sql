@@ -69,15 +69,25 @@ BEGIN
                                   AND i.column_name = c.col AND i.data_type = c.tip)) THEN
     RAISE EXCEPTION '20270114a: coloanele citite nu au tipurile asteptate';
   END IF;
-  -- predicatele de acces existente, cu corpurile revizuite (md5 pe prosrc fără CR; aceleași constante ca 20270105a pentru fn_executie_proiect_permis)
+  -- predicatele de acces existente = TOT lanțul chemat de fn_sud_drept (L15: corp + callee tranzitive), cu corpurile revizuite (md5 pe prosrc fără
+  -- CR): fn_executie_proiect_permis și callee-urile lui = aceleași constante ca 20270108a (20261209a); fn_executie_pachete_acces = corpul din
+  -- 20261029a (citit de chat pe producție 27.11.2026). Plus limbajul, DEFINER, calea, proprietarul, volatilitatea, tipul întors și EXECUTE-ul clienților.
   IF EXISTS (SELECT 1 FROM (VALUES
-          ('public.fn_executie_proiect_permis(bigint, boolean)', 'bd4320f76e9f36f492c7186c0a982155'),
-          ('public.fn_executie_pachete_acces(boolean)', NULL)) a(semnatura, amprenta)
+          ('public.fn_executie_proiect_permis(bigint, boolean)', 'bd4320f76e9f36f492c7186c0a982155', true, true, 'boolean'),
+          ('public.fn_executie_acces_nerestrans()', 'b863c5324684dbf4eb9af81474fbc4e1', true, true, 'boolean'),
+          ('public.fn_executie_acces_nerestrans_cont(uuid)', '9a07e0089139e54ba5c6a0cfaaf093cc', false, false, 'boolean'),
+          ('public.fn_executie_acces_lista(boolean)', 'd9e123a46b83530a7203d4a24da5cf9b', true, false, 'bigint[]'),
+          ('public.fn_executie_acces_lista_cont(uuid, boolean)', 'e7cf9b852002a1c1cbe781772c33bf0c', false, false, 'bigint[]'),
+          ('public.fn_executie_pachete_acces(boolean)', 'c7ea33f39d888cb40d065ff4d02dd7b1', true, true, 'boolean')) a(semnatura, amprenta, definer, cu_auth, tip)
         LEFT JOIN pg_proc p ON p.oid = to_regprocedure(a.semnatura)
-        WHERE p.oid IS NULL OR (a.amprenta IS NOT NULL AND md5(replace(p.prosrc, chr(13), '')) IS DISTINCT FROM a.amprenta)
-           OR p.prosecdef IS NOT TRUE OR p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']
-           OR pg_get_userbyid(p.proowner) <> 'postgres') THEN
-    RAISE EXCEPTION '20270114a: fn_executie_proiect_permis / fn_executie_pachete_acces lipsesc sau nu sunt cele revizuite';
+        WHERE p.oid IS NULL OR md5(replace(p.prosrc, chr(13), '')) IS DISTINCT FROM a.amprenta
+           OR p.prolang IS DISTINCT FROM (SELECT l.oid FROM pg_language l WHERE l.lanname = 'sql')
+           OR p.prosecdef IS DISTINCT FROM a.definer OR p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']
+           OR p.provolatile IS DISTINCT FROM 's' OR p.prorettype IS DISTINCT FROM to_regtype(a.tip)::oid
+           OR pg_get_userbyid(p.proowner) IS DISTINCT FROM 'postgres'
+           OR has_function_privilege('anon', p.oid, 'EXECUTE')
+           OR has_function_privilege('authenticated', p.oid, 'EXECUTE') IS DISTINCT FROM a.cu_auth) THEN
+    RAISE EXCEPTION '20270114a: lantul de drept (fn_executie_proiect_permis + callee 20261209a, fn_executie_pachete_acces 20261029a) lipseste sau nu e cel revizuit';
   END IF;
   IF to_regprocedure('public.fn_izo_porti_lipsa()') IS NULL THEN RAISE EXCEPTION '20270114a: portile Izometrie (fn_izo_porti_lipsa) lipsesc'; END IF;
   IF public.fn_izo_porti_lipsa() IS DISTINCT FROM '{}'::text[] THEN
