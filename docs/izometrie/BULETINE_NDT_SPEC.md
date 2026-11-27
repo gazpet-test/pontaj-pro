@@ -203,8 +203,8 @@ Pachetele subcontractorului nu se construiesc în ERP; sosesc gata aprobate.
 
 1. „Pachet de la subcontractor” pe tronson: codul și revizia reale, PDF-ul aprobat atașat, starea direct „aprobat”,
    marcat ca executat de subcontractor.
-2. Rândurile: din Excel-ul centralizatorului, dacă subcontractorul îl dă (importul existent, fără cost);
-   altfel citire cu AI din PDF-ul aprobat, cu verificare independentă și confirmare umană, ca la buletine.
+2. Rândurile: din Excel-ul centralizatorului (se cere mereu, D19; importul existent, fără cost). Dacă subcontractorul
+   nu îl dă, rezerva este citirea cu AI din PDF-ul aprobat, cu verificare independentă și confirmare umană, ca la buletine.
 3. Ambele fișiere se încarcă în aceeași fereastră și rămân în arhiva de documente a pachetului.
 4. De aici pachetul se poartă ca oricare altul: buletine, coordonate, inventar.
 
@@ -230,3 +230,58 @@ Pachetele subcontractorului nu se construiesc în ERP; sosesc gata aprobate.
 Documentele rămân în ERP, care e sursa. Copierea lor pe NAS, în folderul proiectului, se analizează după PR6:
 există deja un mecanism de trimitere pe NAS folosit la facturi, iar proiectele au calea folderului în fișă
 (nu toate o au completată). Se face doar dacă mecanismul existent primește o destinație pe proiect fără schimbări mari.
+
+## 21. Reguli precizate după review-ul Jakarinos r1 (27.11.2026)
+
+**R1. Identitatea unui buletin.** Cheia este tronson + metodă + număr + data buletinului. Firma citită NU intră în cheie
+(citirea ei variază: „LAB SRL” / „LAB S.R.L.”). Dacă cheia există deja, încărcarea se oprește cu „buletin deja încărcat”
+și legătura la cel existent. Cazul rar a două laboratoare cu același număr și aceeași dată pe același tronson:
+MP poate forța a doua încărcare doar cu motiv, înregistrat. Amprenta fișierului (SHA-256) e unică doar printre buletinele
+neanulate: un buletin anulat poate fi reîncărcat.
+
+**R2. Legătura cu sudurile se face pe cheia sudurii** (tronson + număr + sufix + refacută), nu pe id-ul rândului de pachet.
+Reimportul unui pachet nu pierde buletinele, coordonatele sau clasa: ele se reatașează singure la aceleași coduri.
+
+**R3. Rezultatul valabil pe o sudură și o metodă.** Rândurile confirmate (din buletine neanulate) se ordonează după
+data inspecției, apoi refacerea (`R`) înaintea originalului, apoi data buletinului. Primul dă starea. Un buletin vechi
+încărcat târziu nu bate o refacere mai nouă, pentru că ordinea e după data inspecției, nu după data încărcării.
+Două rânduri cu aceeași dată și același tip, rezultate diferite → stare „conflict”, rezolvată de MP (anulează buletinul greșit).
+
+**R4. Sudura tăiată (cupon).** Marcaj separat pe cheia sudurii: „eliminată prin tăiere”, cu motiv, autor, dată, plus sudurile
+noi care o înlocuiesc (opțional). O sudură eliminată nu mai e cerută la buletine, la coordonate sau în inventar;
+buletinele ei rămân în arhivă. Marcajul îl pune MP și se poate retrage cu motiv.
+
+**R5. Buletin pe tronsonul greșit / confirmat greșit.** Nu se corectează pe loc: MP îl anulează (cu motiv) și îl reîncarcă
+corect. Anularea e permisă oricând; efectul pe exporturile deja făcute e la R6.
+
+**R6. Exporturi și schimbări ulterioare.** Fiecare export păstrează lista exactă a buletinelor (id + versiune), a coordonatelor
+și a lipsurilor din acel moment. Dacă după export se anulează / confirmă un buletin, se schimbă coordonatele sau clasa pe
+sudurile pachetului, pachetul arată „export depășit — sursele s-au schimbat după <data>”, cu lista diferențelor.
+Exportul vechi rămâne în istoric; nu se blochează nimic, un export nou face versiunea curentă. Verificarea și generarea
+folosesc aceeași fotografie a datelor (citită o dată, la deschiderea ferestrei de export; dacă se schimbă până la click,
+exportul cere reîncărcarea ferestrei).
+
+**R7. Ordinea fizică a sudurilor (inventar).** Pe un tronson: pachetele active (ultima revizie) ordonate după km start,
+iar în pachet după poziție. Amonte = elementul de pe rândul sudurii, aval = următorul element în această ordine,
+inclusiv peste granița dintre pachete. Inventarul cumulat elimină dublurile pe cheia sudurii (rămâne apariția din pachetul cu
+revizia cea mai nouă; conflictul se listează).
+
+**R8. Ce intră în inventar și ce blochează.** Intră sudurile cu coordonate confirmate, neeliminate. Regulile proprii (nu tot §8):
+- blocaj fără deblocare: element fără serie sau lungime; sudură cu două poziții confirmate diferite;
+- blocaj cu deblocare de MP: sudură din pachet fără coordonate (exportul deblocat le lasă afară și le listează), clasă lipsă;
+- avertisment: ultima sudură a tronsonului fără element aval (capăt de tronson), abateri de distanță.
+
+**R9. Dreptul.** O singură funcție de drept: scriere = owner SAU managerul proiectului
+(`profiles.id = auth.uid()` și `profiles.employee_id = executie_proiecte.mp_employee_id`), plus restricția pe proiect existentă
+(`fn_executie_proiect_permis(proiect, true)`). Citire = accesul de citire existent la pachetele Execuției pe proiect
+(`fn_executie_pachete_acces(false)` + `fn_executie_proiect_permis(proiect, false)`). Nicio altă categorie. Toate scrierile prin
+funcții care verifică dreptul în corp; tabelele au doar SELECT pentru clienți. Cine a încărcat / confirmat / anulat, când și
+amprenta fișierului le pune serverul, nu clientul.
+
+**R10. Costul AI.** Toate citirile acestui modul (buletine, clasă de locație, pachete de subcontractor) folosesc același plafon
+lunar din `ai_plafon_lunar` (cheie proprie), cu rezervare atomică înainte de apel și decontare după. O citire = Haiku + Sonnet.
+Plafonul se fixează de Răzvan; peste plafon citirea se refuză clar, iar încărcarea manuală (fără AI) rămâne posibilă.
+
+**R11. Împărțirea PR1.** PR1a: buletine, rânduri, metode obligatorii, sudurile eliminate, deblocările și fotografia exporturilor
+(tot ce trebuie pentru PR2 și PR3). PR1b: coordonate, intervale de clasă (fără suprapuneri: constrângere de excludere pe tronson),
+marcajul de subcontractor. Coordonatele: sistemul din fișierele livrate (Stereo 70, metri, 3 zecimale), stocate ca numeric.
