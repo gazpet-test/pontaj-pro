@@ -26,7 +26,7 @@ nu există arhivă de buletine, iar pe tronsoanele noi sunt goale. Exportul Tran
 | D4 | Citirea | AI citește anexa, un al doilea model verifică independent, omul confirmă. |
 | D5 | Modele | Citire: Haiku. Verificare: Sonnet. Schimbabile din setare. |
 | D6 | Tronsonul | Se ia din locul încărcării, nu se alege. |
-| D7 | Firma | Nu se alege și nu se afișează; se păstrează doar ca text citit, pentru unicitate. |
+| D7 | Firma | Nu se alege și nu se afișează; se păstrează doar ca text citit, informativ (nu intră în cheia de unicitate, R1). |
 | D8 | Export | ZIP cu Excel + PDF-uri, plus foaia „BULETINE” în Excel. |
 | D9 | Cine încarcă | Doar managerul de proiect (și owner-ul). |
 | D10 | Metode obligatorii | Setare pe proiect. |
@@ -156,7 +156,7 @@ Limite: un singur buletin, scan curat, un singur laborator; referința a fost co
 | D16 | Coordonate | Le încarcă MP-ul, pe tronson. Tot ce are coordonate confirmate intră în inventar. |
 | D17 | Clasa de locație | Intervale de km pe tronson, citite o dată din schema de montaj și confirmate de MP (§15). |
 | D18 | Sufixe de sudură | `R` = refacerea aceleiași suduri. Orice altă literă (A, B, C…) = sudură distinctă (cuplare sau cupon). |
-| D19 | Pachete de la subcontractor | Intră ca pachete aprobate (§17). Se cer ambele fișiere: Excel-ul centralizatorului și PDF-ul aprobat. |
+| D19 | Pachete de la subcontractor | Intră ca pachete aprobate (§17). Se cer ambele fișiere: Excel-ul centralizatorului și PDF-ul aprobat; dacă Excel-ul lipsește totuși, rezerva este citirea AI din PDF (acceptată de Răzvan). |
 
 ## 14. Codul sudurii — completare la §5
 
@@ -285,3 +285,25 @@ Plafonul se fixează de Răzvan; peste plafon citirea se refuză clar, iar înc�
 **R11. Împărțirea PR1.** PR1a: buletine, rânduri, metode obligatorii, sudurile eliminate, deblocările și fotografia exporturilor
 (tot ce trebuie pentru PR2 și PR3). PR1b: coordonate, intervale de clasă (fără suprapuneri: constrângere de excludere pe tronson),
 marcajul de subcontractor. Coordonatele: sistemul din fișierele livrate (Stereo 70, metri, 3 zecimale), stocate ca numeric.
+
+## 22. Precizări după review-ul Jakarinos r2 (contractul PR1a)
+
+- **Cheia sudurii** (pentru coordonate, eliminare, potrivirea cu pachetul) = tronson + număr + sufix, FĂRĂ refacere:
+  `T12S126` și `T12S126R` sunt aceeași sudură (D18). Refacerea e un atribut al rândului de buletin, nu parte din cheie.
+- **Unicitatea buletinului**: cheia R1 se aplică între buletinele neanulate și neforțate. Un buletin forțat (cu motiv) nu ocupă cheia;
+  se identifică prin id. Buletinele anulate nu ocupă nici cheia, nici amprenta.
+- **Ordinea rezultatelor (R3), complet deterministă**: pe cheie de sudură și metodă, rândurile din buletine confirmate se ordonează
+  descrescător după data inspecției; la aceeași dată, refacerea înaintea originalului; apoi data buletinului descrescător; apoi id-ul
+  buletinului descrescător. Primul rând dă starea. „Conflict” = primele două rânduri au aceeași dată de inspecție, același atribut de
+  refacere și rezultate diferite; atunci starea e „conflict” până când MP anulează buletinul greșit. Refaceri repetate: aceeași regulă
+  (ultima după dată câștigă).
+- **Stările buletinului**: ciornă → confirmat → anulat; ciornă → anulat. Niciun drum înapoi; corectura = anulare + reîncărcare.
+  Rândurile se scriu o singură dată, la confirmare, și nu se modifică.
+- **Metoda „ALTA” / PT / RT / VT**: intră în arhivă, nu au coloană în centralizator și nu pot fi obligatorii.
+- **Fotografia exportului (R6)** cuprinde: id + versiune pentru fiecare buletin folosit, cheile sudurilor eliminate active,
+  metodele obligatorii, lipsurile. „Export depășit” = oricare dintre acestea diferă la recitire. Verificarea și generarea folosesc
+  aceeași citire; exportul se înregistrează cu fotografia folosită.
+- **Proveniența**: autorul, momentele, versiunea, cheile sudurilor le pune serverul. Amprenta fișierului e declarată de client
+  (serverul nu citește conținutul din Storage) și servește doar la prinderea dublurilor; fișierul trebuie să fie în arhiva tronsonului,
+  încărcat de același utilizator.
+- Contractul exact (tabele, constrângeri, funcții): migrarea PR1a, `supabase/migrations/20270114a_izometrie_buletine_ndt.sql`.
