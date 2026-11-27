@@ -67,6 +67,13 @@ BEGIN
      OR EXISTS (SELECT 1 FROM pg_policy WHERE polrelid = 'storage.objects'::regclass AND polname LIKE 'sud\_ndt\_%') THEN
     RAISE EXCEPTION '20270114a revenire post: au ramas obiecte';
   END IF;
+  -- ștampilele porților Izometrie, CALCULATE după ultima schimbare (docs/izometrie/PORTI_REGULA.md: revenirea urmează aceeași formă)
+  EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_definitii() IS %L', 'porti=' || public.fn_izo_porti_definitii());
+  EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_e3_definitii() IS %L', 'porti_e3=' || public.fn_izo_porti_e3_definitii());
+  EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_e3b_definitii() IS %L', 'porti_e3b=' || public.fn_izo_porti_e3b_definitii());
+  EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_e4_definitii() IS %L', 'porti_e4=' || public.fn_izo_porti_e4_definitii());
+  EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_e4b_definitii() IS %L', 'porti_e4b=' || public.fn_izo_porti_e4b_definitii());
+  -- IZO POST
   IF public.fn_izo_porti_lipsa() IS DISTINCT FROM '{}'::text[] THEN
     RAISE EXCEPTION '20270114a revenire post: portile Izometrie nu sunt verzi dupa: %', public.fn_izo_porti_lipsa();
   END IF;
