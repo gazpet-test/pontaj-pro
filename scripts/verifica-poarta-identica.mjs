@@ -10,7 +10,8 @@ import { join } from 'node:path'
 const F = 'supabase/functions'
 const CU_POARTA = ['ofertare-acoperire', 'ofertare-cerinte', 'ofertare-clarificari-propune', 'ofertare-clauze-formulare', 'ofertare-genereaza-capitol',
   'ofertare-ingest-doc', 'ofertare-organigrama-spec', 'ofertare-rfq-import', 'ofertare-cantitati-extrage', 'ofertare-plansa-citeste', 'ofertare-document-nou-citeste',
-  'ofertare-verificare-finala']   // TKT-0390 (21.11.2026): verificarea finală, fosta parolă din browser
+  'ofertare-verificare-finala',   // TKT-0390 (21.11.2026): verificarea finală, fosta parolă din browser
+  'ofertare-clarificare-citeste']   // 27.11.2026 (după review #1204): citirea AI a PDF-ului unei clarificări, fost „orice JWT / x-radar-secret”
 const MANUAL = /responsabil_id\s*===|===\s*\w+\??\.responsabil_id|responsabilId\s*===/
 let rau = 0
 const eroare = (m) => { console.error('❌ ' + m); rau++ }
