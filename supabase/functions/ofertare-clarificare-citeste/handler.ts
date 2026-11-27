@@ -24,6 +24,8 @@ const b64 = (bytes: Uint8Array) => { let bin = ''; for (let i = 0; i < bytes.len
 export const MESAJ_CITIRE_ROL = 'Citirea PDF-ului cu AI costă — o pornește doar ownerul sau un responsabil al licitației numit de owner / un admin Ofertare.'
 // același răspuns pentru o clarificare inexistentă și pentru una pe care contul nu o vede (RLS): nu dezvăluie existența
 export const MESAJ_CLARIFICARE_INACCESIBILA = 'Clarificarea nu există sau nu ai acces la ea.'
+// citirea clarificării (ca utilizator sau recitirea cu service_role) a căzut: necunoscut → refuz, fără mesajul brut al dependenței
+export const MESAJ_VERIFICARE_ESUATA = 'Verificarea clarificării a eșuat; reîncearcă.'
 
 const PROMPT = `Acesta este un document de clarificare depus de ofertantul GAZPET INSTAL SRL către o autoritate contractantă, într-o licitație publică românească (SEAP). Citește-l integral și răspunde EXCLUSIV cu JSON:
 {"intrebare": "<textul întrebării/solicitării, formulat scurt (1-3 propoziții), la persoana întâi plural, ca în adresă>",
@@ -81,15 +83,15 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   if (!Number.isSafeInteger(id) || id <= 0) return json({ error: 'clarificare_id lipsă' }, 400)
 
   // 2. licitația clarificării, citită CA UTILIZATORUL (RLS), nu cu service_role: cine nu vede clarificarea nu poate nici porni citirea ei.
-  //    Eroare la citire = necunoscut → refuz explicit (L18), nu „nu există”.
+  //    Eroare la citire = necunoscut → refuz explicit (L18), nu „nu există”; mesaj public stabil, fără textul brut al dependenței (L10).
   let licId: number | null = null
   try {
     const { data: ref, error } = await deps.caUtilizator(jwt).from('ofertare_clarificari').select('id, licitatie_id').eq('id', id).maybeSingle()
-    if (error) return json({ error: 'verificarea clarificării a eșuat: ' + String(error.message || 'eroare').slice(0, 200) }, 500)
+    if (error) return json({ error: MESAJ_VERIFICARE_ESUATA }, 500)
     const l = Number(ref?.licitatie_id)
     licId = ref && Number.isSafeInteger(l) && l > 0 ? l : null
-  } catch (e) {
-    return json({ error: 'verificarea clarificării a eșuat: ' + String((e as Error)?.message || 'eroare').slice(0, 200) }, 500)
+  } catch (_) {
+    return json({ error: MESAJ_VERIFICARE_ESUATA }, 500)
   }
   if (licId === null) return json({ error: MESAJ_CLARIFICARE_INACCESIBILA }, 403)
 
@@ -101,7 +103,8 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
 
   // 4. de aici încolo ca înainte, cu service_role: rândul întreg, PDF-ul, AI-ul, jurnalul, update-ul
   const db = deps.db
-  const { data: row } = await db.from('ofertare_clarificari').select('*').eq('id', id).maybeSingle()
+  const { data: row, error: eRow } = await db.from('ofertare_clarificari').select('*').eq('id', id).maybeSingle()
+  if (eRow) return json({ error: MESAJ_VERIFICARE_ESUATA }, 500)   // recitirea cade = necunoscut, nu „nu există” (review r1 b)
   if (!row) return json({ error: 'clarificarea nu există' }, 404)
   // poarta s-a dat pe licitația citită la pasul 2: un rând mutat între timp pe altă licitație nu se citește pe dreptul vechi
   if (Number(row.licitatie_id) !== licId) return json({ error: MESAJ_CLARIFICARE_INACCESIBILA }, 403)
