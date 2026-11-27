@@ -321,14 +321,18 @@ BEGIN
     v_rez := lower(btrim(coalesce(r->>'rezultat', '')));
     v_rez := CASE WHEN v_rez IN ('acceptat', 'accepted', 'admis') THEN 'acceptat' WHEN v_rez IN ('respins', 'rejected') THEN 'respins' END;
     IF v_rez IS NULL THEN RAISE EXCEPTION 'sud: randul % are rezultat necunoscut', v_i USING ERRCODE = '22023'; END IF;
+    -- peste limită = refuz, nu tăiere tăcută (L21)
+    IF length(coalesce(r->>'cod_raw', '')) > 80 OR length(r->>'observatii') > 500 THEN
+      RAISE EXCEPTION 'sud: randul % are codul (max 80) sau observatiile (max 500) prea lungi', v_i USING ERRCODE = '22023';
+    END IF;
     v_n := public.fn_sud_cod_normalizeaza(r->>'cod_raw', v_tnr);
     INSERT INTO public.sud_buletin_randuri (buletin_id, ordine, cod_raw, stare_cod, motiv_cod, tronson_nr, nr, sufix, refacuta, cheie, rezultat,
                                             data_inspectie, ind_start, ind_end, ind_lungime, ind_inaltime, ind_adancime, observatii)
-    VALUES (b.id, v_i, left(coalesce(r->>'cod_raw', ''), 80), v_n->>'stare', v_n->>'motiv',
+    VALUES (b.id, v_i, coalesce(r->>'cod_raw', ''), v_n->>'stare', v_n->>'motiv',
             CASE WHEN v_n->>'stare' = 'ok' THEN (v_n->>'tronson')::integer END, CASE WHEN v_n->>'stare' = 'ok' THEN (v_n->>'nr')::integer END,
             coalesce(v_n->>'sufix', ''), coalesce((v_n->>'refacuta')::boolean, false), v_n->>'cheie', v_rez,
             (r->>'data_inspectie')::date, (r->>'start_mm')::numeric, (r->>'end_mm')::numeric, (r->>'lungime_mm')::numeric,
-            (r->>'inaltime_mm')::numeric, (r->>'adancime_mm')::numeric, left(r->>'observatii', 500));
+            (r->>'inaltime_mm')::numeric, (r->>'adancime_mm')::numeric, r->>'observatii');
   END LOOP;
   UPDATE public.sud_buletine SET stare = 'confirmat', confirmat_de = auth.uid(), confirmat_la = now(), versiune = versiune + 1 WHERE id = b.id;
   RETURN v_i;
