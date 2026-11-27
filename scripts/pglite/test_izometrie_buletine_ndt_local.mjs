@@ -236,6 +236,8 @@ async function verificaPasi(db, ab) {
   r = await sterge(db, 'EXE', `bucket_id = 'izo-ndt'`); asteapta(!r.code && r.afectate === 0, 'EXE (citire, fără fișiere proprii) șterge din izo-ndt = 0 rânduri', r)
   r = await sterge(db, 'MPA', `bucket_id = 'izo-ndt' AND name = '${PA}/${TA13}/t13.pdf'`)
   asteapta(!r.code && r.afectate === 0, 'MPA (fără drept de citire) nu-și șterge orfanul = 0 rânduri (verificarea „neînregistrat” cere citire)', r)
+  // DELETE fără condiție pe coloane: Postgres NU mai aplică politicile de SELECT (doar pe cele de DELETE) → aici contează citirea cerută de ele
+  r = await sterge(db, 'MPA', 'true'); asteapta(!r.code && r.afectate === 0, 'MPA: DELETE fără condiție pe coloane = 0 rânduri (nici înregistratele, nici orfanii)', r)
   r = await sterge(db, null, `bucket_id = 'izo-ndt'`, { rol: 'anon' }); asteapta(!r.code && r.afectate === 0, 'anon șterge din izo-ndt = 0 rânduri', r)
 
   // (c) încărcarea buletinului
@@ -365,6 +367,7 @@ async function verificaPasi(db, ab) {
   r = await sterge(db, 'EXE', `bucket_id = 'izo-ndt' AND name = '${PA}/${TA12}/b2.pdf'`); asteapta(!r.code && r.afectate === 0, 'EXE: fișierul altuia nu se șterge = 0 rânduri', r)
   r = await sterge(db, 'MPA', `bucket_id = 'izo-ndt' AND name IN ('${PA}/${TA12}/b1.pdf', '${PA}/${TA12}/b2.pdf')`)
   asteapta(!r.code && r.afectate === 0, 'MPA: propriile fișiere ÎNREGISTRATE (pe care nu le poate citi) nu se șterg = 0 rânduri', r)
+  r = await sterge(db, 'MPA', 'true'); asteapta(!r.code && r.afectate === 0, 'MPA: DELETE fără condiție pe coloane după înregistrări = 0 rânduri', r)
   r = await sterge(db, 'OWNER', `bucket_id = 'izo-ndt' AND name = '${PA}/${TA12}/o1.pdf'`); asteapta(!r.code && r.afectate === 1, 'OWNER își șterge orfanul neînregistrat o1.pdf = 1 rând', r)
   r = await q(db, `SELECT count(*)::int AS n FROM storage.objects WHERE bucket_id = 'izo-ndt' AND name IN ('${PA}/${TA12}/o1.pdf', '${PA}/${TA17}/o17.pdf', '${PA}/${TA17}/t17.pdf')`)
   asteapta(r[0]?.n === 2, 'după ștergeri: o1 șters, o17 (înregistrat) și t17 (al altuia) rămân', r)
