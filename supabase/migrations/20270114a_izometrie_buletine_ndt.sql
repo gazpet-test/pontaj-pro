@@ -1,4 +1,6 @@
--- Version 20270114120000. NEAPLICAT. Runner: scripts/livrare_migrare.sh --plafon-tranzactie-ms 5000 --amprenta-globala <md5> --diferente-globale
+-- Version 20270114120000. NEAPLICAT. Runner: scripts/livrare_migrare.sh --plafon-tranzactie-ms 15000 --plafon-extins --amprenta-globala <md5> --diferente-globale
+--   PLAFONUL EXTINS (15000 ms, doar în fereastra 21:00–06:00 Europe/Bucharest, docs/LIVRARE_L15_V2.md §9) — decizia proprietarului 27.11.2026:
+--   proba cu ROLLBACK pe producție a depășit plafonul standard de 5000 ms (amprenta globală ~1,2 s pe producție față de 0,3 s pe clonă).
 --   supabase/migrations/20270114a_izometrie_buletine_ndt.l15.tsv (manifestul îl generează coordonatorul pe clonă, docs/LIVRARE_L15_V2.md §5).
 -- 20270114a_izometrie_buletine_ndt — Izometrie: arhiva buletinelor NDT pe suduri (PR1a din docs/izometrie/BULETINE_NDT_SPEC.md, §4, §21 R1–R11).
 -- Ce face:
@@ -48,9 +50,9 @@ BEGIN
   END IF;
   IF current_setting('server_version_num')::int < 170000 THEN RAISE EXCEPTION '20270114a: cere PostgreSQL 17 (plafonul tranzactiei)'; END IF;
   SELECT setting || '/' || source INTO v_plafon FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout';
-  IF v_plafon IS DISTINCT FROM '5000/session'
-     OR current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '5000:' || txid_current() THEN
-    RAISE EXCEPTION '20270114a: PLAFON_TRANZACTIE lipsa: % marcaj % (cerut 5000/session pus de runner inainte de BEGIN: livrare_migrare.sh --plafon-tranzactie-ms 5000)',
+  IF v_plafon IS DISTINCT FROM '15000/session'
+     OR current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '15000:' || txid_current() THEN
+    RAISE EXCEPTION '20270114a: PLAFON_TRANZACTIE lipsa: % marcaj % (cerut 15000/session pus de runner inainte de BEGIN: livrare_migrare.sh --plafon-tranzactie-ms 15000 --plafon-extins)',
       coalesce(v_plafon, 'lipsa'), coalesce(nullif(current_setting('gazpet.plafon_tranzactie', true), ''), 'lipsa');
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = pg_my_temp_schema() AND c.relkind = 'r' AND c.relname ~ '^ag_ina_[0-9a-f]{16}$'

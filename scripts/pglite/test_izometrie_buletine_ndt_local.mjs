@@ -58,7 +58,8 @@ const validator = (fisier, ...opt) => {
     return { ok: true, out: o.trim() }
   } catch (e) { return { ok: false, out: String(e.stderr || e.message).trim() } }
 }
-const PLAFON_LIVRARE = Number(execFileSync('bash', ['-c', '. "$1"; printf %s "$AG_PLAFON_MS"', '_', join(ROOT, 'scripts/livrare_amprenta.sh')], { encoding: 'utf8' }))
+// plafonul EXTINS (decizia proprietarului 27.11.2026: proba cu ROLLBACK pe producție a depășit 5000 ms) — AG_PLAFON_EXTINS_MS, cu --plafon-extins
+const PLAFON_LIVRARE = Number(execFileSync('bash', ['-c', '. "$1"; printf %s "$AG_PLAFON_EXTINS_MS"', '_', join(ROOT, 'scripts/livrare_amprenta.sh')], { encoding: 'utf8' }))
 const PLAFON_REVENIRE = 2000
 const garda = (nume, plafon, final) => execFileSync('bash', ['-c', '. "$1"; lm_fin "$2" "$3" "$4" lock', '_', join(ROOT, 'scripts/livrare_mesaj.sh'), nume, String(plafon), final], { encoding: 'utf8' })
 
@@ -619,8 +620,10 @@ async function paritate(db) {
 const faraComentarii = t => t.replace(/--[^\n]*/g, '')
 console.log('0. validatorul runnerului, forma fișierelor, paritatea scheletului, amprentele din migrare')
 {
-  const vm = validator(join(ROOT, F_MIG), '--plafon-tranzactie-ms', String(PLAFON_LIVRARE))
-  ok(PLAFON_LIVRARE === 5000 && vm.ok && /^OK \d+ /.test(vm.out), `migrarea trece validatorul cu ${PLAFON_LIVRARE}: ${vm.out}`)
+  const vm = validator(join(ROOT, F_MIG), '--plafon-tranzactie-ms', String(PLAFON_LIVRARE), '--plafon-extins')
+  ok(PLAFON_LIVRARE === 15000 && vm.ok && /^OK \d+ /.test(vm.out), `migrarea trece validatorul cu ${PLAFON_LIVRARE} + --plafon-extins: ${vm.out}`)
+  const vx = validator(join(ROOT, F_MIG), '--plafon-tranzactie-ms', String(PLAFON_LIVRARE))
+  ok(!vx.ok && /PLAFON_EXTINS_DIFERIT/.test(vx.out), 'migrarea fără --plafon-extins = refuz PLAFON_EXTINS_DIFERIT: ' + vx.out.split('\n')[0].slice(0, 120))
   const vm2 = validator(join(ROOT, F_MIG), '--plafon-tranzactie-ms', '2000')
   ok(!vm2.ok && /PLAFON_DIFERIT/.test(vm2.out), 'migrarea cu runnerul la 2000 = refuz: ' + vm2.out.split('\n')[0].slice(0, 120))
   const vmf = validator(join(ROOT, F_MIG), '--fara-plafon')
@@ -777,8 +780,8 @@ async function dryRun(db, eticheta) {
     'manifest fără rândul politicii de încărcare = refuz AMPRENTA_GLOBALA_DUPA, nimic schimbat')
   const j = await livreaza(b, MIG, { aprobat: G, manifest: fManifest, final: garda(NUME, PLAFON_LIVRARE, 'COMMIT') })
   ok(j.ok && j.note.some(m => new RegExp(`^AMPRENTA_GLOBALA dupa: ${total} diferente = manifestul`).test(m))
-    && j.note.some(m => new RegExp(`^PLAFON_TIMP ${NUME}: garda trecuta la \\d+ ms de la BEGIN \\(plafon 5000 ms\\)`).test(m)),
-  `livrarea aprobată: diferențele (${total}) = manifestul; PLAFON_TIMP (5000)` + (j.ok ? '' : ': ' + j.eroare))
+    && j.note.some(m => new RegExp(`^PLAFON_TIMP ${NUME}: garda trecuta la \\d+ ms de la BEGIN \\(plafon ${PLAFON_LIVRARE} ms\\)`).test(m)),
+  `livrarea aprobată: diferențele (${total}) = manifestul; PLAFON_TIMP (${PLAFON_LIVRARE})` + (j.ok ? '' : ': ' + j.eroare))
   const so = await sudOk(b)
   ok(JSON.stringify(so) === '{"t":6,"f":11,"b":1,"p":8}', 'după livrarea aprobată: 6 tabele, 11 funcții, bucket-ul, 8 politici: ' + JSON.stringify(so))
   await dryRun(b, '')
