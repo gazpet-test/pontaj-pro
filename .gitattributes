@@ -5,3 +5,7 @@ scripts/amprenta_globala_v2.sql text eol=lf
 supabase/migrations/20270112a_ofertare_cantitati_masuratori.sql text eol=lf
 supabase/revenire/20270112a_ofertare_cantitati_masuratori_ROLLBACK.sql text eol=lf
 supabase/tests/20270112a_* text eol=lf
+supabase/migrations/20270113a_ofertare_clarificari_citire.sql text eol=lf
+supabase/revenire/20270113a_ofertare_clarificari_citire_ROLLBACK.sql text eol=lf
+supabase/tests/20270113a_* text eol=lf
+scripts/pglite/test_ofertare_clarificari_citire_local.mjs text eol=lf
