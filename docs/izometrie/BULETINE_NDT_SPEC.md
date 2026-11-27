@@ -154,9 +154,9 @@ Limite: un singur buletin, scan curat, un singur laborator; referința a fost co
 | D14 | Două exporturi | „Export IZO înainte de lansare” (cel de azi, redenumit) și „Export INVENTAR după lansare” (nou). |
 | D15 | Inventarul | Pe pachet (butonul din pachet) și cumulat pe tronson / lot. |
 | D16 | Coordonate | Le încarcă MP-ul, pe tronson. Tot ce are coordonate confirmate intră în inventar. |
-| D17 | Clasa de locație | Vine din schema de montaj a tronsonului (propunerea din §15, de confirmat). |
+| D17 | Clasa de locație | Intervale de km pe tronson, citite o dată din schema de montaj și confirmate de MP (§15). |
 | D18 | Sufixe de sudură | `R` = refacerea aceleiași suduri. Orice altă literă (A, B, C…) = sudură distinctă (cuplare sau cupon). |
-| D19 | Pachete de la subcontractor | Intră ca pachete aprobate, prin „PDF aprobat” (varianta din §17, de confirmat). |
+| D19 | Pachete de la subcontractor | Intră ca pachete aprobate (§17). Se cer ambele fișiere: Excel-ul centralizatorului și PDF-ul aprobat. |
 
 ## 14. Codul sudurii — completare la §5
 
@@ -165,9 +165,9 @@ Limite: un singur buletin, scan curat, un singur laborator; referința a fost co
   reparată de trei ori se taie și se introduce un cupon (rezultă două suduri noi).
 - Sudura tăiată și înlocuită prin cupon rămâne în arhivă cu buletinele ei, marcată „eliminată prin tăiere”,
   și nu mai blochează exportul.
-- De lămurit la PR1: seria de litere nu trebuie să ajungă la `R`; dacă se poate întâmpla, refacerea are nevoie de alt marcaj.
+- Seria de litere nu ajunge la `R` (confirmat de Răzvan), deci `R` final înseamnă mereu refacere.
 
-## 15. Clasa de locație (propunere)
+## 15. Clasa de locație
 
 Clasa ține de traseu, nu de țeavă: se păstrează ca intervale de km pe tronson (de la – până la → clasă).
 
@@ -197,7 +197,7 @@ Verificarea înainte de export urmează §8: blocaj fără deblocare la date car
 (element fără serie / lungime, sudură fără element aval), blocaj cu deblocare de MP la coordonate sau clasă lipsă.
 Coloana „nr. situație de lucrări” rămâne goală până există sursa ei.
 
-## 17. Pachete executate de subcontractor (propunere)
+## 17. Pachete executate de subcontractor
 
 Pachetele subcontractorului nu se construiesc în ERP; sosesc gata aprobate.
 
@@ -205,7 +205,8 @@ Pachetele subcontractorului nu se construiesc în ERP; sosesc gata aprobate.
    marcat ca executat de subcontractor.
 2. Rândurile: din Excel-ul centralizatorului, dacă subcontractorul îl dă (importul existent, fără cost);
    altfel citire cu AI din PDF-ul aprobat, cu verificare independentă și confirmare umană, ca la buletine.
-3. De aici pachetul se poartă ca oricare altul: buletine, coordonate, inventar.
+3. Ambele fișiere se încarcă în aceeași fereastră și rămân în arhiva de documente a pachetului.
+4. De aici pachetul se poartă ca oricare altul: buletine, coordonate, inventar.
 
 ## 18. Starea datelor pe Lot 2 (constatare, doar citire)
 
@@ -223,3 +224,9 @@ Pachetele subcontractorului nu se construiesc în ERP; sosesc gata aprobate.
 | PR4 | Coordonate + clasă de locație: încărcare, verificări, confirmare |
 | PR5 | „Export INVENTAR după lansare”: pe pachet și cumulat |
 | PR6 | Pachete de la subcontractor |
+
+## 20. Copia pe NAS (amânat)
+
+Documentele rămân în ERP, care e sursa. Copierea lor pe NAS, în folderul proiectului, se analizează după PR6:
+există deja un mecanism de trimitere pe NAS folosit la facturi, iar proiectele au calea folderului în fișă
+(nu toate o au completată). Se face doar dacă mecanismul existent primește o destinație pe proiect fără schimbări mari.
