@@ -235,10 +235,11 @@ class Asamblare(unittest.TestCase):
         (rd / 'd1' / 'plan.json').write_text(json.dumps({'bands': [{'id': b, 'page': 120, 'index': i} for i, (b, _) in enumerate(benzi)]}),
                                              encoding='utf-8')
         for bid, citiri in benzi:
-            for c, raw in citiri.items():
+            for c, x in citiri.items():
+                raw, res = x if isinstance(x, tuple) else (x, OK)  # (raw, result) sau doar raw (ok = true)
                 d = rd / 'd1' / 'page0120' / bid / c; d.mkdir(parents=True)
                 (d / 'raw.txt').write_bytes(raw.encode('utf-8'))
-                (d / 'result.json').write_text(json.dumps({'ok': True, 'raw_sha256': hashlib.sha256(raw.encode()).hexdigest()}), encoding='utf-8')
+                (d / 'result.json').write_text(json.dumps(dict(res, raw_sha256=hashlib.sha256(raw.encode()).hexdigest())), encoding='utf-8')
         return A.asambleaza_document(rd, 'd1', pagini_native={120: ''})
 
     def test_p0120_marcaj_si_propunere_separata_citirea_neschimbata(self):
@@ -272,6 +273,25 @@ class Asamblare(unittest.TestCase):
             din_cmp = sorted((i['cititor'], i['segment'], i['semnal'], i['k']) for i in items if i.get('semnal') in AL.SEMNALE)
             _, st = self.rulare([('p0120_b0', {'lighton': la, 'mineru': lm})])
             self.assertEqual(sorted((x['cititor'], x['segment'], x['semnal'], x['k']) for x in st['lista_aliniere']), din_cmp)
+
+    def test_paritate_pe_banda_goala_si_citire_incompleta(self):
+        # Jakarinos r2 P2: o citire goala / incompleta la un cititor, tabelul decalat la celalalt (valid): semnalul e in dezacorduri
+        # (pe langa banda_goala_de_verificat / banda_intreaga) si in text, cu aceleasi (cititor, segment, semnal, k)
+        GOL = {'ok': False, 'gol_de_verificat': True, 'finish_reason': 'stop', 'signal': None, 'guard_event': None, 'error': None}
+        RUPT = {'ok': False, 'finish_reason': 'length', 'signal': 'bucla', 'guard_event': None, 'error': None}
+        for nume, x_rau, tip in (('goala', ('', GOL), 'banda_goala_de_verificat'), ('incompleta', ('BUCLA ' * 20, RUPT), 'banda_intreaga')):
+            for valid in ('lighton', 'mineru'):
+                citiri = {valid: (P120, OK), ('mineru' if valid == 'lighton' else 'lighton'): x_rau}
+                (la, ra), (lm, rm) = citiri['lighton'], citiri['mineru']
+                s, items = compare_band(banda(), la, ra, lm, rm)
+                self.assertEqual(items[0]['tip'], tip, (nume, valid))  # randul existent ramane primul (reconcile se bazeaza pe asta)
+                din_cmp = [(i['cititor'], i['segment'], i['semnal'], i['k']) for i in items if i.get('semnal') in AL.SEMNALE]
+                self.assertEqual(din_cmp, [(valid, 1, AL.SEMNAL_ALUNECARE, -1)], (nume, valid))
+                self.assertEqual((s.get('disagreements'), s['aliniere']), (2 if nume == 'goala' else None, ['p0120_b0_aliniere_%s_s1' % valid]),
+                                 (nume, valid))  # rezumatul „citire incompleta” nu are disagreements (ca pe main)
+                self.assertEqual(apply_band(la, lm, items, {}), (None, True))
+                _, st = self.rulare([('p0120_b0', citiri)])
+                self.assertEqual([(x['cititor'], x['segment'], x['semnal'], x['k']) for x in st['lista_aliniere']], din_cmp, (nume, valid))
 
     def test_cusatura_cu_banda_precedenta_nu_se_strica(self):
         # Jakarinos r1 P2: tabelul decalat DESCHIDE banda a doua, iar primele lui doua randuri sunt suprapunerea cu banda intai.

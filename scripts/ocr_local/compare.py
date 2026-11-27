@@ -371,6 +371,12 @@ def compare_band(band, raw_a, res_a, raw_b, res_b):
     base = {'band': band['id'], 'page': band['page'], 'kind': band['kind'], 'image': band['image'], 'image_sha256': band['image_sha256'],
             'cititori': {r: {'protocol': x.get('protocol'), 'weights_sha256': x.get('weights_sha256')} for r, x in (('lighton', res_a), ('mineru', res_b))},
             'raw_sha256': {'lighton': hashlib.sha256(raw_a.encode()).hexdigest(), 'mineru': hashlib.sha256(raw_b.encode()).hexdigest()}}
+    # etichete / valori decalate (aliniere.py): pe FIECARE citire valida (ok = true, ca in asamblare), INAINTEA iesirilor timpurii de mai
+    # jos (banda goala / citire incompleta), pe segmentele NEaplatizate; vin la coada listei pe toate ramurile (Jakarinos r2 P2)
+    al = [x for r, raw, res in (('lighton', raw_a, res_a), ('mineru', raw_b, res_b)) if res.get('ok') is True
+          for x in aliniere_items(base, r, segments(raw))]
+    # rezumatul ramurii „citire incompleta” nu are disagreements nici pe main: cheia nu se inventeaza acolo
+    cu_al = lambda s: dict(s, aliniere=[x['id'] for x in al], **({'disagreements': s['disagreements'] + len(al)} if 'disagreements' in s else {})) if al else s
     # banda goala de verificat (banda_goala.py, runda 2): gol la ORICARE cititor = mereu un rand la om, NICIODATA acord (nici cand
     # ambii dau gol). Euristica pe pixeli intra doar ca informatie (probabil_alba). Marcaj neconsistent (text nevid / ok = True) ->
     # mai jos, banda_intreaga (citire incompleta / neconsistenta).
@@ -382,23 +388,21 @@ def compare_band(band, raw_a, res_a, raw_b, res_b):
             nume, raw_c, res_c = ('mineru', raw_b, res_b) if ga else ('lighton', raw_a, res_a)
             celalalt = {'cititor': nume, 'stare': 'text' if res_c.get('ok') is True else 'incomplet', 'text': raw_c,
                         'signal': res_c.get('signal'), 'error': res_c.get('error')}
-        return {'band': band['id'], 'structura': 'banda_goala_de_verificat', 'gol_la': gol_la, 'disagreements': 1}, [dict(
+        return cu_al({'band': band['id'], 'structura': 'banda_goala_de_verificat', 'gol_la': gol_la, 'disagreements': 1}), [dict(
             base, id=band['id'] + '_gol', tip='banda_goala_de_verificat', citire_lighton=raw_a, citire_mineru=raw_b, gol_la=gol_la,
             celalalt=celalalt, probabil_alba=probabil_alba(res_a, res_b),
             motiv_pipeline=('iesire goala la ambii cititori' if celalalt is None else 'iesire goala la %s, %s la %s'
                             % (gol_la[0], celalalt['stare'], celalalt['cititor'])) + ' - se verifica imaginea benzii (om)',
-            diferenta_numerica=True, anomalie_separator=separator_anomaly(raw_a, raw_b), e_cantitate=True)]
+            diferenta_numerica=True, anomalie_separator=separator_anomaly(raw_a, raw_b), e_cantitate=True)] + al
     # marcaj gol neconsistent (text nevid sau ok = True): citirea nu se compara ca text -> citire incompleta, la om
     if res_a.get('gol_de_verificat') is not None: res_a = dict(res_a, ok=False)
     if res_b.get('gol_de_verificat') is not None: res_b = dict(res_b, ok=False)
     if not (res_a.get('ok') and res_b.get('ok')):
         motiv = [r for r, x in (('lighton', res_a), ('mineru', res_b)) if not x.get('ok')]
-        return {'band': band['id'], 'structura': 'citire_incompleta', 'incomplete': motiv}, [dict(base, id=band['id'] + '_banda', tip='banda_intreaga',
+        return cu_al({'band': band['id'], 'structura': 'citire_incompleta', 'incomplete': motiv}), [dict(base, id=band['id'] + '_banda', tip='banda_intreaga',
                 citire_lighton=raw_a, citire_mineru=raw_b, motiv_pipeline='citire incompleta: ' + ', '.join(motiv),
-                diferenta_numerica=True, anomalie_separator=separator_anomaly(raw_a, raw_b), e_cantitate=band['kind'] == 'quantity_table')]
+                diferenta_numerica=True, anomalie_separator=separator_anomaly(raw_a, raw_b), e_cantitate=band['kind'] == 'quantity_table')] + al
     sa = segments(raw_a); sb = segments(raw_b)
-    # pe segmentele NEaplatizate ale fiecarui cititor (tabelul asa cum l-a citit), inainte de flat_text
-    al = aliniere_items(base, 'lighton', sa) + aliniere_items(base, 'mineru', sb)
     na = sum(1 for s in sa if s[0] == 'table'); nb = sum(1 for s in sb if s[0] == 'table')
     structura = 'aceeasi' if (na > 0) == (nb > 0) else 'diferita'
     if structura == 'diferita': sa, sb = flat_text(sa), flat_text(sb)
@@ -411,8 +415,8 @@ def compare_band(band, raw_a, res_a, raw_b, res_b):
                           diferenta_numerica=False, anomalie_separator=False, e_cantitate=True,
                           motiv_pipeline='un cititor vede tabel, celalalt text'))
     # semnalele de aliniere vin la coada (dupa marcarea structura_diferita de mai sus, care nu le priveste)
-    return dict({'band': band['id'], 'structura': structura, 'tokens': nt, 'rows': nr, 'disagreements': len(ti) + len(ri) + len(al),
-                 'acord_regula_a': acord_a}, **({'aliniere': [x['id'] for x in al]} if al else {})), ti + ri + al
+    return cu_al({'band': band['id'], 'structura': structura, 'tokens': nt, 'rows': nr, 'disagreements': len(ti) + len(ri),
+                  'acord_regula_a': acord_a}), ti + ri + al
 
 def canonical(it):
     return json.dumps({k: v for k, v in it.items() if k != 'item_sha256'}, ensure_ascii=False, sort_keys=True)
