@@ -66,7 +66,7 @@ async function urlSemnat(path, download = null) {
   return data.signedUrl
 }
 
-export default function IzoBuletineNdt({ proiectId, tronsoane, initialTronsonId }) {
+export default function IzoBuletineNdt({ proiectId, tronsoane, initialTronsonId, onGarda }) {
   const [tronsonId, setTronsonId] = useState(initialTronsonId || tronsoane?.[0]?.id || null)
   const [date, setDate] = useState(null)          // { tronsonId, buletine, eliminate, metode (null = necitite), eroareMetode }
   const [eroare, setEroare] = useState(null)
@@ -87,6 +87,8 @@ export default function IzoBuletineNdt({ proiectId, tronsoane, initialTronsonId 
   // TODO(PR #1218 r1, P1 :291/:523): citirea AI și corecturile stau doar în ecran până la confirmare; păstrarea lor pe
   // server cere un tabel nou (decizia proprietarului). Până atunci: avertisment vizibil + confirmare la închidere.
   const poatePleca = () => !nesalvat.current || window.confirm('Citirea și rândurile din tabel nu sunt salvate (se salvează doar la confirmare). Dacă închizi, se pierd. Închizi oricum?')
+  // navigarea internă (alt tab din Izometrie) trece prin aceeași confirmare (Jak r2 P1); la demontare garda se scoate
+  useEffect(() => { if (!onGarda) return; onGarda(poatePleca); return () => onGarda(null) }, [onGarda])
   useEffect(() => {
     const laIesire = e => { if (nesalvat.current) { e.preventDefault(); e.returnValue = '' } }
     window.addEventListener('beforeunload', laIesire)

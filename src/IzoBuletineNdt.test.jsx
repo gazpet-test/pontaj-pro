@@ -82,7 +82,7 @@ const TABELE = () => ({
 const curata = []
 afterEach(() => { while (curata.length) curata.pop()() })
 
-async function monteaza({ scriere = true, rpc = {}, edge = null, tronsoane = [TRONSON], tabele = null } = {}) {
+async function monteaza({ scriere = true, rpc = {}, edge = null, tronsoane = [TRONSON], tabele = null, onGarda } = {}) {
   st.tabele = tabele ? tabele(TABELE()) : TABELE(); st.cereri = []; st.rpc = []; st.urcari = []; st.edgeApeluri = []; st.edge = edge
   st.rpcRaspuns = { fn_sud_drept: { data: scriere, error: null }, ...rpc }
   const j = new JSDOM('<!doctype html><div id="r"></div>')
@@ -94,7 +94,7 @@ async function monteaza({ scriere = true, rpc = {}, edge = null, tronsoane = [TR
   const { act } = await import('react')
   const root = createRoot(j.window.document.getElementById('r'))
   const asteapta = async () => { await act(async () => { for (let i = 0; i < 60; i++) await Promise.resolve() }) }
-  await act(async () => { root.render(<IzoBuletineNdt proiectId={1} tronsoane={tronsoane} initialTronsonId={50} />) })
+  await act(async () => { root.render(<IzoBuletineNdt proiectId={1} tronsoane={tronsoane} initialTronsonId={50} onGarda={onGarda} />) })
   await asteapta()
   curata.push(() => { act(() => root.unmount()); Object.assign(globalThis, vechi) })
   const d = j.window.document
@@ -304,6 +304,22 @@ dom(numeDom('IzoBuletineNdt — runda 2: citirile, blocarea, închiderea'), () =
     e.j.window.confirm.mockReturnValue(true)
     await e.click(e.buton('Închide'))
     expect(e.d.querySelector('iframe')).toBeNull()
+  })
+
+  it('Jak r2 P1 :257 — garda pentru alt tab din Izometrie: fără citire trece mut, cu citire nesalvată întreabă', async () => {
+    let garda = 'nesetat'
+    const e = await monteaza({ onGarda: f => { garda = f } })
+    expect(typeof garda).toBe('function')
+    expect(garda()).toBe(true)
+    expect(e.j.window.confirm).not.toHaveBeenCalled()
+    await cuRandLipit(e)
+    e.j.window.confirm.mockReturnValue(false)
+    expect(garda()).toBe(false)
+    expect(e.j.window.confirm).toHaveBeenCalledTimes(1)
+    e.j.window.confirm.mockReturnValue(true)
+    expect(garda()).toBe(true)
+    curata.pop()()   // demontarea scoate garda
+    expect(garda).toBeNull()
   })
 
   it('fără nimic în tabel, închiderea nu întreabă', async () => {

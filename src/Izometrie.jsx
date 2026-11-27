@@ -132,6 +132,8 @@ export default function IzometriePage({ initialProiectId } = {}) {
   const [showNoPachet, setShowNoPachet] = useState(false)
   // E2b: vederea „Stoc țeavă (registru)” — doar citire, aceeași sursă ca Magazie → Țeavă proiecte
   const [vedere, setVedere] = useState('pachete')
+  const gardaNdt = useRef(null)   // ecranul NDT înregistrează aici „poate pleca?” (citire nesalvată → confirmare la schimbarea vederii)
+  const schimbaVedere = k => { if (k === vedere) return; if (vedere === 'ndt' && gardaNdt.current && !gardaNdt.current()) return; setVedere(k) }
   const { toast, show } = useToast()
 
   // Stats per tronson
@@ -254,7 +256,7 @@ export default function IzometriePage({ initialProiectId } = {}) {
   const comutator = (
     <div style={{ display:'flex', flexWrap:'wrap', gap:8, marginBottom:16 }}>
       {[['pachete', '📐 Pachete lansare'], ['stoc', '🧱 Stoc țeavă (registru)'], ['teren', '👷 Teren (tabletă)'], ['aprobare', '✅ Aprobare teren (MP)'], ['depozit', '📦 Gestionar (depozit)'], ['banda', '📏 Bandă tronson (citire)'], ['ndt', '🧪 Buletine NDT']].map(([k, l]) => (
-        <button key={k} onClick={() => setVedere(k)} style={{
+        <button key={k} onClick={() => schimbaVedere(k)} style={{
           padding:'8px 16px', fontSize:13, fontWeight:700, cursor:'pointer', borderRadius:8, fontFamily:'inherit',
           background: vedere === k ? '#58A6FF22' : 'transparent', color: vedere === k ? '#58A6FF' : G.muted,
           border: `1px solid ${vedere === k ? '#58A6FF66' : '#30363D'}`,
@@ -267,7 +269,7 @@ export default function IzometriePage({ initialProiectId } = {}) {
 
   if (vedere === 'banda') return <div style={S.page}>{comutator}<Suspense fallback={<p>Se încarcă banda…</p>}><IzoBandaTronson key={proiectId} proiectId={proiectId} tronsoane={tronsoane} initialTronsonId={tronsonId} /></Suspense></div>
 
-  if (vedere === 'ndt') return <div style={S.page}>{comutator}<Suspense fallback={<p>Se încarcă buletinele…</p>}><IzoBuletineNdt key={proiectId} proiectId={proiectId} tronsoane={tronsoane} initialTronsonId={tronsonId} /></Suspense></div>
+  if (vedere === 'ndt') return <div style={S.page}>{comutator}<Suspense fallback={<p>Se încarcă buletinele…</p>}><IzoBuletineNdt key={proiectId} proiectId={proiectId} tronsoane={tronsoane} initialTronsonId={tronsonId} onGarda={f => { gardaNdt.current = f }} /></Suspense></div>
 
   if (vedere === 'aprobare' || vedere === 'depozit') {
     const Birou = vedere === 'aprobare' ? IzometrieAprobare : IzometrieGestionar
