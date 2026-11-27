@@ -70,7 +70,7 @@ BEGIN
                                    ('executie_tronsoane', 'id', 'bigint'), ('executie_tronsoane', 'proiect_id', 'bigint'), ('executie_tronsoane', 'cod', 'text'),
                                    ('executie_pachete_lansare', 'id', 'bigint'), ('executie_pachete_lansare', 'proiect_id', 'bigint'),
                                    ('executie_pachete_lansare', 'tronson_id', 'bigint'),
-                                   ('profiles', 'id', 'uuid'), ('profiles', 'is_owner', 'boolean'), ('profiles', 'employee_id', 'integer')) c(t, col, tip)
+                                   ('profiles', 'id', 'uuid'), ('profiles', 'is_owner', 'boolean'), ('profiles', 'employee_id', 'bigint')) c(t, col, tip)
               WHERE NOT EXISTS (SELECT 1 FROM information_schema.columns i WHERE i.table_schema = 'public' AND i.table_name = c.t
                                   AND i.column_name = c.col AND i.data_type = c.tip)) THEN
     RAISE EXCEPTION '20270114a: coloanele citite nu au tipurile asteptate';
