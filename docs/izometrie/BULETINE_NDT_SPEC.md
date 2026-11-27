@@ -141,7 +141,85 @@ Limite: un singur buletin, scan curat, un singur laborator; referința a fost co
 
 ## 12. Deschise
 
-- Cum se identifică MP-ul în cod: `executie_proiecte.mp_employee_id` și/sau atribuirile din Izometrie — de verificat la PR1.
-- Proiectele vechi cu PM / PA-UT scrise de mână: rămân așa sau se încarcă buletinele retroactiv — decide Răzvan.
+- Proiectele vechi cu PM / PA-UT scrise de mână: rămân așa deocamdată (D13).
 - Buletine pentru alte metode (RT, VT, PT): intră în arhivă, fără coloană în centralizator.
 - Suduri care apar în pachet cu cod greșit (alt tronson, „-”): curățenie separată, pe date, cu preview și „da”.
+
+## 13. Decizii adăugate (27.11.2026, după-amiază)
+
+| # | Subiect | Decizie |
+|---|---|---|
+| D12 | Cine e MP | Managerul de proiect setat pe proiect (`executie_proiecte.mp_employee_id`). Fiecare proiect are unul. |
+| D13 | Proiectele vechi | Nu se ating acum; buletinele retroactive vin după ce se termină lucrarea de față. |
+| D14 | Două exporturi | „Export IZO înainte de lansare” (cel de azi, redenumit) și „Export INVENTAR după lansare” (nou). |
+| D15 | Inventarul | Pe pachet (butonul din pachet) și cumulat pe tronson / lot. |
+| D16 | Coordonate | Le încarcă MP-ul, pe tronson. Tot ce are coordonate confirmate intră în inventar. |
+| D17 | Clasa de locație | Vine din schema de montaj a tronsonului (propunerea din §15, de confirmat). |
+| D18 | Sufixe de sudură | `R` = refacerea aceleiași suduri. Orice altă literă (A, B, C…) = sudură distinctă (cuplare sau cupon). |
+| D19 | Pachete de la subcontractor | Intră ca pachete aprobate, prin „PDF aprobat” (varianta din §17, de confirmat). |
+
+## 14. Codul sudurii — completare la §5
+
+- `T12S126R` → sudura `T12S126`, refăcută. Aceeași sudură, două rânduri de buletin.
+- `T17S50A`, `T17S50H` → suduri de sine stătătoare; litera face parte din cod. Apar la cuplări sau când o sudură
+  reparată de trei ori se taie și se introduce un cupon (rezultă două suduri noi).
+- Sudura tăiată și înlocuită prin cupon rămâne în arhivă cu buletinele ei, marcată „eliminată prin tăiere”,
+  și nu mai blochează exportul.
+- De lămurit la PR1: seria de litere nu trebuie să ajungă la `R`; dacă se poate întâmpla, refacerea are nevoie de alt marcaj.
+
+## 15. Clasa de locație (propunere)
+
+Clasa ține de traseu, nu de țeavă: se păstrează ca intervale de km pe tronson (de la – până la → clasă).
+
+1. MP încarcă schema de montaj a tronsonului (una pe tronson, 12–16 pagini pe proiect).
+2. AI citește intervalele, MP le confirmă. O singură dată pe tronson.
+3. Fiecare sudură își ia clasa din POZ KM.
+4. Avertisment dacă grosimea elementului nu se potrivește cu clasa; sudurile de la granița dintre două clase se confirmă de om.
+
+## 16. Coordonate și Export INVENTAR după lansare
+
+**Fișierul de coordonate**: text, câte o sudură pe rând: `cod X Y Z`. Se încarcă pe tronson, de către MP.
+
+La încărcare nimic nu se pierde tacit. Se afișează și se rezolvă de om:
+- coduri nesigure (cu `?`), coduri în alt format, dubluri cu coordonate diferite;
+- suduri din fișier care nu există în pachete; suduri din pachete fără coordonate;
+- distanța dintre două suduri vecine, calculată din coordonate, față de lungimea elementului dintre ele
+  (prinde coduri greșite și propune codul la cele nesigure).
+
+O sudură are o singură poziție confirmată; o reîncărcare cu alte valori cere confirmare și păstrează istoricul.
+
+**Inventarul**: un rând pe sudură — lot, nr. sudură, nr. pachet de lansare (cu revizie), nr. situație de lucrări, tronson,
+clasă de locație, elementul amonte (tip, diametru, grosime, lungime, serie, șarjă), elementul aval (la fel), X, Y, Z,
+rubrica de semnătură a antreprenorului. Amonte = elementul de pe rândul sudurii, aval = elementul următor,
+inclusiv peste granița dintre două pachete.
+
+Verificarea înainte de export urmează §8: blocaj fără deblocare la date care ar da un document greșit
+(element fără serie / lungime, sudură fără element aval), blocaj cu deblocare de MP la coordonate sau clasă lipsă.
+Coloana „nr. situație de lucrări” rămâne goală până există sursa ei.
+
+## 17. Pachete executate de subcontractor (propunere)
+
+Pachetele subcontractorului nu se construiesc în ERP; sosesc gata aprobate.
+
+1. „Pachet de la subcontractor” pe tronson: codul și revizia reale, PDF-ul aprobat atașat, starea direct „aprobat”,
+   marcat ca executat de subcontractor.
+2. Rândurile: din Excel-ul centralizatorului, dacă subcontractorul îl dă (importul existent, fără cost);
+   altfel citire cu AI din PDF-ul aprobat, cu verificare independentă și confirmare umană, ca la buletine.
+3. De aici pachetul se poartă ca oricare altul: buletine, coordonate, inventar.
+
+## 18. Starea datelor pe Lot 2 (constatare, doar citire)
+
+- În ERP, T12 are două pachete mari în ciornă; documentele reale sunt mai multe și grupate altfel.
+  Seriile se potrivesc, gruparea nu. Refacerea grupării este modificare de date: preview + „da”.
+- Tronsoanele executate de subcontractor nu au pachete în ERP; intră prin §17.
+
+## 19. Etape — actualizare
+
+| PR | Conținut |
+|---|---|
+| PR1 | Baza de date: buletine + rânduri, setarea de metode, coordonate, intervale de clasă, marcajul de subcontractor |
+| PR2 | Buletine NDT: ecran, citire AI + verificare, normalizarea codului |
+| PR3 | „Export IZO înainte de lansare”: coloanele din arhivă, ZIP, verificarea și deblocarea |
+| PR4 | Coordonate + clasă de locație: încărcare, verificări, confirmare |
+| PR5 | „Export INVENTAR după lansare”: pe pachet și cumulat |
+| PR6 | Pachete de la subcontractor |
