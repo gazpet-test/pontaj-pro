@@ -698,7 +698,11 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=
         if it['tip'] == 'banda_intreaga':  # banda oprita de garda (citire incompleta): verificare manuala, fara Claude (Razvan 14.10)
             om(d, ids, it, ('banda_intreaga: ' + (it.get('motiv_pipeline') or 'citire incompleta') + ' - garda, verificare manuala (fara arbitraj automat)')[:200]); st = stare_locala(); continue
         if it['tip'] == 'structura_tabele':
-            om(d, ids, it, 'structura_tabele: un cititor vede tabel, celalalt text (fara arbitraj automat)'); st = stare_locala(); continue
+            from .aliniere import SEMNALE
+            if it.get('semnal') in SEMNALE:  # etichete / valori decalate in tabelul unui cititor (aliniere.py, 27.11.2026)
+                om(d, ids, it, ('structura_tabele / %s: %s (fara arbitraj automat)' % (it['semnal'], it.get('motiv_pipeline') or ''))[:200])
+            else: om(d, ids, it, 'structura_tabele: un cititor vede tabel, celalalt text (fara arbitraj automat)')
+            st = stare_locala(); continue
         # contextul trimis arbitrului e plafonat in edge (CHEI_CONTEXT, sir <= 2000, altfel 422 inaintea rezervarii): in proba se sare,
         # in pasul normal merge la om fara AI (laborator 16.10: proba doar_haiku oprita de un rand_anterior lung)
         if any(isinstance(it.get(k), str) and len(it[k]) > 2000 for k in CHEI_CONTEXT_ARBITRU):

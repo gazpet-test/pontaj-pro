@@ -2,6 +2,7 @@
 Niveluri (spec §2): cuvant (ș/ş, ț/ţ unificate DOAR la comparare), cifra (separatorul zecimal NICIODATA normalizat),
 rand de tabel (celule, cu rolurile cod / UM / cantitate cand se pot deduce). Textul citit ramane literal; nimic nu se corecteaza aici."""
 import difflib, hashlib, html, json, pathlib, re, threading
+from .aliniere import SEMNAL_ALUNECARE, semnale_citire, text_tabel
 from .banda_goala import e_gol, probabil_alba
 
 CEDILLA = str.maketrans({'ş': 'ș', 'ţ': 'ț', 'Ş': 'Ș', 'Ţ': 'Ț'})
@@ -344,10 +345,38 @@ def compare_tables(seg_a, seg_b, base, acord_a=None):
                           diferenta_numerica=numeric_diff(fa, fb), anomalie_separator=separator_anomaly(fa, fb), e_cantitate=bool(e_cant)))
     return items, len(ra)
 
+def aliniere_items(base, cititor, segs):
+    """Alunecarea eticheta - valoare (aliniere.py, cerere Razvan 27.11.2026) pe tabelele UNUI cititor, chiar daca cei doi cititori nu
+    difera acolo: un rand pe tabel semnalat. Tipul e structura_tabele (existent in BD: nu se arbitreaza automat, merge la om, la
+    reconciliere banda ramane la om fara „ales_lighton” explicit); `semnal` spune ce s-a gasit. Citirea cititorului = tabelul exact."""
+    out = []
+    for si, det in semnale_citire(segs):
+        val = segs[si][1]
+        if det['semnal'] == SEMNAL_ALUNECARE:
+            motiv = ('etichete si valori decalate cu k=%d randuri in tabelul citit de %s (segment %d): %d din %d perechi au simboluri '
+                     'diferite pe acelasi rand - verificare pe imagine' % (det['k'], cititor, si, det['perechi'] - det['potrivite'], det['perechi']))
+        else:
+            motiv = ('etichete si valori nealiniate dupa simboluri, deplasare neclara, in tabelul citit de %s (segment %d): %d din %d '
+                     'perechi diferite - verificare pe imagine' % (cititor, si, det['perechi'] - det['potrivite'], det['perechi']))
+        t = text_tabel(val)
+        out.append(dict(base, id='%s_aliniere_%s_s%d' % (base['band'], cititor, si), tip='structura_tabele', semnal=det['semnal'],
+                        cititor=cititor, segment=si, k=det['k'], randuri=det['randuri'], perechi_pe_rand=det['perechi_pe_rand'],
+                        deplasari_posibile=det['deplasari_posibile'], contradictii=det['contradictii'], propunere=det['propunere'],
+                        citire_lighton=t if cititor == 'lighton' else '', citire_mineru=t if cititor == 'mineru' else '',
+                        pozitie={'lighton': None, 'mineru': None}, diferenta_numerica=False, anomalie_separator=False, e_cantitate=True,
+                        motiv_pipeline=motiv))
+    return out
+
 def compare_band(band, raw_a, res_a, raw_b, res_b):
     base = {'band': band['id'], 'page': band['page'], 'kind': band['kind'], 'image': band['image'], 'image_sha256': band['image_sha256'],
             'cititori': {r: {'protocol': x.get('protocol'), 'weights_sha256': x.get('weights_sha256')} for r, x in (('lighton', res_a), ('mineru', res_b))},
             'raw_sha256': {'lighton': hashlib.sha256(raw_a.encode()).hexdigest(), 'mineru': hashlib.sha256(raw_b.encode()).hexdigest()}}
+    # etichete / valori decalate (aliniere.py): pe FIECARE citire valida (ok = true, ca in asamblare), INAINTEA iesirilor timpurii de mai
+    # jos (banda goala / citire incompleta), pe segmentele NEaplatizate; vin la coada listei pe toate ramurile (Jakarinos r2 P2)
+    al = [x for r, raw, res in (('lighton', raw_a, res_a), ('mineru', raw_b, res_b)) if res.get('ok') is True
+          for x in aliniere_items(base, r, segments(raw))]
+    # rezumatul ramurii „citire incompleta” nu are disagreements nici pe main: cheia nu se inventeaza acolo
+    cu_al = lambda s: dict(s, aliniere=[x['id'] for x in al], **({'disagreements': s['disagreements'] + len(al)} if 'disagreements' in s else {})) if al else s
     # banda goala de verificat (banda_goala.py, runda 2): gol la ORICARE cititor = mereu un rand la om, NICIODATA acord (nici cand
     # ambii dau gol). Euristica pe pixeli intra doar ca informatie (probabil_alba). Marcaj neconsistent (text nevid / ok = True) ->
     # mai jos, banda_intreaga (citire incompleta / neconsistenta).
@@ -359,20 +388,20 @@ def compare_band(band, raw_a, res_a, raw_b, res_b):
             nume, raw_c, res_c = ('mineru', raw_b, res_b) if ga else ('lighton', raw_a, res_a)
             celalalt = {'cititor': nume, 'stare': 'text' if res_c.get('ok') is True else 'incomplet', 'text': raw_c,
                         'signal': res_c.get('signal'), 'error': res_c.get('error')}
-        return {'band': band['id'], 'structura': 'banda_goala_de_verificat', 'gol_la': gol_la, 'disagreements': 1}, [dict(
+        return cu_al({'band': band['id'], 'structura': 'banda_goala_de_verificat', 'gol_la': gol_la, 'disagreements': 1}), [dict(
             base, id=band['id'] + '_gol', tip='banda_goala_de_verificat', citire_lighton=raw_a, citire_mineru=raw_b, gol_la=gol_la,
             celalalt=celalalt, probabil_alba=probabil_alba(res_a, res_b),
             motiv_pipeline=('iesire goala la ambii cititori' if celalalt is None else 'iesire goala la %s, %s la %s'
                             % (gol_la[0], celalalt['stare'], celalalt['cititor'])) + ' - se verifica imaginea benzii (om)',
-            diferenta_numerica=True, anomalie_separator=separator_anomaly(raw_a, raw_b), e_cantitate=True)]
+            diferenta_numerica=True, anomalie_separator=separator_anomaly(raw_a, raw_b), e_cantitate=True)] + al
     # marcaj gol neconsistent (text nevid sau ok = True): citirea nu se compara ca text -> citire incompleta, la om
     if res_a.get('gol_de_verificat') is not None: res_a = dict(res_a, ok=False)
     if res_b.get('gol_de_verificat') is not None: res_b = dict(res_b, ok=False)
     if not (res_a.get('ok') and res_b.get('ok')):
         motiv = [r for r, x in (('lighton', res_a), ('mineru', res_b)) if not x.get('ok')]
-        return {'band': band['id'], 'structura': 'citire_incompleta', 'incomplete': motiv}, [dict(base, id=band['id'] + '_banda', tip='banda_intreaga',
+        return cu_al({'band': band['id'], 'structura': 'citire_incompleta', 'incomplete': motiv}), [dict(base, id=band['id'] + '_banda', tip='banda_intreaga',
                 citire_lighton=raw_a, citire_mineru=raw_b, motiv_pipeline='citire incompleta: ' + ', '.join(motiv),
-                diferenta_numerica=True, anomalie_separator=separator_anomaly(raw_a, raw_b), e_cantitate=band['kind'] == 'quantity_table')]
+                diferenta_numerica=True, anomalie_separator=separator_anomaly(raw_a, raw_b), e_cantitate=band['kind'] == 'quantity_table')] + al
     sa = segments(raw_a); sb = segments(raw_b)
     na = sum(1 for s in sa if s[0] == 'table'); nb = sum(1 for s in sb if s[0] == 'table')
     structura = 'aceeasi' if (na > 0) == (nb > 0) else 'diferita'
@@ -385,8 +414,9 @@ def compare_band(band, raw_a, res_a, raw_b, res_b):
                           citire_lighton='%d tabele' % na, citire_mineru='%d tabele' % nb, pozitie={'lighton': None, 'mineru': None},
                           diferenta_numerica=False, anomalie_separator=False, e_cantitate=True,
                           motiv_pipeline='un cititor vede tabel, celalalt text'))
-    return {'band': band['id'], 'structura': structura, 'tokens': nt, 'rows': nr, 'disagreements': len(ti) + len(ri),
-            'acord_regula_a': acord_a}, ti + ri
+    # semnalele de aliniere vin la coada (dupa marcarea structura_diferita de mai sus, care nu le priveste)
+    return cu_al({'band': band['id'], 'structura': structura, 'tokens': nt, 'rows': nr, 'disagreements': len(ti) + len(ri),
+                  'acord_regula_a': acord_a}), ti + ri + al
 
 def canonical(it):
     return json.dumps({k: v for k, v in it.items() if k != 'item_sha256'}, ensure_ascii=False, sort_keys=True)
