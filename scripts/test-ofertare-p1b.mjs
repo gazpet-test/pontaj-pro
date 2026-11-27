@@ -46,7 +46,7 @@ const raspuns = (j, stop = 'end_turn') => ({ stop_reason: stop, content: [{ type
 async function invoca(nume, data, { status = 200, mod = 'text' } = {}) {
   const writes = []
   const row = nume === 'ofertare-clarificare-citeste'
-    ? { id: 1, fisier_path: 'L/a.pdf', intrebare: 'Întrebare existentă', citita_la: 'vechi', citita_rezumat: 'Rezumat existent' }
+    ? { id: 1, licitatie_id: 1, fisier_path: 'L/a.pdf', intrebare: 'Întrebare existentă', citita_la: 'vechi', citita_rezumat: 'Rezumat existent' }
     : { id: 1, licitatie_id: 1, nume_original: 'a.pdf', fisier_path: 'L/a.pdf', tip: 'alta', status_procesare: 'procesat',
       procesat_la: 'vechi', text_extras: mod === 'pdf' ? null : 'Document sursă. '.repeat(60), analiza_la: 'vechi',
       analiza: { citire_noi: { rezumat: 'Rezumat existent', citit_la: '2020-01-01' }, plansa: { ok: true } } }
@@ -92,12 +92,25 @@ async function invoca(nume, data, { status = 200, mod = 'text' } = {}) {
     ctx.lucruPentru = () => ({ lucru: { inceput_la: new Date().toISOString(), parti: { 0: parte, 1: parte } } })
     ctx.urmatoareaFelie = () => -1
   }
-  const file = new URL(`../supabase/functions/${nume}/index.ts`, import.meta.url)
-  const source = readFileSync(file, 'utf8').replace(/^import .*$/gm, '')
-  runInNewContext(stripTypeScriptTypes(source), ctx, { filename: file.pathname })
-  const result = await handler(new Request('https://local.invalid', { method: 'POST',
+  const cereere = () => new Request('https://local.invalid', { method: 'POST',
     headers: { authorization: 'Bearer intern', 'x-radar-secret': 'intern', 'content-type': 'application/json' },
-    body: JSON.stringify({ licitatie_id: 1, clarificare_id: 1, document_id: 1 }) }))
+    body: JSON.stringify({ licitatie_id: 1, clarificare_id: 1, document_id: 1 }) })
+  let result
+  if (nume === 'ofertare-clarificare-citeste') {
+    // 27.11.2026: logica e în handler.ts (index.ts = doar Deno.serve), cu dependențele injectate; poarta pe rol (poateCheltui) e stub = trece,
+    // iar licitația clarificării se citește cu clientul utilizatorului (aici același fals). Testele porții sunt în poarta_test.ts (Deno).
+    const file = new URL(`../supabase/functions/${nume}/handler.ts`, import.meta.url)
+    const source = readFileSync(file, 'utf8').replace(/^import .*$/gm, '').replace(/^export /gm, '')
+    ctx.poateCheltui = async () => true
+    runInNewContext(stripTypeScriptTypes(source), ctx, { filename: file.pathname })
+    const deps = { db, caUtilizator: () => db, getUser: async () => 'u-intern', fetch: ctx.fetch, chei: { anthropic: 'intern', anon: 'anon-x', service: 'service-x' } }
+    result = await ctx.handler(cereere(), deps)
+  } else {
+    const file = new URL(`../supabase/functions/${nume}/index.ts`, import.meta.url)
+    const source = readFileSync(file, 'utf8').replace(/^import .*$/gm, '')
+    runInNewContext(stripTypeScriptTypes(source), ctx, { filename: file.pathname })
+    result = await handler(cereere())
+  }
   return { result: await result.json(), writes, before, after: JSON.stringify({ row, organigrama }) }
 }
 
