@@ -26,6 +26,7 @@ const TMP = mkdtempSync(join(tmpdir(), 'ndt_'))
 const citeste = rel => readFileSync(join(ROOT, rel), 'utf8').replace(/\r/g, '')
 const md5 = s => createHash('md5').update(s, 'utf8').digest('hex')
 const NUME = '20270114a_izometrie_buletine_ndt', NUME_REV = NUME + '_ROLLBACK'
+const POLITICI = ['sud_ndt_citire', 'sud_ndt_incarcare', 'sud_ndt_sterge_orfan', 'sud_ndt_r_sel', 'sud_ndt_r_ins', 'sud_ndt_r_upd', 'sud_ndt_r_del', 'sud_ndt_r_anon']
 const F_MIG = `supabase/migrations/${NUME}.sql`, F_REV = `supabase/revenire/${NUME_REV}.sql`
 const F_DRY = `supabase/tests/${NUME}_dryrun.sql`, F_OBIECTE = `supabase/tests/${NUME}.l15.obiecte.tsv`
 const F_SCHELET = `supabase/tests/${NUME}_schelet.sql`
@@ -138,9 +139,9 @@ const sudOk = async db => (await db.query(`SELECT (SELECT count(*) FROM pg_class
 // ── rularea ca un cont: JWT-ul ca PostgREST, AMBELE surse; implicit ROLLBACK, cu { commit: true } rămâne ──
 const jwt = (uid, rol) => uid ? `SELECT set_config('request.jwt.claim.sub', '${uid}', true); SELECT set_config('request.jwt.claims', '{"sub": "${uid}", "role": "${rol}"}', true);`
   : `SELECT set_config('request.jwt.claim.sub', '', true); SELECT set_config('request.jwt.claims', '{"role": "${rol}"}', true);`
-async function ca(db, cont, sql, params = [], { rol = 'authenticated', commit = false } = {}) {
+async function ca(db, cont, sql, params = [], { rol = 'authenticated', commit = false, pre = '' } = {}) {
   const uid = cont ? U[cont] : null
-  await db.exec(`BEGIN; SET LOCAL ROLE ${rol}; ${jwt(uid, rol)}`)
+  await db.exec(`BEGIN; SET LOCAL ROLE ${rol}; ${jwt(uid, rol)} ${pre}`)
   try {
     const id = (await db.query(`SELECT current_user AS u, auth.uid()::text AS uid, (SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user) AS bypass`)).rows[0]
     if (id.u !== rol || (uid ? id.uid !== uid : id.uid !== null) || id.bypass) throw new Error('identitate greșită: ' + JSON.stringify(id))
@@ -150,7 +151,12 @@ async function ca(db, cont, sql, params = [], { rol = 'authenticated', commit = 
 }
 const q = async (db, sql, params = []) => (await db.query(sql, params)).rows
 const sha = s => createHash('sha256').update(s).digest('hex')
-const urca = (db, cont, cale) => ca(db, cont, `INSERT INTO storage.objects (bucket_id, name, owner) VALUES ('izo-ndt', $1, auth.uid())`, [cale], { commit: true })
+// încărcarea ca Storage API: owner și owner_id = utilizatorul din JWT (ownerId = proveniență falsificată, pentru refuz)
+const urca = (db, cont, cale, { ownerId = null, rol } = {}) => ca(db, cont,
+  `INSERT INTO storage.objects (bucket_id, name, owner, owner_id) VALUES ('izo-ndt', $1, auth.uid(), coalesce($2, auth.uid()::text))`, [cale, ownerId], { commit: true, rol })
+// ștergerea ca Storage API remove(): deschide local garda protect_objects_delete, apoi RLS-ul decide; întoarce rândurile șterse
+const DESCHIDE_STERGEREA = "SELECT set_config('storage.allow_delete_query', 'true', true);"
+const sterge = (db, cont, unde, { rol, api = true } = {}) => ca(db, cont, `DELETE FROM storage.objects WHERE ${unde}`, [], { commit: true, rol, pre: api ? DESCHIDE_STERGEREA : '' })
 const incarca = (db, cont, { tronson, metoda = 'PA-UT', numar, data = '2026-11-20', firma = 'LAB SRL', cale, nume = 'b.pdf', amprenta, citiri = null, forteaza = null }) =>
   ca(db, cont, `SELECT public.fn_sud_buletin_incarca($1::bigint, $2, $3, $4::date, $5, $6, $7, $8, $9::jsonb, $10) AS id`,
     [tronson, metoda, numar, data, firma, cale, nume, amprenta, citiri === null ? null : JSON.stringify(citiri), forteaza], { commit: true })
@@ -167,9 +173,23 @@ async function verifica(db) {
 }
 async function verificaPasi(db, ab) {
   const asteapta = (cond, msg, r) => { if (!cond) ab.push(msg + (r === undefined ? '' : ': ' + JSON.stringify(r).slice(0, 220))) }
+  // (0) dreptul pe niveluri (R9): [citire, export, scriere] pe proiectele A | B | C, scris de mână din regulă:
+  //   citire = owner sau acces la pachete (executie / ctc) + proiect permis; scriere = owner sau MP + proiect permis la scriere;
+  //   export = scriere sau acces de scriere la pachete (executie) + proiect permis la scriere. MP fără modul NU citește.
+  const DREPT = { OWNER: '111|111|111', MPA: '011|000|000', MPB: '000|011|000', EXE: '110|110|110', CTC: '100|100|100', NOMOD: '000|000|000',
+    RSTR: '000|100|000', RSTRE: '000|110|000', MPC: '000|000|000' }
+  let r
+  for (const [c, ast] of Object.entries(DREPT)) {
+    r = await ca(db, c, `SELECT string_agg(concat(public.fn_sud_drept(p, 'citire')::int, public.fn_sud_drept(p, 'export')::int, public.fn_sud_drept(p, 'scriere')::int), '|' ORDER BY p) AS s
+                           FROM unnest(ARRAY[${PA}, ${PB}, ${PC}]::bigint[]) p`)
+    asteapta(r.rows?.[0]?.s === ast, `${c}: dreptul [citire, export, scriere] pe A | B | C = ${ast}`, r)
+  }
+  r = await ca(db, 'OWNER', `SELECT public.fn_sud_drept(${PA}, 'altceva') AS a, public.fn_sud_drept(${PA}, NULL) AS b, public.fn_sud_drept(NULL, 'citire') AS c, public.fn_sud_drept(${PA}, 'CITIRE') AS d`)
+  asteapta(r.rows?.[0] && ['a', 'b', 'c', 'd'].every(k => r.rows[0][k] === false), 'nivel necunoscut / NULL / proiect NULL = false (nu NULL), chiar și pentru owner', r)
+  r = await ca(db, null, `SELECT public.fn_sud_drept(${PA}, 'citire') AS x`, [], { rol: 'anon' }); asteapta(r.code === '42501', 'anon: fără EXECUTE pe fn_sud_drept', r)
   // (a) metodele obligatorii: scriu doar owner / MP pe proiectul lui (și nerestrâns pe el); valori pe lista albă (D10, §22 „ALTA nu poate fi obligatorie”)
   const met = (cont, p, m) => ca(db, cont, `SELECT public.fn_sud_metode_seteaza($1::bigint, $2::text[]) AS x`, [p, m], { commit: true })
-  let r = await met('MPA', PA, ['PA-UT', 'PM', 'PM']); asteapta(!r.code, 'MPA setează metodele pe A', r)
+  r = await met('MPA', PA, ['PA-UT', 'PM', 'PM']); asteapta(!r.code, 'MPA setează metodele pe A', r)
   r = await met('OWNER', PB, ['UT']); asteapta(!r.code, 'OWNER setează metodele pe B', r)
   for (const [c, p] of [['MPB', PA], ['EXE', PA], ['CTC', PA], ['NOMOD', PA], ['RSTRE', PB], ['MPC', PC], ['MPA', 104]]) {
     r = await met(c, p, ['PM']); asteapta(r.code === '42501', `${c} pe proiectul ${p}: metode = 42501`, r)
@@ -177,8 +197,9 @@ async function verificaPasi(db, ab) {
   r = await met('MPA', PA, ['RT']); asteapta(r.code === '22023', 'metoda RT nu poate fi obligatorie (22023)', r)
   r = await met('MPA', 999, ['PM']); asteapta(r.code === '22023', 'proiect inexistent (22023)', r)
   r = await ca(db, null, `SELECT public.fn_sud_metode_seteaza(${PA}, ARRAY['PM']) AS x`, [], { rol: 'anon' }); asteapta(r.code === '42501', 'anon: fără EXECUTE', r)
-  r = await ca(db, 'MPA', `SELECT metode, actualizat_de::text AS de FROM public.sud_metode_proiect WHERE proiect_id = ${PA}`)
+  r = await ca(db, 'OWNER', `SELECT metode, actualizat_de::text AS de FROM public.sud_metode_proiect WHERE proiect_id = ${PA}`)
   asteapta(r.rows?.length === 1 && JSON.stringify(r.rows[0].metode) === '["PA-UT","PM"]' && r.rows[0].de === U.MPA, 'metodele A: deduplicate, ordonate, autorul = serverul', r)
+  r = await ca(db, 'MPA', `SELECT count(*)::int AS n FROM public.sud_metode_proiect`); asteapta(r.rows?.[0]?.n === 0, 'MPA (fără acces la pachete) nu citește metodele, deși le scrie (R9)', r)
 
   // (b) Storage: încărcarea (INSERT ca Storage API, owner = auth.uid()) doar owner / MP, pe <proiect>/<tronson al proiectului>/<nume>
   for (const [c, cale] of [['MPA', `${PA}/${TA12}/b1.pdf`], ['MPA', `${PA}/${TA12}/b2.pdf`], ['MPA', `${PA}/${TA12}/b3.pdf`], ['MPA', `${PA}/${TA17}/t17.pdf`],
@@ -191,20 +212,31 @@ async function verificaPasi(db, ab) {
     ['MPC', `${PC}/${TC1}/z.pdf`, 'MP restrâns pe alt proiect'], ['RSTRE', `${PB}/${TB12}/z.pdf`, 'editor restrâns pe B']]) {
     r = await urca(db, c, cale); asteapta(r.code === '42501', `${c} încarcă ${cale} (${de}) = refuz RLS`, r)
   }
+  r = await urca(db, 'MPA', `${PA}/${TA12}/fals.pdf`, { ownerId: U.OWNER }); asteapta(r.code === '42501', 'MPA încarcă cu owner_id-ul altuia (proveniență falsă) = refuz RLS', r)
+  r = await urca(db, 'MPA', `${PA}/${TA12}/fals2.pdf`, { ownerId: '' }); asteapta(r.code === '42501', 'MPA încarcă cu owner_id gol = refuz RLS', r)
   r = await ca(db, null, `INSERT INTO storage.objects (bucket_id, name) VALUES ('izo-ndt', '${PA}/${TA12}/anon.pdf')`, [], { rol: 'anon' })
   asteapta(r.code === '42501', 'anon încarcă = refuz', r)
-  // citirea obiectelor: cine vede ce în izo-ndt (7 obiecte: 6 pe A, 1 pe B); citirea celorlalte bucket-uri nu pică pe cast (obiectul nenumeric)
-  const OBI = { OWNER: [6, 1], MPA: [6, 0], MPB: [0, 1], EXE: [6, 1], CTC: [6, 1], NOMOD: [0, 0], RSTR: [0, 1], RSTRE: [0, 1], MPC: [0, 0] }
+  r = await ca(db, null, `SELECT count(*)::int AS n FROM storage.objects`, [], { rol: 'anon' })
+  asteapta(!r.code && r.rows?.[0]?.n === 0, 'anon citește storage.objects fără eroare (politicile cu funcții nu i se aplică; nicio politică permisivă a lui)', r)
+  // citirea obiectelor: cine vede ce în izo-ndt (7 obiecte: 6 pe A, 1 pe B) = dreptul de CITIRE (MP fără modul nu vede, R9);
+  // citirea celorlalte bucket-uri nu pică pe cast (obiectul nenumeric)
+  const OBI = { OWNER: [6, 1], MPA: [0, 0], MPB: [0, 0], EXE: [6, 1], CTC: [6, 1], NOMOD: [0, 0], RSTR: [0, 1], RSTRE: [0, 1], MPC: [0, 0] }
   for (const [c, [a, b]] of Object.entries(OBI)) {
     r = await ca(db, c, `SELECT count(*) FILTER (WHERE name LIKE '${PA}/%')::int AS a, count(*) FILTER (WHERE name LIKE '${PB}/%')::int AS b FROM storage.objects WHERE bucket_id = 'izo-ndt'`)
     asteapta(r.rows && r.rows[0].a === a && r.rows[0].b === b, `${c} vede în izo-ndt [A, B] = [${a}, ${b}]`, r)
     r = await ca(db, c, `SELECT count(*)::int AS n FROM storage.objects`)
     asteapta(r.rows && !r.code, `${c} citește tot storage.objects fără eroare (obiectul nenumeric din alt bucket)`, r)
   }
-  r = await ca(db, 'MPA', `UPDATE storage.objects SET name = '${PA}/${TA12}/mutat.pdf' WHERE bucket_id = 'izo-ndt' AND name = '${PA}/${TA12}/b3.pdf'`)
-  asteapta(!r.code && r.afectate === 0, 'MPA: UPDATE pe obiect = 0 rânduri (fără politică UPDATE)', r)
-  r = await ca(db, 'OWNER', `DELETE FROM storage.objects WHERE bucket_id = 'izo-ndt'`)
-  asteapta(!r.code && r.afectate === 0, 'OWNER: DELETE pe obiecte = 0 rânduri (fără politică DELETE)', r)
+  for (const c of ['MPA', 'OWNER']) {
+    r = await ca(db, c, `UPDATE storage.objects SET name = '${PA}/${TA12}/mutat.pdf' WHERE bucket_id = 'izo-ndt' AND name = '${PA}/${TA12}/b3.pdf'`, [], { commit: true })
+    asteapta(!r.code && r.afectate === 0, `${c}: UPDATE pe obiect = 0 rânduri (UPDATE interzis pe izo-ndt)`, r)
+  }
+  // ștergerea: DELETE direct (fără Storage API) = garda protect_objects_delete; prin API doar orfanul propriu, cu drept de citire
+  r = await sterge(db, 'OWNER', `bucket_id = 'izo-ndt' AND name = '${PA}/${TA12}/o1.pdf'`, { api: false }); asteapta(r.code === '42501', 'DELETE direct fără Storage API = 42501 (protect_objects_delete)', r)
+  r = await sterge(db, 'EXE', `bucket_id = 'izo-ndt'`); asteapta(!r.code && r.afectate === 0, 'EXE (citire, fără fișiere proprii) șterge din izo-ndt = 0 rânduri', r)
+  r = await sterge(db, 'MPA', `bucket_id = 'izo-ndt' AND name = '${PA}/${TA13}/t13.pdf'`)
+  asteapta(!r.code && r.afectate === 0, 'MPA (fără drept de citire) nu-și șterge orfanul = 0 rânduri (verificarea „neînregistrat” cere citire)', r)
+  r = await sterge(db, null, `bucket_id = 'izo-ndt'`, { rol: 'anon' }); asteapta(!r.code && r.afectate === 0, 'anon șterge din izo-ndt = 0 rânduri', r)
 
   // (c) încărcarea buletinului
   const H1 = sha('pdf-1'), H2 = sha('pdf-2'), H3 = sha('pdf-3')
@@ -219,12 +251,17 @@ async function verificaPasi(db, ab) {
     ['obiectul încărcat de alt utilizator (OWNER)', { cale: `${PA}/${TA12}/o1.pdf` }, '22023'],
     ['calea altui tronson al proiectului', { tronson: TA13, cale: `${PA}/${TA12}/b2.pdf` }, '22023'],
     ['calea altui proiect', { cale: `${PB}/${TB12}/x1.pdf` }, '22023'],
-    ['amprentă invalidă', { amprenta: 'ABC' }, '23514'],
-    ['metodă necunoscută', { metoda: 'XX' }, '23514'],
+    ['amprentă invalidă', { amprenta: 'ABC' }, '22023'],
+    ['amprentă cu majuscule', { amprenta: H2.toUpperCase() }, '22023'],
+    ['metodă necunoscută', { metoda: 'XX' }, '22023'],
+    ['metodă lipsă', { metoda: null }, '22023'],
+    ['număr gol', { numar: '   ' }, '22023'],
+    ['număr peste 60', { numar: 'N'.repeat(61) }, '22023'],
+    ['firmă peste 200', { firma: 'F'.repeat(201) }, '22023'],
     ['data în viitor', { data: '2099-01-01' }, '22023'],
     ['citirile nu sunt obiect', { citiri: [1, 2] }, '22023'],
   ]) {
-    r = await incarca(db, 'MPA', { tronson: TA12, numar: 'N-' + de.length, cale: `${PA}/${TA12}/b2.pdf`, amprenta: H2, ...o })
+    r = await incarca(db, 'MPA', { tronson: TA12, numar: 'N-' + de.length + '-' + de.charCodeAt(0), cale: `${PA}/${TA12}/b2.pdf`, amprenta: H2, ...o })
     asteapta(r.code === cod, `încărcare: ${de} = ${cod}`, r)
   }
   for (const c of ['EXE', 'CTC', 'MPB', 'NOMOD', 'RSTRE']) {
@@ -278,13 +315,21 @@ async function verificaPasi(db, ab) {
   r = await confirma(db, 'MPA', id1, 1, [{ cod_raw: 'S9' }]); asteapta(r.code === '22023', 'rezultat lipsă = 22023', r)
   r = await confirma(db, 'MPA', id1, 1, ['S9']); asteapta(r.code === '22023', 'rând care nu e obiect = 22023', r)
   r = await confirma(db, 'MPA', id1, 1, [{ cod_raw: 'S1', rezultat: 'acceptat' }, { cod_raw: 'T12S' + '1'.repeat(77), rezultat: 'acceptat' }])
-  asteapta(r.code === '22023' && /randul 2 are codul/.test(r.message), 'cod peste 80 de caractere = refuz 22023 (nu tăiere tăcută, L21)', r)
+  asteapta(r.code === '22023' && /randul 2 are campuri/.test(r.message), 'cod peste 80 de caractere = refuz 22023 (nu tăiere tăcută, L21)', r)
   r = await confirma(db, 'MPA', id1, 1, [{ cod_raw: 'S1', rezultat: 'acceptat', observatii: 'o'.repeat(501) }])
-  asteapta(r.code === '22023' && /randul 1 are codul/.test(r.message), 'observații peste 500 de caractere = refuz 22023 (nu tăiere tăcută, L21)', r)
-  r = await confirma(db, 'MPA', id1, 1, [{ cod_raw: 'S1', rezultat: 'acceptat', data_inspectie: 'mâine' }])
-  asteapta(r.code === '22007', 'data inspecției invalidă = eroare (nimic scris)', r)
-  r = await confirma(db, 'MPA', id1, 1, [{ cod_raw: 'S1', rezultat: 'acceptat', start_mm: '12,5' }])
-  asteapta(r.code === '22P02', 'indicație nenumerică („12,5”) = eroare (nimic scris)', r)
+  asteapta(r.code === '22023' && /randul 1 are campuri/.test(r.message), 'observații peste 500 de caractere = refuz 22023 (nu tăiere tăcută, L21)', r)
+  // tipurile câmpurilor JSON (conținut extern): nicio coerciție tăcută
+  for (const [de, rand] of [
+    ['data inspecției în alt format („mâine”)', { data_inspectie: 'mâine' }], ['data inspecției ZZ.LL.AAAA', { data_inspectie: '18.11.2026' }],
+    ['data inspecției număr', { data_inspectie: 20261118 }], ['indicație text („12,5”)', { start_mm: '12,5' }], ['indicație text cu punct („12.5”)', { end_mm: '12.5' }],
+    ['indicație obiect', { adancime_mm: { v: 1 } }], ['observații număr', { observatii: 5 }], ['observații listă', { observatii: ['a'] }],
+    ['cod număr', { cod_raw: 127 }], ['cod lipsă', { cod_raw: undefined }], ['cod obiect', { cod_raw: { t: 12 } }], ['rezultat boolean', { rezultat: true }],
+  ]) {
+    r = await confirma(db, 'MPA', id1, 1, [{ cod_raw: 'S1', rezultat: 'acceptat', ...rand }])
+    asteapta(r.code === '22023' && /randul 1 are campuri de alt tip/.test(r.message), `rând cu ${de} = refuz 22023 (rândul numit)`, r)
+  }
+  r = await confirma(db, 'MPA', id1, 1, [{ cod_raw: 'S1', rezultat: 'acceptat', data_inspectie: '2026-13-45' }])
+  asteapta(r.code === '22008', 'data inspecției în formă corectă dar inexistentă = eroare de dată (nimic scris)', r)
   for (const c of ['EXE', 'MPB', 'CTC', 'NOMOD']) {
     r = await confirma(db, c, id1, 1, RANDURI); asteapta(r.code === '42501', `${c} confirmă buletinul lui A = 42501`, r)
   }
@@ -314,12 +359,22 @@ async function verificaPasi(db, ab) {
   asteapta(r.rows?.[0]?.n === 3, 'OWNER confirmă pe T17', r)
   r = await q(db, `SELECT string_agg(cheie || ':' || refacuta, ',' ORDER BY ordine) AS k FROM public.sud_buletin_randuri WHERE buletin_id = $1`, [id17])
   asteapta(r[0]?.k === 'T17S50A:false,T17S50H:false,T17S50A:true', 'T17S50A / T17S50H suduri distincte; „tr 17 s 50 ar” = T17S50A refăcută', r)
+  // orfanul: proprietarul (cu citire) își șterge fișierul NEÎNREGISTRAT; cel înregistrat rămâne; fișierul altuia rămâne
+  r = await sterge(db, 'OWNER', `bucket_id = 'izo-ndt' AND name = '${PA}/${TA17}/o17.pdf'`); asteapta(!r.code && r.afectate === 0, 'OWNER: fișierul propriu ÎNREGISTRAT (buletinul T17) nu se șterge = 0 rânduri', r)
+  r = await sterge(db, 'OWNER', `bucket_id = 'izo-ndt' AND name = '${PA}/${TA17}/t17.pdf'`); asteapta(!r.code && r.afectate === 0, 'OWNER: orfanul ALTUIA (MPA) nu se șterge = 0 rânduri', r)
+  r = await sterge(db, 'EXE', `bucket_id = 'izo-ndt' AND name = '${PA}/${TA12}/b2.pdf'`); asteapta(!r.code && r.afectate === 0, 'EXE: fișierul altuia nu se șterge = 0 rânduri', r)
+  r = await sterge(db, 'MPA', `bucket_id = 'izo-ndt' AND name IN ('${PA}/${TA12}/b1.pdf', '${PA}/${TA12}/b2.pdf')`)
+  asteapta(!r.code && r.afectate === 0, 'MPA: propriile fișiere ÎNREGISTRATE (pe care nu le poate citi) nu se șterg = 0 rânduri', r)
+  r = await sterge(db, 'OWNER', `bucket_id = 'izo-ndt' AND name = '${PA}/${TA12}/o1.pdf'`); asteapta(!r.code && r.afectate === 1, 'OWNER își șterge orfanul neînregistrat o1.pdf = 1 rând', r)
+  r = await q(db, `SELECT count(*)::int AS n FROM storage.objects WHERE bucket_id = 'izo-ndt' AND name IN ('${PA}/${TA12}/o1.pdf', '${PA}/${TA17}/o17.pdf', '${PA}/${TA17}/t17.pdf')`)
+  asteapta(r[0]?.n === 2, 'după ștergeri: o1 șters, o17 (înregistrat) și t17 (al altuia) rămân', r)
+  r = await incarca(db, 'OWNER', { tronson: TA12, numar: 'O-1', cale: `${PA}/${TA12}/o1.pdf`, amprenta: sha('pdf-o1') }); asteapta(r.code === '22023', 'orfanul șters nu se mai poate înregistra (22023)', r)
 
   // (e) citirea tabelelor: cine vede ce (A are buletinele 1, 2, 3 + T17; B nimic încă)
-  const VEDE = { OWNER: [4, 9], MPA: [4, 9], EXE: [4, 9], CTC: [4, 9], MPB: [0, 0], NOMOD: [0, 0], RSTR: [0, 0], RSTRE: [0, 0], MPC: [0, 0] }
+  const VEDE = { OWNER: [4, 9], MPA: [0, 0], EXE: [4, 9], CTC: [4, 9], MPB: [0, 0], NOMOD: [0, 0], RSTR: [0, 0], RSTRE: [0, 0], MPC: [0, 0] }
   for (const [c, [nb, nr]] of Object.entries(VEDE)) {
     r = await ca(db, c, `SELECT (SELECT count(*)::int FROM public.sud_buletine) AS b, (SELECT count(*)::int FROM public.sud_buletin_randuri) AS r, (SELECT count(*)::int FROM public.sud_metode_proiect) AS m`)
-    const m = { OWNER: 2, MPA: 1, EXE: 2, CTC: 2, MPB: 1, NOMOD: 0, RSTR: 1, RSTRE: 1, MPC: 0 }[c]
+    const m = { OWNER: 2, MPA: 0, EXE: 2, CTC: 2, MPB: 0, NOMOD: 0, RSTR: 1, RSTRE: 1, MPC: 0 }[c]
     asteapta(r.rows?.[0]?.b === nb && r.rows[0].r === nr && r.rows[0].m === m, `${c} vede [buletine, rânduri, metode] = [${nb}, ${nr}, ${m}]`, r)
   }
   r = await ca(db, null, `SELECT count(*)::int AS n FROM public.sud_buletine`, [], { rol: 'anon' }); asteapta(r.code === '42501', 'anon: fără SELECT pe sud_buletine', r)
@@ -338,6 +393,11 @@ async function verificaPasi(db, ab) {
   asteapta(Number.isInteger(Number(b1bis.rows?.[0]?.id)), 'după anulare: același fișier (amprentă) și aceeași cheie se reîncarcă fără forțare (R1, §22)', b1bis)
   r = await incarca(db, 'MPA', { tronson: TA12, numar: '12/AB', cale: `${PA}/${TA12}/b1-bis.pdf`, amprenta: sha('pdf-alt') })
   asteapta(e23505(r, new RegExp(`buletin_deja_incarcat:${Number(b1bis.rows?.[0]?.id)}$`)), 'cheia e ocupată din nou de buletinul reîncărcat', r)
+  // fișierul unui buletin ANULAT rămâne (istoric): proprietarul nu-l mai poate șterge
+  r = await urca(db, 'OWNER', `${PA}/${TA12}/oan.pdf`); asteapta(!r.code, 'OWNER urcă oan.pdf', r)
+  const ban = await incarca(db, 'OWNER', { tronson: TA12, metoda: 'VT', numar: 'OAN', cale: `${PA}/${TA12}/oan.pdf`, amprenta: sha('pdf-oan') })
+  r = await anuleaza(db, 'OWNER', Number(ban.rows?.[0]?.id), 'incarcat din greseala'); asteapta(!ban.code && !r.code, 'OWNER încarcă și anulează buletinul VT', [ban, r])
+  r = await sterge(db, 'OWNER', `bucket_id = 'izo-ndt' AND name = '${PA}/${TA12}/oan.pdf'`); asteapta(!r.code && r.afectate === 0, 'OWNER: fișierul unui buletin ANULAT nu se șterge = 0 rânduri', r)
 
   // (g) sudurile eliminate (R4): cheia fără refacere, înlocuitoarele normalizate, dublură, retragere, re-marcare
   const elim = (c, tr, cod, motiv, inl) => ca(db, c, `SELECT public.fn_sud_sudura_elimina($1::bigint, $2, $3, $4::text[]) AS id`, [tr, cod, motiv, inl], { commit: true })
@@ -358,7 +418,8 @@ async function verificaPasi(db, ab) {
   r = await retrage('MPA', e1, 'marcaj gresit'); asteapta(!r.code, 'MPA retrage marcajul cu motiv', r)
   r = await retrage('MPA', e1, 'a doua oara'); asteapta(r.code === '22023', 'a doua retragere = 22023', r)
   r = await elim('MPA', TA12, 'T12S126', 'cupon, marcat din nou', []); asteapta(!r.code, 'după retragere, sudura se poate marca din nou', r)
-  r = await ca(db, 'MPB', `SELECT count(*)::int AS n FROM public.sud_suduri_eliminate`); asteapta(r.rows?.[0]?.n === 0, 'MPB nu vede marcajele lui A', r)
+  r = await ca(db, 'RSTR', `SELECT count(*)::int AS n FROM public.sud_suduri_eliminate`); asteapta(r.rows?.[0]?.n === 0, 'RSTR (restrâns la B) nu vede marcajele lui A', r)
+  r = await ca(db, 'EXE', `SELECT count(*)::int AS n FROM public.sud_suduri_eliminate WHERE activ`); asteapta(r.rows?.[0]?.n === 1, 'EXE vede marcajul activ al lui A', r)
 
   // (h) deblocarea exportului (D11) + exporturile (R6)
   const debl = (c, k, tip, motiv, lips) => ca(db, c, `SELECT public.fn_sud_export_deblocheaza($1::bigint, $2, $3, $4::jsonb) AS id`, [k, tip, motiv, lips === null ? null : JSON.stringify(lips)], { commit: true })
@@ -376,34 +437,121 @@ async function verificaPasi(db, ab) {
   const d4 = Number((await debl('MPA', KA, 'inventar', 'pentru inventar', LIPS)).rows?.[0]?.id)
   asteapta([d1, d2, d3, d4].every(Number.isInteger), 'MPA creează 4 deblocări', [d1, d2, d3, d4])
   await db.exec(`UPDATE public.sud_export_deblocari SET creat_la = now() - interval '61 minutes' WHERE id = ${d3}`)
-  const FOTO = { buletine: [{ id: id17, versiune: 2 }], eliminate: ['T12S126'], metode: ['PA-UT', 'PM'], lipsuri: LIPS }
-  r = await exp('MPA', KA, 'izo', FOTO, d1); asteapta(Number.isInteger(Number(r.rows?.[0]?.id)), 'MPA înregistrează exportul INCOMPLET cu deblocarea lui', r)
+  // fotografia CURENTĂ, scrisă de mână din pașii de mai sus: pe tronsonul pachetului A (TA12) singurul buletin confirmat e b1-bis
+  // (confirmat aici → v2); id1 și id3 anulate, b2 forțat rămas ciornă, id17 e pe T17; eliminată activă T12S126; metodele A {PA-UT, PM}.
+  // Pe B (TB12): niciun buletin, nicio eliminare, metodele {UT}.
+  const idB = Number(b1bis.rows?.[0]?.id), idF = Number(b2.rows?.[0]?.id)
+  r = await confirma(db, 'MPA', idB, 1, [{ cod_raw: 'T12S127', rezultat: 'acceptat' }]); asteapta(r.rows?.[0]?.n === 1, 'MPA confirmă b1-bis (v2) înaintea exporturilor', r)
+  const FOTO_A = { buletine: [{ id: idB, versiune: 2 }], eliminate: ['T12S126'], metode: ['PA-UT', 'PM'], lipsuri_blocante: LIPS, avertismente: [{ sudura: 'T12S50A', ce: 'capat' }] }
+  const FOTO_A0 = { ...FOTO_A, lipsuri_blocante: [] }
+  const FOTO_B = { buletine: [], eliminate: [], metode: ['UT'], lipsuri_blocante: [] }
+  const nrExp = async () => (await q(db, `SELECT count(*)::int AS n FROM public.sud_exporturi`))[0].n
+  const folosita = async d => (await q(db, `SELECT folosit_la IS NOT NULL AS f FROM public.sud_export_deblocari WHERE id = $1`, [d]))[0]?.f
+  // fotografie veche / străină = 40001, nimic scris, deblocarea NEconsumată
+  r = await exp('MPA', KA, 'izo', { ...FOTO_A, metode: ['PM'] }, d1)
+  asteapta(r.code === '40001' && /metode/.test(r.message) && await folosita(d1) === false && await nrExp() === 0, 'fotografie veche cu deblocare = 40001, deblocarea rămâne nefolosită', r)
+  for (const [de, f] of [
+    ['versiunea veche a buletinului', { buletine: [{ id: idB, versiune: 1 }] }],
+    ['un buletin ANULAT în plus', { buletine: [{ id: idB, versiune: 2 }, { id: id1, versiune: 3 }] }],
+    ['un buletin al altui tronson (T17)', { buletine: [{ id: idB, versiune: 2 }, { id: id17, versiune: 2 }] }],
+    ['un buletin CIORNĂ în plus (forțatul)', { buletine: [{ id: idB, versiune: 2 }, { id: idF, versiune: 1 }] }],
+    ['un buletin inexistent', { buletine: [{ id: idB, versiune: 2 }, { id: 999999, versiune: 1 }] }],
+    ['buletinul confirmat LIPSĂ', { buletine: [] }],
+    ['buletinul de două ori', { buletine: [{ id: idB, versiune: 2 }, { id: idB, versiune: 2 }] }],
+    ['eliminatele goale', { eliminate: [] }], ['o eliminată în plus', { eliminate: ['T12S126', 'T12S7'] }],
+    ['metodele altui proiect', { metode: ['UT'] }], ['metodele goale', { metode: [] }],
+  ]) {
+    r = await exp('MPA', KA, 'izo', { ...FOTO_A0, ...f }, null)
+    asteapta(r.code === '40001' && /sursele s-au schimbat/.test(r.message), `fotografie cu ${de} = 40001 (reîncarcă)`, r)
+  }
+  r = await exp('EXE', KA, 'izo', FOTO_B, null); asteapta(r.code === '40001', 'fotografia pachetului B la exportul pachetului A = 40001', r)
+  for (const [de, f] of [['fotografia care nu e obiect', [1]], ['fotografia goală {}', {}], ['fără lipsuri_blocante', { buletine: [], eliminate: [], metode: [] }],
+    ['buletine ca obiect', { ...FOTO_A0, buletine: { id: idB } }], ['id text', { ...FOTO_A0, buletine: [{ id: String(idB), versiune: 2 }] }],
+    ['id zecimal', { ...FOTO_A0, buletine: [{ id: idB + 0.5, versiune: 2 }] }], ['fără versiune', { ...FOTO_A0, buletine: [{ id: idB }] }],
+    ['eliminată număr', { ...FOTO_A0, eliminate: [126] }], ['avertismente obiect', { ...FOTO_A0, avertismente: {} }]]) {
+    r = await exp('MPA', KA, 'izo', f, null); asteapta(r.code === '22023', `${de} = 22023`, r)
+  }
+  r = await exp('MPA', KA, 'izo', FOTO_A, null); asteapta(r.code === '42501' && /lipsuri blocante/.test(r.message), 'export COMPLET cu lipsuri blocante, fără deblocare = 42501', r)
+  r = await exp('MPA', KA, 'izo', { ...FOTO_A, lipsuri_blocante: [{ sudura: 'T12S999', lipsa: 'PM' }] }, d2)
+  asteapta(r.code === '42501' && await folosita(d2) === false, 'deblocarea pentru ALTE lipsuri decât cele din fotografie = 42501', r)
+  r = await exp('MPA', KA, 'izo', FOTO_A0, d2); asteapta(r.code === '42501', 'deblocare cu fotografia fără lipsuri = 42501 (nu e export incomplet)', r)
+  asteapta(await nrExp() === 0, 'după refuzuri: niciun export scris')
+  r = await exp('MPA', KA, 'izo', FOTO_A, d1); asteapta(Number.isInteger(Number(r.rows?.[0]?.id)), 'MPA înregistrează exportul INCOMPLET cu deblocarea lui și fotografia curentă', r)
   const ex1 = Number(r.rows?.[0]?.id)
   r = await q(db, `SELECT incomplet, deblocare_id::int AS d, creat_de::text AS de, proiect_id::int AS p, fotografie FROM public.sud_exporturi WHERE id = $1`, [ex1])
-  asteapta(r[0]?.incomplet === true && r[0]?.d === d1 && r[0]?.de === U.MPA && r[0]?.p === PA && r[0]?.fotografie?.eliminate?.[0] === 'T12S126', 'exportul incomplet: legat de deblocare, autorul și proiectul = serverul, fotografia păstrată', r)
-  r = await q(db, `SELECT folosit_la IS NOT NULL AS f FROM public.sud_export_deblocari WHERE id = $1`, [d1]); asteapta(r[0]?.f === true, 'deblocarea 1 marcată folosită', r)
-  r = await exp('MPA', KA, 'izo', FOTO, d1); asteapta(r.code === '42501', 'deblocarea folosită a doua oară = 42501', r)
-  r = await exp('OWNER', KA, 'izo', FOTO, d2); asteapta(r.code === '42501', 'deblocarea ALTUIA (owner cu deblocarea MP-ului) = 42501', r)
-  r = await exp('MPA', KA, 'izo', FOTO, d3); asteapta(r.code === '42501', 'deblocarea expirată (> 1 h) = 42501', r)
-  r = await exp('MPA', KA, 'izo', FOTO, d4); asteapta(r.code === '42501', 'deblocarea pentru alt tip (inventar) = 42501', r)
-  r = await exp('MPA', KB, 'inventar', FOTO, d4); asteapta(r.code === '42501', 'deblocarea pe alt pachet = 42501', r)
-  r = await exp('MPA', KA, 'izo', FOTO, 987654); asteapta(r.code === '42501', 'deblocare inexistentă = 42501', r)
+  asteapta(r[0]?.incomplet === true && r[0]?.d === d1 && r[0]?.de === U.MPA && r[0]?.p === PA && JSON.stringify(r[0]?.fotografie) === JSON.stringify((await q(db, `SELECT $1::jsonb AS j`, [JSON.stringify(FOTO_A)]))[0].j),
+    'exportul incomplet: legat de deblocare, autorul și proiectul = serverul, fotografia păstrată exact', r)
+  asteapta(await folosita(d1) === true, 'deblocarea 1 marcată folosită')
+  r = await exp('MPA', KA, 'izo', FOTO_A, d1); asteapta(r.code === '42501', 'deblocarea folosită a doua oară = 42501', r)
+  r = await exp('OWNER', KA, 'izo', FOTO_A, d2); asteapta(r.code === '42501', 'deblocarea ALTUIA (owner cu deblocarea MP-ului) = 42501', r)
+  r = await exp('MPA', KA, 'izo', FOTO_A, d3); asteapta(r.code === '42501', 'deblocarea expirată (> 1 h) = 42501', r)
+  r = await exp('MPA', KA, 'izo', FOTO_A, d4); asteapta(r.code === '42501', 'deblocarea pentru alt tip (inventar) = 42501', r)
+  r = await exp('MPA', KB, 'inventar', { ...FOTO_B, lipsuri_blocante: LIPS }, d4); asteapta(r.code === '42501', 'deblocarea pe alt pachet = 42501', r)
+  r = await exp('MPA', KA, 'izo', FOTO_A, 987654); asteapta(r.code === '42501', 'deblocare inexistentă = 42501', r)
+  r = await exp('EXE', KA, 'izo', FOTO_A, d2); asteapta(r.code === '42501', 'EXE (fără scriere) cu o deblocare = 42501', r)
   r = await q(db, `SELECT count(*)::int AS n FROM public.sud_exporturi`); asteapta(r[0]?.n === 1, 'după refuzuri: un singur export', r)
-  // exportul complet: MP / owner sau dreptul de scriere pe pachetele proiectului (ca azi)
+  // exportul complet (fotografia curentă, fără lipsuri): dreptul de export = MP / owner sau scriere pe pachetele proiectului (ca azi)
+  const FOTO_K = { [KA]: FOTO_A0, [KB]: FOTO_B }
   for (const [c, k] of [['MPA', KA], ['EXE', KA], ['OWNER', KB], ['RSTRE', KB], ['MPB', KB]]) {
-    r = await exp(c, k, 'izo', { buletine: [] }, null); asteapta(Number.isInteger(Number(r.rows?.[0]?.id)), `${c} înregistrează exportul complet pe ${k}`, r)
+    r = await exp(c, k, 'izo', FOTO_K[k], null); asteapta(Number.isInteger(Number(r.rows?.[0]?.id)), `${c} înregistrează exportul complet pe ${k}`, r)
   }
   for (const [c, k] of [['CTC', KA], ['NOMOD', KA], ['RSTR', KB], ['RSTRE', KA], ['MPB', KA], ['MPC', KB]]) {
-    r = await exp(c, k, 'izo', { buletine: [] }, null); asteapta(r.code === '42501', `${c} exportul complet pe ${k} = 42501`, r)
+    r = await exp(c, k, 'izo', FOTO_K[k], null); asteapta(r.code === '42501', `${c} exportul complet pe ${k} = 42501`, r)
   }
-  r = await exp('MPA', KA, 'izo', [1], null); asteapta(r.code === '22023', 'fotografia care nu e obiect = 22023', r)
   r = await q(db, `SELECT count(*) FILTER (WHERE NOT incomplet)::int AS c, count(*) FILTER (WHERE incomplet)::int AS i FROM public.sud_exporturi`)
   asteapta(r[0]?.c === 5 && r[0]?.i === 1, 'exporturile: 5 complete + 1 incomplet', r)
-  const VEX = { OWNER: [6, 5], MPA: [3, 5], MPB: [3, 0], EXE: [6, 5], CTC: [6, 5], NOMOD: [0, 0], RSTR: [3, 0], RSTRE: [3, 0], MPC: [0, 0] }
+  // după o anulare, fotografia de dinainte e veche
+  r = await anuleaza(db, 'MPA', idB, 'anulat dupa export'); asteapta(!r.code, 'MPA anulează b1-bis după export', r)
+  r = await exp('MPA', KA, 'izo', FOTO_A0, null); asteapta(r.code === '40001', 'fotografia de dinaintea anulării = 40001', r)
+  r = await exp('MPA', KA, 'izo', { ...FOTO_A0, buletine: [] }, null); asteapta(!r.code, 'fotografia recitită (fără b1-bis) trece', r)
+  const VEX = { OWNER: [7, 5], MPA: [0, 0], MPB: [0, 0], EXE: [7, 5], CTC: [7, 5], NOMOD: [0, 0], RSTR: [3, 0], RSTRE: [3, 0], MPC: [0, 0] }
   for (const [c, [ne, nd]] of Object.entries(VEX)) {
     r = await ca(db, c, `SELECT (SELECT count(*)::int FROM public.sud_exporturi) AS e, (SELECT count(*)::int FROM public.sud_export_deblocari) AS d`)
     asteapta(r.rows?.[0]?.e === ne && r.rows[0].d === nd, `${c} vede [exporturi, deblocări] = [${ne}, ${nd}]`, r)
   }
+  return ab
+}
+
+// ── o politică PERMISIVĂ LARGĂ pe storage.objects (FOR ALL TO PUBLIC, true) pusă în schelet ÎNAINTEA migrării: izo-ndt rămâne închis
+//    (politicile RESTRICTIVE sud_ndt_r_*); celelalte bucket-uri se deschid (dovada că politica largă chiar lucrează). Bază proprie. ──
+const LARG = 'CREATE POLICY larg_toate ON storage.objects FOR ALL TO PUBLIC USING (true) WITH CHECK (true);'
+// (cuNotice: NOTICE-ul informativ e în blocul $post$, scos la mutanții comportamentali → se verifică doar pe migrarea întreagă)
+async function verificaLarg(text, { cuNotice = false } = {}) {
+  const ab = []
+  const asteapta = (cond, msg, r) => { if (!cond) ab.push('larg: ' + msg + (r === undefined ? '' : ': ' + JSON.stringify(r).slice(0, 200))) }
+  const db = await bazaNoua()
+  try {
+    await db.exec(LARG)
+    const a = await livreaza(db, text)
+    if (!a.ok) return ['larg: aplicare: ' + a.eroare.slice(0, 160)]
+    if (cuNotice) asteapta(a.note.some(n => /^20270114a: politici permisive storage fara bucket fix \(acoperite de sud_ndt_r_\*\): larg_toate$/.test(n)), 'migrarea anunță politica permisivă fără bucket fix', a.note.filter(n => /^20270114a/.test(n)))
+    let r = await urca(db, 'MPA', `${PA}/${TA12}/l1.pdf`); asteapta(!r.code, 'MPA urcă l1', r)
+    r = await incarca(db, 'MPA', { tronson: TA12, numar: 'L1', cale: `${PA}/${TA12}/l1.pdf`, amprenta: sha('l1') }); asteapta(!r.code, 'MPA înregistrează l1', r)
+    r = await urca(db, 'OWNER', `${PA}/${TA12}/lo.pdf`); asteapta(!r.code, 'OWNER urcă orfanul lo', r)
+    const vede = (c, rol) => ca(db, c, `SELECT count(*) FILTER (WHERE bucket_id = 'izo-ndt')::int AS n, count(*) FILTER (WHERE bucket_id <> 'izo-ndt')::int AS alt FROM storage.objects`, [], { rol })
+    for (const [c, rol, n] of [[null, 'anon', 0], ['NOMOD', undefined, 0], ['MPA', undefined, 0], ['MPB', undefined, 0], ['EXE', undefined, 2], ['OWNER', undefined, 2]]) {
+      r = await vede(c, rol); asteapta(r.rows?.[0]?.n === n && r.rows[0].alt === 1, `${c || 'anon'} vede ${n} obiecte izo-ndt (și obiectul celuilalt bucket, prin politica largă)`, r)
+    }
+    for (const [c, rol, cale] of [[null, 'anon', `${PA}/${TA12}/an.pdf`], ['NOMOD', undefined, `${PA}/${TA12}/nm.pdf`], ['EXE', undefined, `${PA}/${TA12}/ex.pdf`],
+      ['MPA', undefined, `${PB}/${TB12}/alt.pdf`], ['MPA', undefined, `${PA}/${TB12}/alt.pdf`]]) {
+      r = await urca(db, c, cale, { rol }); asteapta(r.code === '42501', `${c || 'anon'} încarcă ${cale} = refuz (restrictive)`, r)
+    }
+    r = await urca(db, 'MPA', `${PA}/${TA12}/fals.pdf`, { ownerId: U.OWNER }); asteapta(r.code === '42501', 'MPA încarcă cu owner_id-ul altuia = refuz', r)
+    for (const [c, rol] of [[null, 'anon'], ['NOMOD', undefined], ['MPA', undefined], ['OWNER', undefined]]) {
+      r = await ca(db, c, `UPDATE storage.objects SET name = name || '.x' WHERE bucket_id = 'izo-ndt'`, [], { rol, commit: true })
+      asteapta(!r.code && r.afectate === 0, `${c || 'anon'}: UPDATE pe izo-ndt = 0 rânduri`, r)
+      r = await ca(db, c, `UPDATE storage.objects SET bucket_id = 'izo-ndt', name = '${PA}/${TA12}/mutat.pdf' WHERE bucket_id = 'executie-pachete-pdf'`, [], { rol, commit: true })
+      asteapta(r.code === '42501', `${c || 'anon'}: mutarea unui obiect din alt bucket în izo-ndt = refuz`, r)
+    }
+    for (const [c, rol, unde, de] of [[null, 'anon', `bucket_id = 'izo-ndt'`, 'anon tot bucket-ul'], ['NOMOD', undefined, `bucket_id = 'izo-ndt'`, 'fără drept tot bucket-ul'],
+      ['MPA', undefined, `bucket_id = 'izo-ndt' AND name = '${PA}/${TA12}/l1.pdf'`, 'MPA propriul fișier înregistrat'],
+      ['OWNER', undefined, `bucket_id = 'izo-ndt' AND name = '${PA}/${TA12}/l1.pdf'`, 'OWNER fișierul înregistrat al altuia']]) {
+      r = await sterge(db, c, unde, { rol }); asteapta(!r.code && r.afectate === 0, `ștergere (${de}) = 0 rânduri`, r)
+    }
+    r = await sterge(db, 'OWNER', `bucket_id = 'izo-ndt' AND name = '${PA}/${TA12}/lo.pdf'`); asteapta(!r.code && r.afectate === 1, 'OWNER își șterge orfanul = 1 rând', r)
+    r = await q(db, `SELECT string_agg(name, ',' ORDER BY name) AS n FROM storage.objects WHERE bucket_id = 'izo-ndt'`)
+    asteapta(r[0]?.n === `${PA}/${TA12}/l1.pdf`, 'la final în izo-ndt: doar l1 (înregistrat), neatins', r)
+  } catch (e) { ab.push('larg: excepție: ' + String(e.message).slice(0, 200)) } finally { await db.close() }
   return ab
 }
 
@@ -509,11 +657,17 @@ console.log('0. validatorul runnerului, forma fișierelor, paritatea scheletului
   // corpul citit de chat pe producție (27.11.2026, o linie) = corpul 20261029a cu spațiile strânse
   const PROD = "SELECT auth.uid() IS NOT NULL AND ( EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.is_owner = true) OR EXISTS (SELECT 1 FROM public.user_module_access u WHERE u.profile_id = auth.uid() AND u.module = ANY (CASE WHEN p_scriere THEN ARRAY['executie'] ELSE ARRAY['executie', 'ctc'] END)) )"
   ok(corp(fn1029, 'CREATE OR REPLACE FUNCTION public.fn_executie_pachete_acces', '$$').replace(/\s+/g, ' ').trim() === PROD, 'corpul fn_executie_pachete_acces citit pe producție (o linie) = 20261029a cu spațiile strânse')
-  // L14 în revenire: lock-ul tabelelor + rândul bucket-ului ÎNAINTEA numărării datelor, după verificarea obiectelor
+  // L14 în revenire, ordinea (L06): lock-ul tabelelor → politicile de încărcare scoase (ACCESS EXCLUSIVE pe storage.objects) → rândul
+  // bucket-ului ÎNAINTEA numărării datelor, după verificarea obiectelor; toate în blocul $pre$
   const REVc = faraComentarii(REV)
   const iL = REVc.indexOf('LOCK TABLE public.sud_metode_proiect'), iB = REVc.indexOf("PERFORM 1 FROM storage.buckets WHERE id = 'izo-ndt' FOR UPDATE NOWAIT;"), iN = REVc.indexOf('SELECT (SELECT count(*) FROM public.sud_metode_proiect)')
-  ok(iL > REVc.indexOf('starea nu e cea pusa de migrare') && iL < iN && iB > iL && iB < iN && /IN ACCESS EXCLUSIVE MODE NOWAIT;/.test(REVc.slice(iL, iB)),
-    'revenirea: LOCK pe cele 6 tabele (NOWAIT) + rândul bucket-ului FOR UPDATE NOWAIT înaintea verificării „fără date” (L14)')
+  const iDi = REVc.indexOf('DROP POLICY sud_ndt_incarcare ON storage.objects;'), iDr = REVc.indexOf('DROP POLICY sud_ndt_r_ins ON storage.objects;'), iPre = REVc.indexOf('END $pre$;')
+  ok(iL > REVc.indexOf('starea nu e cea pusa de migrare') && iL < iDi && iL < iDr && iDi < iB && iDr < iB && iB < iN && iN < iPre
+    && REVc.split('DROP POLICY sud_ndt_incarcare ').length === 2 && REVc.split('DROP POLICY sud_ndt_r_ins ').length === 2 && /IN ACCESS EXCLUSIVE MODE NOWAIT;/.test(REVc.slice(iL, iDi)),
+    'revenirea: LOCK pe cele 6 tabele (NOWAIT) → politicile de încărcare scoase → rândul bucket-ului FOR UPDATE NOWAIT, toate înaintea verificării „fără date” (L14)')
+  const iA = REVc.indexOf("PERFORM set_config('storage.allow_delete_query', 'true', true);"), iDel = REVc.indexOf("DELETE FROM storage.buckets WHERE id = 'izo-ndt'"),
+    iZ = REVc.indexOf("PERFORM set_config('storage.allow_delete_query', 'false', true);")
+  ok(iA > iPre && iA < iDel && iDel < iZ && REVc.split('allow_delete_query').length === 3, 'revenirea: garda protect_delete deschisă doar în jurul ștergerii bucket-ului (după $pre$), apoi închisă')
   const lockTab = REVc.slice(iL, REVc.indexOf(';', iL))
   ok(['sud_metode_proiect', 'sud_buletine', 'sud_buletin_randuri', 'sud_suduri_eliminate', 'sud_export_deblocari', 'sud_exporturi'].every(t => lockTab.includes('public.' + t)), 'LOCK-ul cuprinde toate cele 6 tabele')
 }
@@ -596,8 +750,8 @@ async function dryRun(db, eticheta) {
   ok(['sud_metode_proiect', 'sud_buletine', 'sud_buletin_randuri', 'sud_suduri_eliminate', 'sud_export_deblocari', 'sud_exporturi'].every(t => creat.includes(t))
     && ['fn_sud_drept', 'fn_sud_cod_normalizeaza', 'fn_sud_tronson_nr', 'fn_sud_metode_seteaza', 'fn_sud_buletin_incarca', 'fn_sud_buletin_confirma', 'fn_sud_buletin_anuleaza',
       'fn_sud_sudura_elimina', 'fn_sud_sudura_eliminare_retrage', 'fn_sud_export_deblocheaza', 'fn_sud_export_inregistreaza'].every(f => creat.includes(f))
-    && creat.includes('sud_ndt_citire') && creat.includes('sud_ndt_incarcare'),
-  'lista revizuită conține cele 6 tabele, cele 11 funcții și cele 2 politici storage ca „creat”')
+    && POLITICI.every(p => creat.includes(p)),
+  `lista revizuită conține cele 6 tabele, cele 11 funcții și cele ${POLITICI.length} politici storage ca „creat”`)
   const altfel = etichete.filter(x => x[2] !== 'creat')
   ok(altfel.every(x => /storage\.objects/.test(x[1])) && !etichete.some(x => /executie_|profiles|fn_executie|fn_izo|user_module_access/.test(x[1])),
     `nimic schimbat / șters în afara obiectelor noi (doar storage.objects, prin politicile noi): ${altfel.map(x => x.join(' ')).join(' | ') || 'nimic'}`)
@@ -617,7 +771,7 @@ async function dryRun(db, eticheta) {
     && j.note.some(m => new RegExp(`^PLAFON_TIMP ${NUME}: garda trecuta la \\d+ ms de la BEGIN \\(plafon 5000 ms\\)`).test(m)),
   `livrarea aprobată: diferențele (${total}) = manifestul; PLAFON_TIMP (5000)` + (j.ok ? '' : ': ' + j.eroare))
   const so = await sudOk(b)
-  ok(JSON.stringify(so) === '{"t":6,"f":11,"b":1,"p":2}', 'după livrarea aprobată: 6 tabele, 11 funcții, bucket-ul, 2 politici: ' + JSON.stringify(so))
+  ok(JSON.stringify(so) === '{"t":6,"f":11,"b":1,"p":8}', 'după livrarea aprobată: 6 tabele, 11 funcții, bucket-ul, 8 politici: ' + JSON.stringify(so))
   await dryRun(b, '')
   const fara = await bazaNoua()
   let ef = null
@@ -634,6 +788,8 @@ console.log('3. comportamentul, ca authenticated cu JWT-ul fiecărui cont sintet
   const ab = await verifica(db)
   ok(ab.length === 0, `verificările de comportament (${ab.length} abateri${ab.length ? ':\n      ' + ab.join('\n      ') : ''})`)
   await db.close()
+  const al = await verificaLarg(MIG, { cuNotice: true })
+  ok(al.length === 0, `o politică permisivă largă (FOR ALL TO PUBLIC) în schelet nu deschide izo-ndt (${al.length} abateri${al.length ? ':\n      ' + al.join('\n      ') : ''})`)
 }
 
 console.log('4. paritatea normalizatorului (SQL fn_sud_cod_normalizeaza vs src/lib/izoSudura.js, mod legacy) + fn_sud_tronson_nr')
@@ -668,6 +824,19 @@ console.log('5. revenirea: aplicare → revenire → reaplicare; refuzurile reve
   ok(a2.ok && (await verifica(db)).length === 0, 're-aplicarea după revenire + verificările de comportament' + (a2.ok ? '' : ': ' + a2.eroare))
   await db.close()
 }
+{
+  // garda protect_delete (ca pe producție): revenirea fără deschiderea ei = refuz la ștergerea bucket-ului, nimic schimbat
+  const db = await bazaNoua()
+  await livreaza(db, MIG)
+  const s = await stare(db)
+  const fara = aplica(REV, [["  PERFORM set_config('storage.allow_delete_query', 'true', true);\n", '']])
+  const v = await revino(db, fara)
+  ok(!v.ok && /Direct deletion from storage tables is not allowed/.test(v.eroare) && JSON.stringify(await stare(db)) === JSON.stringify(s),
+    'revenirea fără storage.allow_delete_query = refuz (protect_buckets_delete), nimic schimbat: ' + (v.eroare || 'APLICAT').slice(0, 90))
+  const v2 = await revino(db)
+  ok(v2.ok, 'revenirea originală pe aceeași bază trece' + (v2.ok ? '' : ': ' + v2.eroare))
+  await db.close()
+}
 for (const [nume, pregatire, re] of [
   ['un rând în sud_metode_proiect', async db => ca(db, 'MPA', `SELECT public.fn_sud_metode_seteaza(${PA}, ARRAY['PM'])`, [], { commit: true }), /exista 1 randuri \/ fisiere in arhiva NDT/],
   ['un obiect în bucket', async db => urca(db, 'MPA', `${PA}/${TA12}/r.pdf`), /exista 1 randuri \/ fisiere in arhiva NDT/],
@@ -676,8 +845,12 @@ for (const [nume, pregatire, re] of [
   ['un tabel sud_ în plus', async db => db.exec('CREATE TABLE public.sud_zz (id int)'), /starea nu e cea pusa de migrare/],
   ['o funcție fn_sud_ în plus', async db => db.exec('CREATE FUNCTION public.fn_sud_zz() RETURNS int LANGUAGE sql AS $f$ SELECT 1 $f$'), /starea nu e cea pusa de migrare/],
   ['politica de încărcare lipsă', async db => db.exec('DROP POLICY sud_ndt_incarcare ON storage.objects'), /starea nu e cea pusa de migrare/],
-  ['bucket-ul lipsă', async db => { await db.exec('DROP POLICY sud_ndt_citire ON storage.objects'); await db.exec(`DELETE FROM storage.buckets WHERE id = 'izo-ndt'`) }, /starea nu e cea pusa de migrare/],
-  ['o politică sud_ndt_ în plus', async db => db.exec('CREATE POLICY sud_ndt_zz ON storage.objects FOR SELECT TO authenticated USING (false)'), /au ramas obiecte/],
+  ['bucket-ul lipsă', async db => db.exec(`BEGIN; SELECT set_config('storage.allow_delete_query', 'true', true); DELETE FROM storage.buckets WHERE id = 'izo-ndt'; COMMIT;`), /starea nu e cea pusa de migrare/],
+  ['o politică restrictivă lipsă', async db => db.exec('DROP POLICY sud_ndt_r_anon ON storage.objects'), /starea nu e cea pusa de migrare/],
+  ['o politică sud_ndt_ în plus', async db => db.exec('CREATE POLICY sud_ndt_zz ON storage.objects FOR SELECT TO authenticated USING (false)'), /starea nu e cea pusa de migrare/],
+  ['un buletin înregistrat după golirea storage-ului', async db => {
+    await urca(db, 'MPA', `${PA}/${TA12}/r.pdf`); await incarca(db, 'MPA', { tronson: TA12, numar: 'R2', cale: `${PA}/${TA12}/r.pdf`, amprenta: sha('r2') })
+    await db.exec(`BEGIN; SELECT set_config('storage.allow_delete_query', 'true', true); DELETE FROM storage.objects WHERE bucket_id = 'izo-ndt'; COMMIT;`) }, /exista 1 randuri \/ fisiere/],
   ['porțile Izometrie roșii', async db => db.exec(`CREATE OR REPLACE FUNCTION public.fn_izo_porti_lipsa() RETURNS text[] LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ SELECT '{e4b}'::text[] $f$`), /portile Izometrie nu sunt verzi inainte/],
 ]) {
   const db = await bazaNoua()
@@ -699,7 +872,7 @@ const comport = async text => {
     if (!a.ok) return ['aplicare: ' + a.eroare.slice(0, 160)]
     const ab = await verifica(db)
     const p = await paritate(db)
-    return [...ab, ...p.ab.map(x => 'paritate: ' + x)]
+    return [...ab, ...p.ab.map(x => 'paritate: ' + x), ...await verificaLarg(text)]
   } finally { await db.close() }
 }
 {
@@ -708,24 +881,25 @@ const comport = async text => {
 }
 const MUTANTI = [
   ['M1 dreptul fără restricția pe proiect (fn_executie_proiect_permis scos din ramura MP)',
-    [['                   AND p.employee_id::bigint = e.mp_employee_id::bigint)\n        AND public.fn_executie_proiect_permis(p_proiect, p_scriere))', '                   AND p.employee_id::bigint = e.mp_employee_id::bigint))']]],
-  ['M2 dreptul dă scriere oricui are \'executie\' (fn_executie_pachete_acces(p_scriere) în loc de citire)',
-    [['    OR (NOT p_scriere AND public.fn_executie_pachete_acces(false) AND public.fn_executie_proiect_permis(p_proiect, false))', '    OR (public.fn_executie_pachete_acces(p_scriere) AND public.fn_executie_proiect_permis(p_proiect, p_scriere))']]],
+    [['                       AND p.employee_id::bigint = e.mp_employee_id::bigint)\n        AND public.fn_executie_proiect_permis(p_proiect, true))', '                       AND p.employee_id::bigint = e.mp_employee_id::bigint))']]],
+  ['M2 dreptul dă scriere oricui are \'executie\' (ramura de export extinsă la scriere)',
+    [["    OR (p_nivel = 'export' AND public.fn_executie_pachete_acces(true)", "    OR (p_nivel IN ('export', 'scriere') AND public.fn_executie_pachete_acces(true)"]]],
   ['M3 confirmarea fără CAS pe versiune',
     [["  IF p_versiune IS DISTINCT FROM b.versiune THEN RAISE EXCEPTION 'sud: buletinul s-a schimbat intre timp; reincarca' USING ERRCODE = '40001'; END IF;\n", '']]],
-  ['M4 încărcarea fără verificarea owner-ului obiectului', [[' AND o.name = p_fisier_path AND o.owner = auth.uid())', ' AND o.name = p_fisier_path)']]],
+  ['M4 încărcarea fără verificarea owner-ului obiectului', [[' AND o.name = p_fisier_path AND o.owner_id = auth.uid()::text)', ' AND o.name = p_fisier_path)']]],
   ['M5 indexul unic pe cheie fără stare <> \'anulat\'',
     [["CREATE UNIQUE INDEX sud_buletine_cheie_uq ON public.sud_buletine (tronson_id, metoda, numar_cheie, data_buletin)\n  WHERE stare <> 'anulat' AND fortat_motiv IS NULL;",
       "CREATE UNIQUE INDEX sud_buletine_cheie_uq ON public.sud_buletine (tronson_id, metoda, numar_cheie, data_buletin)\n  WHERE fortat_motiv IS NULL;"]]],
-  ['M6 politica storage de încărcare fără verificarea tronson ∈ proiect',
-    [["              AND EXISTS (SELECT 1 FROM public.executie_tronsoane t WHERE t.id = split_part(name, '/', 2)::bigint\n                            AND t.proiect_id = split_part(name, '/', 1)::bigint)\n", '']]],
+  ['M6 politicile storage de încărcare (permisivă + restrictivă) fără verificarea tronson ∈ proiect',
+    [["              AND EXISTS (SELECT 1 FROM public.executie_tronsoane t WHERE t.id = split_part(name, '/', 2)::bigint\n                            AND t.proiect_id = split_part(name, '/', 1)::bigint)\n", ''],
+     ["\n              AND EXISTS (SELECT 1 FROM public.executie_tronsoane t WHERE t.id = split_part(name, '/', 2)::bigint\n                            AND t.proiect_id = split_part(name, '/', 1)::bigint)));", '));']]],
   ['M7 normalizatorul cu R păstrat în cheie',
     [["'cheie', 'T' || v_t || 'S' || v_nr || v_suf);", "'cheie', 'T' || v_t || 'S' || v_nr || v_suf || CASE WHEN v_ref THEN 'R' ELSE '' END);"]]],
   // în plus față de lista brief-ului: celelalte gărzi de drept / identitate
   ['M8 citirea fără restricția pe proiect (editorul restrâns vede tot)',
-    [['    OR (NOT p_scriere AND public.fn_executie_pachete_acces(false) AND public.fn_executie_proiect_permis(p_proiect, false))', '    OR (NOT p_scriere AND public.fn_executie_pachete_acces(false))']]],
+    [["    OR (p_nivel = 'citire' AND public.fn_executie_pachete_acces(false) AND public.fn_executie_proiect_permis(p_proiect, false))", "    OR (p_nivel = 'citire' AND public.fn_executie_pachete_acces(false))"]]],
   ['M9 deblocarea altuia acceptată (fără d.creat_de = auth.uid())', [[' OR d.creat_de <> auth.uid() OR d.folosit_la IS NOT NULL', ' OR d.folosit_la IS NOT NULL']]],
-  ['M10 deblocarea fără expirare', [[" OR d.folosit_la IS NOT NULL\n       OR d.creat_la < now() - interval '1 hour' THEN", ' OR d.folosit_la IS NOT NULL THEN']]],
+  ['M10 deblocarea fără expirare', [[" OR d.folosit_la IS NOT NULL\n       OR d.creat_la < now() - interval '1 hour' OR d.lipsuri", ' OR d.folosit_la IS NOT NULL\n       OR d.lipsuri']]],
   ['M11 deblocarea refolosibilă (fără folosit_la)', [[' OR d.folosit_la IS NOT NULL\n', '\n']]],
   ['M12 încărcarea fără verificarea căii (orice obiect al utilizatorului)', [["  IF p_fisier_path IS NULL OR p_fisier_path !~ ('^' || v_proiect || '/' || p_tronson || '/[^/]+$')\n     OR NOT EXISTS", '  IF p_fisier_path IS NULL\n     OR NOT EXISTS']]],
   ['M13 sudura eliminată acceptă codul refăcut', [["IF v_n->>'stare' <> 'ok' OR (v_n->>'refacuta')::boolean THEN", "IF v_n->>'stare' <> 'ok' THEN"]]],
@@ -733,8 +907,33 @@ const MUTANTI = [
   ['M15 rândurile citibile de oricine (politica fără legătura la buletin)', [['  USING (EXISTS (SELECT 1 FROM public.sud_buletine b WHERE b.id = buletin_id));', '  USING (auth.uid() IS NOT NULL);']]],
   ['M16 GRANT UPDATE direct pe sud_buletine', [['-- secvențele de identitate', 'GRANT UPDATE ON public.sud_buletine TO authenticated;\n-- secvențele de identitate']]],
   ['M17 verificarea cheii nu exclude buletinele forțate (regula indexului, §22)', [["AND data_buletin = p_data AND stare <> 'anulat' AND fortat_motiv IS NULL LIMIT 1;", "AND data_buletin = p_data AND stare <> 'anulat' LIMIT 1;"]]],
-  ['M18 tăiere tăcută a codului / observațiilor', [["    IF length(coalesce(r->>'cod_raw', '')) > 80 OR length(r->>'observatii') > 500 THEN\n      RAISE EXCEPTION", "    IF false THEN\n      RAISE EXCEPTION"],
-    ["VALUES (b.id, v_i, coalesce(r->>'cod_raw', ''), v_n->>'stare'", "VALUES (b.id, v_i, left(coalesce(r->>'cod_raw', ''), 80), v_n->>'stare'"]]],
+  ['M18 tăiere tăcută a codului', [[" OR length(r->>'cod_raw') > 80\n", '\n'], ["VALUES (b.id, v_i, r->>'cod_raw', v_n->>'stare'", "VALUES (b.id, v_i, left(r->>'cod_raw', 80), v_n->>'stare'"]]],
+  // runda 3 (integrarea reparațiilor chat-ului + brief-ul r3)
+  ['M19 exportul fără verificarea fotografiei (sursele nu se compară)',
+    [["  IF v_rau IS NOT NULL THEN RAISE EXCEPTION 'sud: sursele s-au schimbat intre verificare si export (%); reincarca fereastra', v_rau USING ERRCODE = '40001'; END IF;\n", '']]],
+  ['M20 citirea acordată MP-ului fără acces la pachete', [["    OR (p_nivel IN ('scriere', 'export')\n", "    OR (p_nivel IN ('scriere', 'export', 'citire')\n"]]],
+  ['M21 politica RESTRICTIVĂ de citire scoasă (sud_ndt_r_sel)',
+    [["CREATE POLICY sud_ndt_r_sel ON storage.objects AS RESTRICTIVE FOR SELECT TO authenticated\n  USING (bucket_id IS DISTINCT FROM 'izo-ndt' OR (auth.uid() IS NOT NULL AND name ~ '^[0-9]{1,18}/[0-9]{1,18}/[^/]+$'\n         AND public.fn_sud_drept(split_part(name, '/', 1)::bigint, 'citire')));\n", '']]],
+  ['M22 politica RESTRICTIVĂ de încărcare scoasă (sud_ndt_r_ins)', [['CREATE POLICY sud_ndt_r_ins ON storage.objects AS RESTRICTIVE FOR INSERT TO authenticated', 'CREATE POLICY sud_ndt_r_ins ON storage.objects FOR INSERT TO authenticated']]],
+  ['M23 politica RESTRICTIVĂ de UPDATE scoasă (sud_ndt_r_upd)',
+    [["CREATE POLICY sud_ndt_r_upd ON storage.objects AS RESTRICTIVE FOR UPDATE TO PUBLIC\n  USING (bucket_id IS DISTINCT FROM 'izo-ndt') WITH CHECK (bucket_id IS DISTINCT FROM 'izo-ndt');\n", '']]],
+  ['M24 politica RESTRICTIVĂ de ștergere scoasă (sud_ndt_r_del)', [['CREATE POLICY sud_ndt_r_del ON storage.objects AS RESTRICTIVE FOR DELETE TO authenticated', 'CREATE POLICY sud_ndt_r_del ON storage.objects FOR DELETE TO authenticated']]],
+  ['M25 politica RESTRICTIVĂ pentru anon scoasă (sud_ndt_r_anon)',
+    [["CREATE POLICY sud_ndt_r_anon ON storage.objects AS RESTRICTIVE FOR ALL TO anon\n  USING (bucket_id IS DISTINCT FROM 'izo-ndt') WITH CHECK (bucket_id IS DISTINCT FROM 'izo-ndt');", '']]],
+  ['M26 exportul complet acceptat cu lipsuri blocante', [["    IF jsonb_array_length(p_fotografie->'lipsuri_blocante') > 0 THEN\n", '    IF false THEN\n']]],
+  ['M27 deblocarea valabilă pentru alte lipsuri', [[" OR d.lipsuri IS DISTINCT FROM p_fotografie->'lipsuri_blocante' THEN", ' THEN']]],
+  ['M28 fără validarea tipurilor câmpurilor din rânduri',
+    [["    IF jsonb_typeof(r->'cod_raw') IS DISTINCT FROM 'string' OR length(r->>'cod_raw') > 80\n", "    IF false AND (jsonb_typeof(r->'cod_raw') IS DISTINCT FROM 'string' OR length(r->>'cod_raw') > 80\n"],
+     ["WHERE coalesce(jsonb_typeof(r->k), 'null') NOT IN ('number', 'null')) THEN", "WHERE coalesce(jsonb_typeof(r->k), 'null') NOT IN ('number', 'null'))) THEN"]]],
+  ['M29 orfanul șters fără verificarea „neînregistrat” (permisivă + restrictivă)',
+    [["\n         AND NOT EXISTS (SELECT 1 FROM public.sud_buletine b WHERE b.fisier_path = objects.name));", ');'],
+     ["\n         AND NOT EXISTS (SELECT 1 FROM public.sud_buletine b WHERE b.fisier_path = objects.name)));", '));']]],
+  ['M30 fotografia acceptă orice element al tronsonului (fără buletinele lipsă: regula „fiecare element”)',
+    [["           IS DISTINCT FROM\n           (SELECT coalesce(array_agg(k ORDER BY k), '{}') FROM (SELECT b.id::text || ':' || b.versiune::text AS k FROM public.sud_buletine b\n                                                                   WHERE b.tronson_id = v_tronson AND b.proiect_id = v_proiect AND b.stare = 'confirmat') sb)",
+      "           IS DISTINCT FROM\n           (SELECT coalesce(array_agg(k ORDER BY k), '{}') FROM (SELECT b.id::text || ':' || b.versiune::text AS k FROM public.sud_buletine b\n                                                                   WHERE b.tronson_id = v_tronson AND b.proiect_id = v_proiect AND b.stare = 'confirmat'\n                                                                     AND b.id::text || ':' || b.versiune::text IN (SELECT (e->>'id') || ':' || (e->>'versiune') FROM jsonb_array_elements(p_fotografie->'buletine') e)) sb)"]]],
+  ['M31 ștergerea orfanului fără dreptul de citire (RLS-ul lui sud_buletine ascunde înregistrarea)',
+    [["         AND (SELECT public.fn_sud_drept(split_part(name, '/', 1)::bigint, 'citire'))\n         AND NOT EXISTS", '         AND NOT EXISTS'],
+     ["         AND owner_id = auth.uid()::text AND public.fn_sud_drept(split_part(name, '/', 1)::bigint, 'citire')\n", '         AND owner_id = auth.uid()::text\n']]],
 ]
 for (const [nume, inl] of MUTANTI) {
   let ab
@@ -751,7 +950,10 @@ for (const [nume, inl, re] of [
   ['S6 normalizatorul DEFINER', [['LANGUAGE plpgsql IMMUTABLE SET search_path = public, pg_temp AS $f$\nDECLARE v_s text;', 'LANGUAGE plpgsql IMMUTABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$\nDECLARE v_s text;']], /functiile fn_sud_: fn_sud_cod_normalizeaza/],
   ['S7 bucket public', [["VALUES ('izo-ndt', 'izo-ndt', false, 52428800, ARRAY['application/pdf']);", "VALUES ('izo-ndt', 'izo-ndt', true, 52428800, ARRAY['application/pdf']);"]], /bucket izo-ndt \/ politicile lui/],
   ['S8 normalizatorul cu R în cheie (cazul de bază din post)', MUTANTI[6][1], /normalizatorul nu da rezultatele asteptate/],
-  ['S9 o politică storage în plus', [['-- ─────────── postcondiții ───────────', "CREATE POLICY sud_ndt_sterge ON storage.objects FOR DELETE TO authenticated USING (bucket_id = 'izo-ndt');\n-- ─────────── postcondiții ───────────"]], /bucket izo-ndt \/ politicile lui/],
+  ['S9 o politică storage în plus', [['-- ─────────── postcondiții ───────────', "CREATE POLICY sud_ndt_sterge ON storage.objects FOR DELETE TO authenticated USING (bucket_id = 'izo-ndt');\n-- ─────────── postcondiții ───────────"]], /bucket izo-ndt \/ politicile lui: sud_ndt_sterge$/],
+  ['S10 politica de UPDATE devenită permisivă', [['CREATE POLICY sud_ndt_r_upd ON storage.objects AS RESTRICTIVE FOR UPDATE TO PUBLIC', 'CREATE POLICY sud_ndt_r_upd ON storage.objects FOR UPDATE TO PUBLIC']], /politicile lui: sud_ndt_r_upd$/],
+  ['S11 politica restrictivă de citire pe PUBLIC (ar rupe citirea anonimă din storage)', [['CREATE POLICY sud_ndt_r_sel ON storage.objects AS RESTRICTIVE FOR SELECT TO authenticated', 'CREATE POLICY sud_ndt_r_sel ON storage.objects AS RESTRICTIVE FOR SELECT TO PUBLIC']], /politicile lui: sud_ndt_r_sel$/],
+  ['S12 politica pentru anon lipsă', [["CREATE POLICY sud_ndt_r_anon ON storage.objects AS RESTRICTIVE FOR ALL TO anon\n  USING (bucket_id IS DISTINCT FROM 'izo-ndt') WITH CHECK (bucket_id IS DISTINCT FROM 'izo-ndt');", '']], /politicile lui: sud_ndt_r_anon$/],
 ]) {
   const db = await bazaNoua()
   const s = await stare(db)

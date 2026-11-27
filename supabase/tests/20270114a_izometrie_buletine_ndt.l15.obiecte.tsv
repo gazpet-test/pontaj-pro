@@ -112,7 +112,7 @@ functie	functie public.fn_sud_buletin_anuleaza(bigint,text)	creat
 functie	functie public.fn_sud_buletin_confirma(bigint,integer,jsonb)	creat
 functie	functie public.fn_sud_buletin_incarca(bigint,text,text,date,text,text,text,text,jsonb,text)	creat
 functie	functie public.fn_sud_cod_normalizeaza(text,integer)	creat
-functie	functie public.fn_sud_drept(bigint,boolean)	creat
+functie	functie public.fn_sud_drept(bigint,text)	creat
 functie	functie public.fn_sud_export_deblocheaza(bigint,text,text,jsonb)	creat
 functie	functie public.fn_sud_export_inregistreaza(bigint,text,jsonb,bigint,text)	creat
 functie	functie public.fn_sud_metode_seteaza(bigint,text[])	creat
@@ -127,6 +127,12 @@ politica	politica public.sud_metode_proiect.sud_metode_proiect_citire	creat
 politica	politica public.sud_suduri_eliminate.sud_suduri_eliminate_citire	creat
 politica	politica storage.objects.sud_ndt_citire	creat
 politica	politica storage.objects.sud_ndt_incarcare	creat
+politica	politica storage.objects.sud_ndt_r_anon	creat
+politica	politica storage.objects.sud_ndt_r_del	creat
+politica	politica storage.objects.sud_ndt_r_ins	creat
+politica	politica storage.objects.sud_ndt_r_sel	creat
+politica	politica storage.objects.sud_ndt_r_upd	creat
+politica	politica storage.objects.sud_ndt_sterge_orfan	creat
 relatie	relatie public.sud_buletin_randuri	creat
 relatie	relatie public.sud_buletin_randuri_buletin_id_ordine_key	creat
 relatie	relatie public.sud_buletin_randuri_cheie_ix	creat
