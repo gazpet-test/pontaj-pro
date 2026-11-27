@@ -1,0 +1,20 @@
+{
+  "descriere": "Normalizarea codului de sudură din buletinele NDT (date inventate). Același set va testa și normalizarea din funcția edge (PR2).",
+  "cazuri": [
+    { "in": "GAZPET TR12 S127", "tronson": 12, "asteptat": { "stare": "ok", "cheie": "12|127|", "cod": "T12S127", "nr": 127, "sufix": "", "refacuta": false } },
+    { "in": "GAZPET TR12 S126R", "tronson": 12, "asteptat": { "stare": "ok", "cheie": "12|126|", "cod": "T12S126", "nr": 126, "sufix": "", "refacuta": true } },
+    { "in": "T17S50A", "tronson": 17, "asteptat": { "stare": "ok", "cheie": "17|50|A", "cod": "T17S50A", "nr": 50, "sufix": "A", "refacuta": false } },
+    { "in": "T17S50H", "tronson": "T17", "asteptat": { "stare": "ok", "cheie": "17|50|H", "cod": "T17S50H", "sufix": "H", "refacuta": false } },
+    { "in": "T17S50AR", "tronson": 17, "asteptat": { "stare": "ok", "cheie": "17|50|A", "sufix": "A", "refacuta": true } },
+    { "in": "gazpet  tr12  s 0127", "tronson": "TR12", "asteptat": { "stare": "ok", "cheie": "12|127|", "cod": "T12S127" } },
+    { "in": "GAZPET INSTAL TR12 S128", "tronson": 12, "asteptat": { "stare": "ok", "cheie": "12|128|" } },
+    { "in": "S129", "tronson": 12, "asteptat": { "stare": "ok", "cheie": "12|129|", "cod": "T12S129" } },
+    { "in": "GAZPET TR13 S5", "tronson": 12, "asteptat": { "stare": "nepotrivit", "motiv": "alt_tronson", "cheie": null, "tronson": 13, "nr": 5 } },
+    { "in": "", "tronson": 12, "asteptat": { "stare": "nepotrivit", "motiv": "gol", "cheie": null } },
+    { "in": null, "tronson": 12, "asteptat": { "stare": "nepotrivit", "motiv": "gol", "cheie": null } },
+    { "in": "-", "tronson": 12, "asteptat": { "stare": "nepotrivit", "motiv": "format", "cheie": null } },
+    { "in": "T12S88?1", "tronson": 12, "asteptat": { "stare": "nepotrivit", "motiv": "format", "cheie": null } },
+    { "in": "T12S0", "tronson": 12, "asteptat": { "stare": "nepotrivit", "motiv": "numar", "cheie": null } },
+    { "in": "GAZPET TR12 S127", "tronson": null, "asteptat": { "stare": "nepotrivit", "motiv": "fara_tronson_context", "cheie": null } }
+  ]
+}
