@@ -6,7 +6,8 @@
 // mod 'legacy': R final = refacere; orice altă literă face parte din cod (D18).
 //
 // Formatul unei citiri AI (D4): { antet: { numar, data, ... }, randuri: [ { cod_raw, rezultat,
-//   data_inspectie, start_mm, end_mm, lungime_mm, inaltime_mm, adancime_mm, observatii? } ], incerte: [] }
+//   data_inspectie, start_mm, end_mm, lungime_mm, inaltime_mm, adancime_mm, observatii? } ], incerte: [],
+//   partial?: boolean, pagini_necitite?: number[] }
 // Nimic nu dispare tăcut (L12): codurile nenormalizabile rămân în listă ca „nepotrivit”,
 // valorile ilizibile ca „incert”, iar ambiguitățile ca „conflict” / „dublat”.
 
@@ -148,19 +149,27 @@ function antetComparat(a, b) {
  * @param {object} citireA
  * @param {object} citireB
  * @param {{tronson?: string|number}} [opt]  tronsonul încărcării (D6); fără el, tronsonul din fiecare cod
- * @returns {{ok:boolean, erori:string[], antet:object, randuri:Array, rezumat:object, incerte:{a:Array,b:Array}}}
+ * @returns {{ok:boolean, erori:string[], antet:object, randuri:Array, rezumat:object, incerte:{a:Array,b:Array},
+ *            complet:boolean, incomplet:{a:string[],b:string[]}, potrivit_integral:boolean}}
  *   randuri[i].stare ∈ potrivit | diferit | incert | doar_in_A | doar_in_B | dublat
+ *   complet=false dacă o citire e trunchiată (partial / pagini_necitite) sau are valori incerte (L12);
+ *   potrivit_integral = ok && complet && antet egal && toate rândurile „potrivit” — singurul semnal
+ *   că buletinul ÎNTREG se poate marca „potrivit” (rândurile potrivite dintr-o citire parțială nu ajung).
  */
 export function comparaCitiri(citireA, citireB, opt = {}) {
   const erori = []
   if (!Array.isArray(citireA?.randuri)) erori.push('citire_a_invalida')
   if (!Array.isArray(citireB?.randuri)) erori.push('citire_b_invalida')
+  const sA = semnaleCitire(citireA, 'a', erori), sB = semnaleCitire(citireB, 'b', erori)
   const rez = {
     ok: erori.length === 0, erori,
     antet: antetComparat(citireA?.antet, citireB?.antet),
     randuri: [],
     rezumat: { potrivit: 0, diferit: 0, incert: 0, doar_in_A: 0, doar_in_B: 0, dublat: 0, nepotrivit: 0 },
-    incerte: { a: Array.isArray(citireA?.incerte) ? citireA.incerte : [], b: Array.isArray(citireB?.incerte) ? citireB.incerte : [] },
+    incerte: { a: sA.incerte, b: sB.incerte },
+    incomplet: { a: sA.incomplet, b: sB.incomplet },
+    complet: false,
+    potrivit_integral: false,
   }
   if (!rez.ok) return rez
 
@@ -196,25 +205,62 @@ export function comparaCitiri(citireA, citireB, opt = {}) {
     if (rand.nepotrivit) rez.rezumat.nepotrivit++
     rez.randuri.push(rand)
   }
+  rez.complet = !sA.incomplet.length && !sB.incomplet.length
+  rez.potrivit_integral = rez.complet && rez.antet.numar.egal && rez.antet.data.egal
+    && rez.randuri.length > 0 && rez.randuri.every(x => x.stare === 'potrivit')
   return rez
+}
+
+/**
+ * Semnalele de completitudine ale unei citiri (D4 + L12): `incerte` (listă), `partial` (boolean),
+ * `pagini_necitite` (listă de numere de pagină). Lipsa câmpului = nimic semnalat; o formă invalidă
+ * NU devine tacit „nimic”: se adaugă în erori (comparația iese ok:false).
+ */
+function semnaleCitire(c, parte, erori) {
+  const out = { incerte: [], incomplet: [] }
+  if (!c || typeof c !== 'object') return out          // citirea însăși e deja eroare
+  const { incerte, partial, pagini_necitite: pn } = c
+  if (incerte !== undefined && incerte !== null) {
+    if (Array.isArray(incerte)) out.incerte = incerte
+    else erori.push(`incerte_${parte}_invalide`)
+  }
+  if (out.incerte.length) out.incomplet.push(`incerte:${out.incerte.length}`)
+  if (partial !== undefined && partial !== null) {
+    if (partial === true) out.incomplet.push('partial')
+    else if (partial !== false) erori.push(`partial_${parte}_invalid`)
+  }
+  if (pn !== undefined && pn !== null) {
+    if (!Array.isArray(pn) || !pn.every(p => Number.isInteger(p) && p > 0)) erori.push(`pagini_necitite_${parte}_invalide`)
+    else if (pn.length) out.incomplet.push(`pagini_necitite:${pn.join(',')}`)
+  }
+  return out
 }
 
 // ── 3. starea pe sudură, din buletinele confirmate ──────────────────────
 const STARE_LIPSA = Object.freeze({ stare: 'lipsa', valabil: null, istoric: Object.freeze([]), motiv: null })
 
+/** Id-ul buletinului (bigint din BD: număr întreg sau text din cifre) → BigInt; altceva → null. */
+function idBuletin(v) {
+  if (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0) return BigInt(v)
+  if (typeof v === 'string' && /^\d{1,19}$/.test(v)) return BigInt(v)
+  return null
+}
 function identitateBuletin(r) {
-  if (r.buletin_id !== undefined && r.buletin_id !== null) return `id:${r.buletin_id}`
+  if (r._idBuletin !== null && r._idBuletin !== undefined) return `id:${r._idBuletin}`
   return `nr:${txt(r.numar).toUpperCase()}|${r._dataBuletin}`
 }
-// ordinea (§ brief): data inspecției, apoi refacerea, apoi data buletinului; > 0 = a e mai recent
-function compara(a, b) {
-  if (a._dataInspectie !== b._dataInspectie) return a._dataInspectie > b._dataInspectie ? 1 : -1
-  if (a._refacuta !== b._refacuta) return a._refacuta ? 1 : -1
-  if (a._dataBuletin !== b._dataBuletin) {
-    if (!dataValida(a._dataBuletin) || !dataValida(b._dataBuletin)) return NaN
-    return a._dataBuletin > b._dataBuletin ? 1 : -1
-  }
-  return 0
+const desc = (a, b) => (a === b ? 0 : a > b ? -1 : 1)
+const lipsaUltimul = (a, b) => (a === null) - (b === null)
+/**
+ * Ordinea §22 (R3), descrescătoare: data inspecției; la aceeași dată refacerea înaintea originalului;
+ * apoi data buletinului; apoi id-ul buletinului. < 0 = a vine primul. Valorile lipsă merg la coadă
+ * (doar ca ordinea să fie stabilă; lipsa lor la departajare dă conflict, vezi stareGrup).
+ */
+function ordineRezultate(a, b) {
+  return lipsaUltimul(a._dataInspectie, b._dataInspectie) || desc(a._dataInspectie, b._dataInspectie)
+    || (a._refacuta === b._refacuta ? 0 : a._refacuta ? -1 : 1)
+    || lipsaUltimul(a._dataBuletin, b._dataBuletin) || desc(a._dataBuletin, b._dataBuletin)
+    || lipsaUltimul(a._idBuletin, b._idBuletin) || desc(a._idBuletin, b._idBuletin)
 }
 
 function cheieDinRand(r) {
@@ -233,18 +279,25 @@ function stareGrup(lista) {
   if (istoric.length > 1 && istoric.some(r => !dataValida(r._dataInspectie))) {
     return { stare: 'conflict', valabil: null, istoric, motiv: 'data_inspectie_lipsa' }
   }
-  istoric.sort((a, b) => (compara(a, b) || 0))
-  const ultim = istoric[istoric.length - 1]
-  // egalitate cu altul: ambiguă, dacă nu e același rând dublat din același buletin
-  for (const r of istoric.slice(0, -1)) {
-    const c = compara(ultim, r)
-    if (Number.isNaN(c)) return { stare: 'conflict', valabil: null, istoric, motiv: 'data_buletin_lipsa' }
-    if (c === 0 && !(identitateBuletin(r) === identitateBuletin(ultim) && r._rezultat === ultim._rezultat)) {
-      return { stare: 'conflict', valabil: null, istoric, motiv: 'egalitate' }
+  istoric.sort(ordineRezultate)   // istoric[0] = cel mai recent (§22)
+  const prim = istoric[0]
+  // grupul de vârf: aceeași dată de inspecție și același atribut de refacere ca primul rând
+  const varf = istoric.filter(r => r._dataInspectie === prim._dataInspectie && r._refacuta === prim._refacuta)
+  // §22: rezultate diferite în grupul de vârf = conflict, indiferent de data buletinului.
+  // (Strict, §22 compară doar primele două rânduri; aici se compară tot grupul de vârf, ca un al treilea
+  //  buletin „acceptat” să nu ascundă un „respins” de la aceeași inspecție.)
+  if (varf.some(r => r._rezultat !== prim._rezultat)) return { stare: 'conflict', valabil: null, istoric, motiv: 'egalitate' }
+  // Același rezultat în buletine diferite (decizia r1, nr. 2): nu e conflict, câștigă cel ales de ordine
+  // (data buletinului, apoi id-ul). Dacă ordinea nu se poate stabili, nu se alege tacit.
+  if (new Set(varf.map(identitateBuletin)).size > 1) {
+    if (varf.some(r => !dataValida(r._dataBuletin))) return { stare: 'conflict', valabil: null, istoric, motiv: 'data_buletin_lipsa' }
+    const top = varf.filter(r => r._dataBuletin === prim._dataBuletin)
+    if (new Set(top.map(identitateBuletin)).size > 1 && top.some(r => r._idBuletin === null)) {
+      return { stare: 'conflict', valabil: null, istoric, motiv: 'id_buletin_lipsa' }
     }
   }
-  if (ultim._rezultat === 'acceptat') return { stare: 'acceptat', valabil: ultim, istoric, motiv: null }
-  if (ultim._rezultat === 'respins') return { stare: 'respins_fara_refacere', valabil: ultim, istoric, motiv: null }
+  if (prim._rezultat === 'acceptat') return { stare: 'acceptat', valabil: prim, istoric, motiv: null }
+  if (prim._rezultat === 'respins') return { stare: 'respins_fara_refacere', valabil: prim, istoric, motiv: null }
   return { stare: 'conflict', valabil: null, istoric, motiv: 'rezultat_necunoscut' }
 }
 
@@ -255,7 +308,7 @@ function stareGrup(lista) {
  * @param {Array} randuriConfirmate
  * @param {{metode?: string[]}} [opt]  metodele completate cu 'lipsa' pe fiecare sudură (implicit PM, PA-UT, UT)
  * @returns {{suduri: Object<string,{cheie, metode: Object<string,{stare, valabil, istoric, motiv}>}>, ignorate: Array<{rand, motiv}>}}
- *   stare ∈ acceptat | respins_fara_refacere | conflict | lipsa
+ *   stare ∈ acceptat | respins_fara_refacere | conflict | lipsa; istoric în ordinea §22 (cel mai recent primul)
  */
 export function starePeSudura(randuriConfirmate, opt = {}) {
   const ignorate = []
@@ -275,6 +328,7 @@ export function starePeSudura(randuriConfirmate, opt = {}) {
       _dataBuletin: dataValida(db) ? db : null,
       _refacuta: r.refacuta === true,
       _rezultat: normalizeazaRezultat(r.rezultat),
+      _idBuletin: idBuletin(r.buletin_id),
     }
     metode.add(metoda)
     if (!grupuri.has(cheie)) grupuri.set(cheie, new Map())
@@ -362,9 +416,14 @@ const fmtM = x => (Math.round(x * 100) / 100).toLocaleString('ro-RO', { maximumF
  * @param {string[]} p.metodeObligatorii  setarea proiectului (D10); [] = nicio metodă obligatorie
  * @param {object|null} [p.pachetAnterior] pachetul anterior de pe tronson; null = nu există
  * @param {string|number} [p.tronson]  tronsonul pachetului (altfel pachet.tronson / pachet.tronson_cod)
+ * @param {Set<string>|string[]} p.eliminate  sudurile eliminate prin tăiere, active (R4): chei „12|126|” sau
+ *   coduri „T12S126”, FĂRĂ refacere; [] = niciuna. Lipsă / formă necunoscută = blocaj (L18).
  * @returns {{blocaje: Array, blocajeDeblocabile: Array, avertismente: Array}}  elemente { cod, rand, mesaj }
+ *
+ * Sudura eliminată (R4): nu i se mai cer buletine (nici PDF-ul lor); rămâne doar verificarea de dublură.
+ * Sudura „în șanț” (§8 + decizia proprietarului, r1 nr. 10): tot ce ține de buletinele ei e DOAR avertisment.
  */
-export function verificaExport({ pachet, randuri, stare, metodeObligatorii, pachetAnterior = null, tronson } = {}) {
+export function verificaExport({ pachet, randuri, stare, metodeObligatorii, pachetAnterior = null, tronson, eliminate } = {}) {
   const blocaje = [], blocajeDeblocabile = [], avertismente = []
   const el = (cod, rand, mesaj) => ({ cod, rand: rand ?? null, mesaj })
   const tCtx = tronson ?? pachet?.tronson ?? pachet?.tronson_cod
@@ -374,6 +433,9 @@ export function verificaExport({ pachet, randuri, stare, metodeObligatorii, pach
   if (!Array.isArray(metodeObligatorii)) blocaje.push(el('setare_metode_lipsa', null, 'Metodele obligatorii ale proiectului nu sunt cunoscute.'))
   if (!stare || typeof stare.suduri !== 'object' || stare.suduri === null) blocaje.push(el('stare_buletine_lipsa', null, 'Arhiva de buletine nu s-a putut citi.'))
   if (tronsonNr(tCtx) === null) blocaje.push(el('tronson_lipsa', null, 'Tronsonul pachetului nu e cunoscut.'))
+  const elim = cheiEliminate(eliminate, tCtx)
+  if (elim.lipsa) blocaje.push(el('eliminate_lipsa', null, 'Lista sudurilor eliminate prin tăiere nu s-a putut citi.'))
+  for (const x of elim.invalide) blocaje.push(el('eliminata_invalida', null, `Sudura eliminată „${txt(x)}” nu are o cheie validă (fără „R”, pe tronsonul pachetului).`))
 
   // ── km start
   const kmStart = nrFinit(pachet?.km_start_m)
@@ -430,36 +492,74 @@ export function verificaExport({ pachet, randuri, stare, metodeObligatorii, pach
     }
     if (vazutSudura.has(n.cheie)) blocaje.push(el('sudura_dublata', poz, `Sudura ${n.cod} apare și la rândul ${vazutSudura.get(n.cheie) ?? '?'}.`))
     else vazutSudura.set(n.cheie, poz)
-    if (r.sudura_sant_pending === true) avertismente.push(el('sudura_in_sant', poz, `Sudura ${n.cod} e marcată „în șanț”.`))
+    if (elim.chei.has(n.cheie)) {
+      // R4: eliminată prin tăiere → nu se mai cer buletine; se spune, ca să nu dispară tăcut (L12)
+      avertismente.push(el('sudura_eliminata', poz, `Sudura ${n.cod} e eliminată prin tăiere: buletinele ei nu se mai cer.`))
+      continue
+    }
+    const inSant = r.sudura_sant_pending === true
+    if (inSant) avertismente.push(el('sudura_in_sant', poz, `Sudura ${n.cod} e marcată „în șanț”: lipsurile de buletin sunt doar avertismente.`))
     if (!areStare) continue
+    // în șanț: aceleași coduri, dar în avertismente (nu cer deblocare)
+    const deblocabil = inSant ? avertismente : blocajeDeblocabile
 
     const metodeSudura = new Set([...obligatorii, ...METODE_CENTRALIZATOR, ...Object.keys(stare.suduri[n.cheie]?.metode || {})])
     for (const m of metodeSudura) {
       const s = stareMetoda(stare, n.cheie, m)
       const oblig = obligatorii.includes(m)
       if (s.stare === 'respins_fara_refacere') {
-        blocajeDeblocabile.push(el('respins_fara_refacere', poz, `Sudura ${n.cod}: ultimul rezultat ${m} e „respins”, fără refacere acceptată.`))
+        deblocabil.push(el('respins_fara_refacere', poz, `Sudura ${n.cod}: ultimul rezultat ${m} e „respins”, fără refacere acceptată.`))
       } else if (s.stare === 'conflict') {
         const t = `Sudura ${n.cod}: buletinele ${m} nu se pot ordona (${s.motiv}); alege omul.`
-        if (oblig) blocajeDeblocabile.push(el('buletin_conflict', poz, t))
+        if (oblig) deblocabil.push(el('buletin_conflict', poz, t))
         else avertismente.push(el('buletin_conflict', poz, t))
       } else if (s.stare === 'lipsa') {
-        if (oblig) blocajeDeblocabile.push(el('buletin_lipsa', poz, `Sudura ${n.cod} n-are buletin ${m} acceptat (metodă obligatorie).`))
+        if (oblig) deblocabil.push(el('buletin_lipsa', poz, `Sudura ${n.cod} n-are buletin ${m} acceptat (metodă obligatorie).`))
         else if (METODE_CENTRALIZATOR.includes(m)) avertismente.push(el('metoda_neobligatorie_lipsa', poz, `Sudura ${n.cod} n-are buletin ${m}.`))
       }
       if (s.valabil) {
         const id = `${m}|${identitateBuletin(s.valabil)}`
-        if (!buletineFolosite.has(id)) buletineFolosite.set(id, { poz, b: s.valabil })
+        const f = buletineFolosite.get(id)
+        if (!f) buletineFolosite.set(id, { poz, b: s.valabil, doarSant: inSant })
+        else if (f.doarSant && !inSant) { f.doarSant = false; f.poz = poz }
       }
     }
   }
 
-  // ── buletine folosite fără PDF (unul pe buletin, la primul rând care îl folosește)
-  for (const { poz, b } of buletineFolosite.values()) {
+  // ── buletine folosite fără PDF (unul pe buletin, la primul rând care îl cere; doar în șanț → avertisment)
+  for (const { poz, b, doarSant } of buletineFolosite.values()) {
     if (!areDocument(b)) {
       const d = dataRo(b._dataBuletin)
-      blocajeDeblocabile.push(el('buletin_fara_pdf', poz, `Buletinul ${b.metoda} ${txt(b.numar)}${d ? `/${d}` : ''} n-are PDF.`))
+      ;(doarSant ? avertismente : blocajeDeblocabile)
+        .push(el('buletin_fara_pdf', poz, `Buletinul ${b.metoda} ${txt(b.numar)}${d ? `/${d}` : ''} n-are PDF.`))
     }
   }
   return { blocaje, blocajeDeblocabile, avertismente }
+}
+
+const RE_CHEIE = /^(\d{1,3})\|(\d{1,5})\|([A-Z0-9/]*)$/
+/**
+ * Sudurile eliminate → mulțimea cheilor (fără refacere). Acceptă cheia „12|126|” sau codul „T12S126”.
+ * Nimic nu se pierde tăcut: o intrare care nu dă o cheie validă pe tronsonul pachetului (sau poartă „R”) e întoarsă în `invalide`.
+ */
+function cheiEliminate(eliminate, tCtx) {
+  const out = { chei: new Set(), invalide: [], lipsa: false }
+  const lista = eliminate instanceof Set ? [...eliminate] : Array.isArray(eliminate) ? eliminate : null
+  if (!lista) { out.lipsa = true; return out }
+  const tNr = tronsonNr(tCtx)
+  for (const x of lista) {
+    const m = typeof x === 'string' ? x.match(RE_CHEIE) : null
+    if (m) {
+      // sufixul cheii nu poartă refacerea (D18: R final = refacere, nu parte din cod)
+      // și forma canonică (fără zerouri în față), altfel n-ar potrivi nicio sudură
+      const canon = cheieSudura({ tronson: Number(m[1]), nr: Number(m[2]), sufix: m[3] }) === x
+      if (!canon || /R$/.test(m[3]) || (tNr !== null && Number(m[1]) !== tNr)) out.invalide.push(x)
+      else out.chei.add(x)
+      continue
+    }
+    const n = typeof x === 'string' ? normalizeazaRandBuletin(x, tCtx) : null
+    if (n && n.stare === 'ok' && !n.refacuta) out.chei.add(n.cheie)
+    else out.invalide.push(x)
+  }
+  return out
 }

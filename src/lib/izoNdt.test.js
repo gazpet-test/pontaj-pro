@@ -137,6 +137,53 @@ describe('comparaCitiri', () => {
     const x = comparaCitiri(citire([rand('GAZPET TR12 S10')]), citire([rand('T12S10')]))
     expect(x.randuri[0].stare).toBe('potrivit')
   })
+
+  // ── completitudinea citirilor (L12, L18)
+  const plin = () => citire([rand('T12S10'), rand('T12S11')])
+  it('două citiri complete și identice → potrivit_integral', () => {
+    const x = comparaCitiri(plin(), plin(), { tronson: 12 })
+    expect(x).toMatchObject({ ok: true, complet: true, potrivit_integral: true, incomplet: { a: [], b: [] } })
+  })
+  it('citiri parțiale identice: rândurile se potrivesc, dar buletinul întreg NU e „potrivit”', () => {
+    const p = { ...plin(), partial: true, pagini_necitite: [3] }
+    const x = comparaCitiri(p, p, { tronson: 12 })
+    expect(x.ok).toBe(true)
+    expect(x.rezumat.potrivit).toBe(2)
+    expect(x.complet).toBe(false)
+    expect(x.potrivit_integral).toBe(false)
+    expect(x.incomplet).toEqual({ a: ['partial', 'pagini_necitite:3'], b: ['partial', 'pagini_necitite:3'] })
+  })
+  it('un singur semnal, într-o singură citire, ajunge', () => {
+    for (const s of [{ partial: true }, { pagini_necitite: [2, 4] }, { incerte: [{ pagina: 2, motiv: 'ilizibil' }] }]) {
+      const x = comparaCitiri(plin(), { ...plin(), ...s }, { tronson: 12 })
+      expect(x.ok, JSON.stringify(s)).toBe(true)
+      expect(x.complet, JSON.stringify(s)).toBe(false)
+      expect(x.potrivit_integral, JSON.stringify(s)).toBe(false)
+      expect(x.incomplet.a).toEqual([])
+      expect(x.incomplet.b).toHaveLength(1)
+    }
+  })
+  it('semnale explicit „nimic” (false, [], lipsă) → complet', () => {
+    const x = comparaCitiri({ ...plin(), partial: false, pagini_necitite: [] }, { ...plin(), incerte: undefined }, { tronson: 12 })
+    expect(x).toMatchObject({ ok: true, complet: true, potrivit_integral: true })
+  })
+  it('incerte invalid dar nevid → eroare, nu [] tacit', () => {
+    const x = comparaCitiri({ ...plin(), incerte: { pagina: 3, motiv: 'ilizibil' } }, plin(), { tronson: 12 })
+    expect(x.ok).toBe(false)
+    expect(x.erori).toEqual(['incerte_a_invalide'])
+    expect(x.potrivit_integral).toBe(false)
+    expect(comparaCitiri(plin(), { ...plin(), incerte: 'pagina 3' }, { tronson: 12 }).erori).toEqual(['incerte_b_invalide'])
+  })
+  it('partial / pagini_necitite în formă necunoscută → eroare', () => {
+    expect(comparaCitiri({ ...plin(), partial: 'da' }, plin(), { tronson: 12 }).erori).toEqual(['partial_a_invalid'])
+    expect(comparaCitiri(plin(), { ...plin(), pagini_necitite: 3 }, { tronson: 12 }).erori).toEqual(['pagini_necitite_b_invalide'])
+    expect(comparaCitiri(plin(), { ...plin(), pagini_necitite: ['3'] }, { tronson: 12 }).erori).toEqual(['pagini_necitite_b_invalide'])
+  })
+  it('potrivit_integral cere și antetul egal și niciun rând în afara „potrivit”', () => {
+    expect(comparaCitiri(plin(), citire(plin().randuri, { numar: '78' }), { tronson: 12 }).potrivit_integral).toBe(false)
+    expect(comparaCitiri(plin(), citire([rand('T12S10')]), { tronson: 12 }).potrivit_integral).toBe(false)
+    expect(comparaCitiri(citire([]), citire([]), { tronson: 12 }).potrivit_integral).toBe(false)
+  })
 })
 
 // ── 3. starea pe sudură ─────────────────────────────────────────────────
@@ -170,14 +217,22 @@ describe('starePeSudura', () => {
     ])
     expect(stareMetoda(s, '12|126|', 'PM').stare).toBe('acceptat')
   })
-  it('aceeași inspecție, refacere egală: buletinul mai recent bate', () => {
+  // §22: aceeași inspecție + același atribut de refacere + rezultate diferite = conflict, indiferent de data buletinului
+  it('aceeași inspecție, refacere egală, respins în buletinul din 21.10 și acceptat în cel din 25.10 → conflict', () => {
     const s = starePeSudura([
-      br('12|30|', 'PM', '6', '2026-10-25', '2026-10-20', 'Accepted'),
-      br('12|30|', 'PM', '5', '2026-10-21', '2026-10-20', 'Rejected'),
+      br('12|30|', 'PM', '6', '2026-10-25', '2026-10-20', 'Accepted', false, { buletin_id: 2 }),
+      br('12|30|', 'PM', '5', '2026-10-21', '2026-10-20', 'Rejected', false, { buletin_id: 1 }),
     ])
-    expect(stareMetoda(s, '12|30|', 'PM').valabil.numar).toBe('6')
+    expect(stareMetoda(s, '12|30|', 'PM')).toMatchObject({ stare: 'conflict', motiv: 'egalitate', valabil: null })
   })
-  it('două buletine, aceeași dată pe toate criteriile → conflict (nu alege tacit)', () => {
+  it('la fel în ordinea inversă a buletinelor (acceptat în cel vechi, respins în cel nou)', () => {
+    const s = starePeSudura([
+      br('12|30|', 'PM', '5', '2026-10-21', '2026-10-20', 'Accepted', false, { buletin_id: 1 }),
+      br('12|30|', 'PM', '6', '2026-10-25', '2026-10-20', 'Rejected', false, { buletin_id: 2 }),
+    ])
+    expect(stareMetoda(s, '12|30|', 'PM').stare).toBe('conflict')
+  })
+  it('două buletine, aceeași dată pe toate criteriile, rezultate diferite → conflict (nu alege tacit)', () => {
     const s = starePeSudura([
       br('12|30|', 'PM', '5', '2026-10-21', '2026-10-20', 'Accepted'),
       br('12|30|', 'PM', '6', '2026-10-21', '2026-10-20', 'Rejected'),
@@ -187,12 +242,70 @@ describe('starePeSudura', () => {
     expect(m.motiv).toBe('egalitate')
     expect(m.valabil).toBe(null)
   })
-  it('conflict și când ambele spun „acceptat” (nu se știe ce buletin se citează)', () => {
+  it('un al treilea buletin „acceptat” nu ascunde un „respins” de la aceeași inspecție', () => {
     const s = starePeSudura([
+      br('12|30|', 'PM', '7', '2026-10-26', '2026-10-20', 'Accepted', false, { buletin_id: 3 }),
+      br('12|30|', 'PM', '6', '2026-10-25', '2026-10-20', 'Accepted', false, { buletin_id: 2 }),
+      br('12|30|', 'PM', '5', '2026-10-21', '2026-10-20', 'Rejected', false, { buletin_id: 1 }),
+    ])
+    expect(stareMetoda(s, '12|30|', 'PM').stare).toBe('conflict')
+  })
+  // decizia r1, nr. 2 (abatere de la §22): același rezultat în două buletine = nu e conflict, câștigă ordinea
+  it('ambele „acceptat”, aceeași inspecție: câștigă buletinul mai nou (data buletinului)', () => {
+    const s = starePeSudura([
+      br('12|30|', 'PM', '5', '2026-10-21', '2026-10-20', 'Accepted', false, { buletin_id: 9 }),
+      br('12|30|', 'PM', '6', '2026-10-25', '2026-10-20', 'Accepted', false, { buletin_id: 4 }),
+    ])
+    const m = stareMetoda(s, '12|30|', 'PM')
+    expect(m.stare).toBe('acceptat')
+    expect(m.valabil.numar).toBe('6')
+  })
+  it('ambele „acceptat”, aceeași dată de buletin: câștigă id-ul mai mare (număr sau text bigint)', () => {
+    const s = starePeSudura([
+      br('12|30|', 'PM', '5', '2026-10-21', '2026-10-20', 'Accepted', false, { buletin_id: 10 }),
+      br('12|30|', 'PM', '6', '2026-10-21', '2026-10-20', 'Accepted', false, { buletin_id: 9 }),
+      // cel mai mare id e al doilea: cu Number() ar ieși egalitate și ar rămâne primul rând (sortare stabilă)
+      br('12|31|', 'PM', '6', '2026-10-21', '2026-10-20', 'Accepted', false, { buletin_id: '9007199254740992' }),
+      br('12|31|', 'PM', '5', '2026-10-21', '2026-10-20', 'Accepted', false, { buletin_id: '9007199254740993' }),
+    ])
+    expect(stareMetoda(s, '12|30|', 'PM').valabil.numar).toBe('5')   // 10 > 9 numeric, nu ca text
+    expect(stareMetoda(s, '12|31|', 'PM').valabil.numar).toBe('5')   // peste 2^53, fără pierdere de precizie
+  })
+  it('ambele „respins”, aceeași inspecție → respins_fara_refacere pe buletinul ales de ordine', () => {
+    const s = starePeSudura([
+      br('12|30|', 'PM', '5', '2026-10-21', '2026-10-20', 'Rejected', false, { buletin_id: 1 }),
+      br('12|30|', 'PM', '6', '2026-10-25', '2026-10-20', 'Rejected', false, { buletin_id: 2 }),
+    ])
+    expect(stareMetoda(s, '12|30|', 'PM')).toMatchObject({ stare: 'respins_fara_refacere', valabil: { numar: '6' } })
+  })
+  it('ambele „acceptat”, ordinea nu se poate stabili → conflict, nu alegere tacită', () => {
+    const fara = starePeSudura([
       br('12|30|', 'PM', '5', '2026-10-21', '2026-10-20', 'Accepted'),
       br('12|30|', 'PM', '6', '2026-10-21', '2026-10-20', 'Accepted'),
     ])
-    expect(stareMetoda(s, '12|30|', 'PM').stare).toBe('conflict')
+    expect(stareMetoda(fara, '12|30|', 'PM')).toMatchObject({ stare: 'conflict', motiv: 'id_buletin_lipsa' })
+    const faraData = starePeSudura([
+      br('12|30|', 'PM', '5', null, '2026-10-20', 'Accepted', false, { buletin_id: 1 }),
+      br('12|30|', 'PM', '6', '2026-10-21', '2026-10-20', 'Accepted', false, { buletin_id: 2 }),
+    ])
+    expect(stareMetoda(faraData, '12|30|', 'PM')).toMatchObject({ stare: 'conflict', motiv: 'data_buletin_lipsa' })
+  })
+  it('refaceri repetate: ultima după data inspecției câștigă; istoricul e în ordinea §22', () => {
+    const s = starePeSudura([
+      br('12|126|', 'PM', '5', '2026-10-21', '2026-10-20', 'Rejected', false, { buletin_id: 1 }),
+      br('12|126|', 'PM', '8', '2026-11-04', '2026-11-03', 'Accepted', true, { buletin_id: 3 }),
+      br('12|126|', 'PM', '6', '2026-10-28', '2026-10-27', 'Rejected', true, { buletin_id: 2 }),
+    ])
+    const m = stareMetoda(s, '12|126|', 'PM')
+    expect(m.stare).toBe('acceptat')
+    expect(m.istoric.map(x => x.numar)).toEqual(['8', '6', '5'])
+  })
+  it('original respins la o inspecție mai nouă decât refacerea acceptată → respins (ordinea e după inspecție)', () => {
+    const s = starePeSudura([
+      br('12|126|', 'PM', '6', '2026-10-28', '2026-10-27', 'Accepted', true, { buletin_id: 2 }),
+      br('12|126|', 'PM', '9', '2026-11-06', '2026-11-05', 'Rejected', false, { buletin_id: 3 }),
+    ])
+    expect(stareMetoda(s, '12|126|', 'PM').stare).toBe('respins_fara_refacere')
   })
   it('același rând de două ori din același buletin → nu e conflict', () => {
     const s = starePeSudura([
@@ -268,6 +381,13 @@ describe('coloaneCentralizator', () => {
   it('conflict → null (nu se alege tacit)', () => {
     expect(coloaneCentralizator({ tip_rand: 'teava', sudura_cod: 'T12S30' }, s, 12).ut).toBe(null)
   })
+  it('două buletine „acceptat” la aceeași inspecție → coloana arată buletinul ales de ordine', () => {
+    const s2 = starePeSudura([
+      br('12|30|', 'UT', '9', '2026-10-21', '2026-10-20', 'Accepted', false, { buletin_id: 5 }),
+      br('12|30|', 'UT', '10', '2026-10-24', '2026-10-20', 'Accepted', false, { buletin_id: 4 }),
+    ])
+    expect(coloaneCentralizator({ tip_rand: 'teava', sudura_cod: 'T12S30' }, s2, 12).ut).toBe('10/24.10.2026')
+  })
 })
 
 // ── 6. verificarea înainte de export ────────────────────────────────────
@@ -288,7 +408,7 @@ describe('verificaExport', () => {
     teava(3, 'X-002', 'T12S2'),
     teava(4, 'X-003', null),                   // țeava ultimă, fără sudură
   ]
-  const v = (o = {}) => verificaExport({ pachet, randuri: randuriBune, stare: stareBuna, metodeObligatorii: ['PA-UT', 'PM'], pachetAnterior: null, ...o })
+  const v = (o = {}) => verificaExport({ pachet, randuri: randuriBune, stare: stareBuna, metodeObligatorii: ['PA-UT', 'PM'], pachetAnterior: null, eliminate: [], ...o })
   const coduri = l => l.map(e => e.cod)
 
   it('pachet complet → fără blocaje; UT neobligatoriu → avertismente', () => {
@@ -373,6 +493,73 @@ describe('verificaExport', () => {
   it('sudură în șanț → avertisment', () => {
     const r = v({ randuri: [teava(1, 'X-001', 'T12S1', { sudura_sant_pending: true })] })
     expect(coduri(r.avertismente)).toContain('sudura_in_sant')
+  })
+
+  // ── în șanț (decizia proprietarului, r1 nr. 10): doar avertismente, inclusiv buletinele lipsă
+  it('în șanț fără niciun buletin la metodă obligatorie → avertisment, nu deblocare', () => {
+    const r = v({ randuri: [teava(1, 'X-001', 'T12S9', { sudura_sant_pending: true })] })
+    expect(r.blocajeDeblocabile).toEqual([])
+    expect(r.blocaje).toEqual([])
+    expect(r.avertismente.map(e => [e.cod, e.rand])).toEqual([
+      ['sudura_in_sant', 1], ['buletin_lipsa', 1], ['buletin_lipsa', 1], ['metoda_neobligatorie_lipsa', 1],
+    ])
+  })
+  it('în șanț cu respins / conflict / PDF lipsă → avertismente; aceeași lipsă pe sudura din afara șanțului blochează', () => {
+    const s = starePeSudura([
+      br('12|1|', 'PA-UT', '77', '2026-10-28', '2026-10-20', 'Rejected'),
+      br('12|1|', 'PM', '5', '2026-10-21', '2026-10-20', 'Accepted', false, { buletin_id: 1 }),
+      br('12|1|', 'PM', '6', '2026-10-21', '2026-10-20', 'Rejected', false, { buletin_id: 2 }),
+      br('12|1|', 'UT', '9', '2026-10-21', '2026-10-20', 'Accepted', false, { are_pdf: false }),
+    ])
+    const sant = v({ stare: s, randuri: [teava(1, 'X-001', 'T12S1', { sudura_sant_pending: true })] })
+    expect(sant.blocajeDeblocabile).toEqual([])
+    expect(coduri(sant.avertismente).sort()).toEqual(['buletin_conflict', 'buletin_fara_pdf', 'respins_fara_refacere', 'sudura_in_sant'])
+    const afara = v({ stare: s, randuri: [teava(1, 'X-001', 'T12S1')] })
+    expect(coduri(afara.blocajeDeblocabile).sort()).toEqual(['buletin_conflict', 'buletin_fara_pdf', 'respins_fara_refacere'])
+  })
+  it('buletin fără PDF folosit și de o sudură din afara șanțului → deblocabil, la rândul acela', () => {
+    const s = starePeSudura([
+      br('12|1|', 'PM', '5', '2026-10-21', '2026-10-20', 'Accepted', false, { are_pdf: false }),
+      br('12|2|', 'PM', '5', '2026-10-21', '2026-10-20', 'Accepted', false, { are_pdf: false }),
+    ])
+    const r = v({ stare: s, metodeObligatorii: ['PM'], randuri: [teava(1, 'X-001', 'T12S1', { sudura_sant_pending: true }), teava(2, 'X-002', 'T12S2')] })
+    expect(r.blocajeDeblocabile.map(e => [e.cod, e.rand])).toEqual([['buletin_fara_pdf', 2]])
+    expect(coduri(r.avertismente)).not.toContain('buletin_fara_pdf')
+  })
+
+  // ── sudurile eliminate prin tăiere (R4)
+  const stareEliminata = starePeSudura([
+    br('12|1|', 'PA-UT', '77', '2026-10-28', '2026-10-20', 'Accepted'),
+    br('12|1|', 'PM', '5', '2026-10-21', '2026-10-20', 'Accepted'),
+    br('12|2|', 'PA-UT', '78', '2026-10-29', '2026-10-20', 'Rejected', false, { are_pdf: false }),   // fără PM, respins, fără PDF
+  ])
+  it('sudură eliminată: fără buletin_lipsa / respins / PDF; rămâne un avertisment care o numește', () => {
+    for (const eliminate of [['12|2|'], new Set(['12|2|']), ['T12S2'], ['GAZPET TR12 S2']]) {
+      const r = v({ stare: stareEliminata, eliminate })
+      expect(r.blocajeDeblocabile, JSON.stringify([...eliminate])).toEqual([])
+      expect(r.blocaje).toEqual([])
+      expect(r.avertismente.filter(e => e.rand === 3).map(e => e.cod)).toEqual(['sudura_eliminata'])
+    }
+  })
+  it('aceeași sudură neeliminată → blocaje deblocabile (contra-probă)', () => {
+    expect(coduri(v({ stare: stareEliminata }).blocajeDeblocabile).sort())
+      .toEqual(['buletin_fara_pdf', 'buletin_lipsa', 'respins_fara_refacere'])
+  })
+  it('eliminarea nu ascunde sudura dublată', () => {
+    const r = v({ stare: stareEliminata, eliminate: ['12|2|'], randuri: [teava(1, 'X-001', 'T12S2'), teava(2, 'X-002', 'T12S2')] })
+    expect(coduri(r.blocaje)).toEqual(['sudura_dublata'])
+  })
+  it('eliminarea e pe cheia fără sufix de refacere: S2 eliminată acoperă și rândul T12S2R; S2A rămâne cerută', () => {
+    const r = v({ stare: stareEliminata, eliminate: ['12|2|'], randuri: [teava(1, 'X-001', 'T12S2R'), teava(2, 'X-002', 'T12S2A')] })
+    expect(r.avertismente.find(e => e.rand === 1).cod).toBe('sudura_eliminata')
+    expect(r.blocajeDeblocabile.every(e => e.rand === 2)).toBe(true)
+    expect(r.blocajeDeblocabile.length).toBeGreaterThan(0)
+  })
+  it('lista de eliminate necunoscută / invalidă → blocaj fără deblocare (L18, L13)', () => {
+    expect(coduri(v({ eliminate: undefined }).blocaje)).toEqual(['eliminate_lipsa'])
+    expect(coduri(v({ eliminate: '12|2|' }).blocaje)).toEqual(['eliminate_lipsa'])
+    expect(coduri(v({ eliminate: ['12|2|R', 'T12S2R', '12|02|', 'T13S2', '13|2|', 'S?', 42] }).blocaje))
+      .toEqual(Array(7).fill('eliminata_invalida'))
   })
   it('gol de km față de pachetul anterior (toleranță 1 m)', () => {
     const ant = { km_start_m: 900, total_lungime_m: 98.5 }        // se termină la 998,5
