@@ -1,8 +1,10 @@
-# autotest_punti.ps1 - teste FARA retea pentru puntile v2 (08.11.2026, Rocky/redari@).
+# autotest_punti.ps1 - teste FARA retea pentru puntile v3 (08.11.2026 / 25.11.2026, Rocky/redari@).
 # Ruleaza: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\server\punti\autotest_punti.ps1
 # Acopera: detectia "deconectat > 10 min", limita de reporniri, lipsa tokenului / mediul curatat, internet picat, login + alarma,
 #          punte veche (fara dubluri), mascarea textelor, plus un test de integrare cu procese reale (releu + punte FALSA,
 #          fara claude.exe, fara retea) si doi relee concurente pe acelasi mutex. -FaraProcese sare peste partea cu procese.
+#          v3: clasificarea stderr-ului ("deja servit", "sesiune negasita", "mediu pierdut"), indicatorul CLI-ului
+#          (bridge-pointer.json), reatasarea dupa ID (lume falsa + releu real), id lipsa/invalid -> comportamentul de azi.
 # Liniile de test sunt copiate din iesirea reala a CLI 2.1.319 (log-urile puntilor de pe server, cu id-uri inlocuite) si
 # din textele CLI-ului ("Reconnecting . retrying in X . disconnected Y", "Error: ... claude remote-control ..."), nu generate de codul testat (L25).
 # Fisier ASCII: caracterele speciale se construiesc cu [char].
@@ -225,11 +227,209 @@ Verifica 'proces din sesiune Claude detectat' (Test-InSesiuneClaude -Id 28900 -I
 Verifica 'proces din afara (bucla cmd) nu e in sesiune' (-not (Test-InSesiuneClaude -Id 4644 -Instantaneu $inst))
 
 # ---------------------------------------------------------------------------------------------------------------------------
+Write-Output 'T14 v3: stderr-ul puntii (texte verbatim CLI 2.1.319)'
+$c = Get-ClasaStderr 'Error: This folder is already served by another Claude Code on this device. Stop it first.'
+Verifica '409 la inregistrare -> deja-servit' ($c.Tip -eq 'deja-servit' -and $null -eq $c.PidStrain) $c.Tip
+$c = Get-ClasaStderr 'Error: Another `claude remote-control` instance (pid 36424) is already running in this directory. Exiting to avoid a split-brain conflict.'
+Verifica 'alta instanta in folder -> deja-servit + pid' ($c.Tip -eq 'deja-servit' -and $c.PidStrain -eq 36424) "$($c.Tip) $($c.PidStrain)"
+$c = Get-ClasaStderr 'Error: Environment env_01TEST0123456789 is already being served by another `claude remote-control` instance (pid 7696) in C:\x. Use that terminal, or stop it first.'
+Verifica 'mediul sesiunii servit de alta instanta -> deja-servit + pid, text mascat' ($c.Tip -eq 'deja-servit' -and $c.PidStrain -eq 7696 -and $c.Text -notmatch 'TEST0123456789') $c.Text
+$c = Get-ClasaStderr 'Exiting in about 50 seconds.'
+Verifica '"Exiting in about" -> iesire-programata (nu e cauza)' ($c.Tip -eq 'iesire-programata') $c.Tip
+$c = Get-ClasaStderr 'Error: Session session_01TEST0123456789 not found. It may have been archived or expired.'
+Verifica 'sesiune negasita (arhivata/expirata)' ($c.Tip -eq 'sesiune-negasita' -and $c.Text -match '<session-id>') $c.Text
+$c = Get-ClasaStderr 'Error: Session session_01TEST0123456789 has no environment_id. It may never have been attached to a bridge.'
+Verifica 'sesiune fara environment_id -> sesiune-negasita' ($c.Tip -eq 'sesiune-negasita')
+$c = Get-ClasaStderr 'Error: Invalid session ID "a b". Session IDs must not contain unsafe characters.'
+Verifica 'id invalid -> sesiune-negasita' ($c.Tip -eq 'sesiune-negasita')
+$c = Get-ClasaStderr 'Error: No recent session found in this directory or its worktrees. Run `claude remote-control` to start a new one.'
+Verifica 'niciun indicator (--continue) -> sesiune-negasita' ($c.Tip -eq 'sesiune-negasita')
+$c = Get-ClasaStderr 'Warning: Could not reuse the previous environment. Existing claude.ai/code sessions from the previous run will not reconnect.'
+Verifica 'avertismentul "Could not reuse" -> mediu-pierdut' ($c.Tip -eq 'mediu-pierdut')
+$c = Get-ClasaStderr 'Error: Could not reach the server to look up session session_01X. Check your network or run `claude /login`, then try again.'
+Verifica 'alta eroare -> altceva (negativ: nu e sesiune-negasita)' ($c.Tip -eq 'altceva') $c.Tip
+$c = Get-ClasaStderr '   '; Verifica 'linie goala -> gol' ($c.Tip -eq 'gol')
+$s0 = New-StarePunte -Nume 'chat' -PidReleu 1 -StartReleu (Get-DataIso $T0) -Acum $T0
+$m = @(Update-StareDinStderr $s0 (Get-ClasaStderr 'Error: This folder is already served by another Claude Code on this device. Stop it first.') $T0)
+$m2 = @(Update-StareDinStderr $s0 (Get-ClasaStderr 'Exiting in about 50 seconds.') $T0.AddSeconds(1))
+Verifica 'stare: dejaServit + ultimaEroare = cauza reala, nu numaratoarea' ($s0.dejaServit -and $s0.ultimaEroare -match 'already served' -and $m.Count -eq 1 -and $m2.Count -eq 0) "$($s0.ultimaEroare) | $($m -join '|')"
+[void](Update-StareDinStderr $s0 (Get-ClasaStderr 'Warning: Could not reuse the previous environment. Existing claude.ai/code sessions from the previous run will not reconnect.') $T0.AddSeconds(2))
+Verifica 'stare: mediuPierdutLa setat, ultimaEroare neschimbata, ultimele 2 linii retinute' ($s0.mediuPierdutLa -and $s0.ultimaEroare -match 'already served' -and @($s0.stderrUltimele).Count -eq 3)
+
+Write-Output 'T15 v3: indicatorul CLI-ului (bridge-pointer.json)'
+Verifica 'cheia proiectului ca la CLI' ((Get-CheieProiect 'C:\Users\Gazpet-Ai\gazpet-erp-chat') -eq 'C--Users-Gazpet-Ai-gazpet-erp-chat')
+Verifica 'calea indicatorului: cont implicit' ((Get-CaleIndicator $Chat -DirConfigImplicit 'C:\Users\Gazpet-Ai\.claude') -eq 'C:\Users\Gazpet-Ai\.claude\projects\C--Users-Gazpet-Ai-gazpet-erp-chat\bridge-pointer.json')
+$red = $Cfg | Where-Object { $_.Nume -eq 'redari' }
+Verifica 'calea indicatorului: cont redari (CLAUDE_CONFIG_DIR)' ((Get-CaleIndicator $red -DirConfigImplicit 'C:\Users\Gazpet-Ai\.claude') -eq 'C:\Users\Gazpet-Ai\.claude-redari\projects\C--Users-Gazpet-Ai-gazpet-erp-redari\bridge-pointer.json')
+# procStart real din indicatorul puntii chat de pe server (25.11.2026) = ora pornirii claude.exe din stare.json (134401117631176444)
+$ps1 = ConvertFrom-ProcStart '134401117631176444'
+Verifica 'procStart (FILETIME) -> 2026-11-25T20:22:43.1176444Z' ($ps1 -and (Get-DataIso $ps1) -eq '2026-11-25T20:22:43.1176444Z') (Get-DataIso $ps1)
+Verifica 'procStart necitibil -> null' ($null -eq (ConvertFrom-ProcStart 'abc') -and $null -eq (ConvertFrom-ProcStart '12') -and $null -eq (ConvertFrom-ProcStart $null))
+$indJson = '{"sessionId":"session_01TESTSESIUNE0001","environmentId":"env_01TESTMEDIU00001","source":"standalone","pid":32256,"procStart":"134401117631176444","activeSessionIds":["session_01TESTSESIUNE0002","nu e id","session_01TESTSESIUNE0001"]}'
+$ind = ConvertFrom-Indicator -Obiect ($indJson | ConvertFrom-Json) -ScrisLa $T0
+Verifica 'indicator normalizat: mediu, sesiune, pid, startIso, scrisLa' ($ind.mediu -eq 'env_01TESTMEDIU00001' -and $ind.sesiune -eq 'session_01TESTSESIUNE0001' -and $ind.pid -eq 32256 -and $ind.startIso -eq '2026-11-25T20:22:43.1176444Z' -and $ind.scrisLa -eq (Get-DataIso $T0)) ($ind | ConvertTo-Json -Compress)
+Verifica 'activeSessionIds: doar id-urile sigure' ((@($ind.sesiuniActive) -join ',') -eq 'session_01TESTSESIUNE0002,session_01TESTSESIUNE0001')
+Verifica 'indicator fara mediu sigur -> null' ($null -eq (ConvertFrom-Indicator -Obiect ('{"sessionId":"s","environmentId":"env 01"}' | ConvertFrom-Json) -ScrisLa $null))
+Verifica 'Test-IdSigur: accepta session_/env_, refuza spatii, ghilimele, gol' ((Test-IdSigur 'session_01AbC-xyz') -and -not (Test-IdSigur 'a b') -and -not (Test-IdSigur 'x"y') -and -not (Test-IdSigur '') -and -not (Test-IdSigur 'ab'))
+$fIndicator = Join-Path $Tmp 'bridge-pointer.json'
+Set-Content -Path $fIndicator -Value $indJson -Encoding ASCII
+$ind2 = Read-Indicator $fIndicator
+Verifica 'Read-Indicator din fisier' ($ind2 -and $ind2.mediu -eq 'env_01TESTMEDIU00001' -and $ind2.scrisLa)
+Verifica 'Read-Indicator fisier lipsa -> null' ($null -eq (Read-Indicator (Join-Path $Tmp 'nu-exista.json')))
+# scriitorul indicatorului: viu, claude, aceeasi ora de pornire -> strain; altfel nu
+$cautaViu = { param($i) @{ Nume = 'claude'; StartUtc = (New-Object DateTime 2026, 11, 25, 20, 22, 43, 117, ([DateTimeKind]::Utc)) } }
+Verifica 'scriitor viu (claude, aceeasi ora) -> strain' ((Get-ScriitorIndicatorStrain -Indicator $ind -PidExclus @() -Cauta $cautaViu) -match 'PID 32256')
+Verifica 'scriitorul e puntea noastra (exclus) -> nu e strain' ($null -eq (Get-ScriitorIndicatorStrain -Indicator $ind -PidExclus @(32256) -Cauta $cautaViu))
+Verifica 'pid refolosit (alta ora de pornire) -> nu e strain' ($null -eq (Get-ScriitorIndicatorStrain -Indicator $ind -PidExclus @() -Cauta { param($i) @{ Nume = 'claude'; StartUtc = $T0 } }))
+Verifica 'pid-ul nu e claude -> nu e strain' ($null -eq (Get-ScriitorIndicatorStrain -Indicator $ind -PidExclus @() -Cauta { param($i) @{ Nume = 'powershell'; StartUtc = $null } }))
+Verifica 'pid mort -> nu e strain' ($null -eq (Get-ScriitorIndicatorStrain -Indicator $ind -PidExclus @() -Cauta { param($i) $null }))
+$indFaraStart = @{ mediu = 'env_01X'; sesiune = $null; sesiuniActive = @(); pid = 5; startIso = $null }
+Verifica 'fara procStart: se accepta dupa nume (claude)' ((Get-ScriitorIndicatorStrain -Indicator $indFaraStart -PidExclus @() -Cauta { param($i) @{ Nume = 'claude'; StartUtc = $null } }) -match 'PID 5')
+Verifica 'argumente normale' ((Get-ArgumentePunte -Afisat 'Chat - server AI' -Spawn '' -SesiuneId '') -eq 'remote-control --name "Chat - server AI"')
+Verifica 'argumente worktree' ((Get-ArgumentePunte -Afisat 'Redari - server AI' -Spawn 'worktree' -SesiuneId '') -eq 'remote-control --name "Redari - server AI" --spawn=worktree')
+Verifica 'argumente reatasare: --session-id, fara --spawn si fara --name' ((Get-ArgumentePunte -Afisat 'Redari - server AI' -Spawn 'worktree' -SesiuneId 'session_01TESTSESIUNE0001') -eq 'remote-control --session-id session_01TESTSESIUNE0001')
+$arunca = $false; try { [void](Get-ArgumentePunte -Afisat 'x' -Spawn '' -SesiuneId 'a b') } catch { $arunca = $true }
+Verifica 'id nesigur la reatasare -> refuz (exceptie)' $arunca
+
+Write-Output 'T16 v3: memoria puntii si pasii reatasarii (pure)'
+$sup0 = @{}
+$mem = Get-MemoriePunte -Sup $sup0 -Nume 'chat'
+Verifica 'memorie noua: goala, hashtable-uri pentru negasite/renuntari' ($null -eq $mem.mediu -and $mem.negasite -is [hashtable] -and $sup0.punti['chat'] -eq $mem)
+$mem.sesiune = 'session_01A'; $mem.sesiuniActive = @('session_01B', 'nu e id', 'session_01A', 'session_01C'); $mem.negasite['session_01B'] = 'x'; $mem.renuntari['session_01C'] = 'x'
+Verifica 'candidati: principala intai, fara dubluri, fara negasite/renuntari/id-uri nesigure' ((@(Get-SesiuniDeReatasat $mem) -join ',') -eq 'session_01A')
+$mem = Get-MemoriePunte -Sup @{} -Nume 'chat'
+function StNorm([string]$Mediu, [int]$PidC = 1, [string]$Stare = 'conectat', [string]$Ses = 'session_01S1') {
+  $s = New-StarePunte -Nume 'chat' -PidReleu 1 -StartReleu 'x' -Acum $T0.AddMinutes(-5); $s.stare = $Stare; $s.pidClaude = $PidC
+  if ($Mediu) { $s.indicator = @{ mediu = $Mediu; sesiune = $Ses; sesiuniActive = @('session_01S2'); pid = $PidC; startIso = $null } }
+  return $s
+}
+$m = @(Update-Reatasare -Mem $mem -Stare (StNorm 'env_01A') -Vie $true -Acum $T0)
+Verifica 'prima data: adopta mediul si sesiunile puntii noastre, fara mesaj' ($mem.mediu -eq 'env_01A' -and $mem.sesiune -eq 'session_01S1' -and (@($mem.sesiuniActive) -contains 'session_01S2') -and $m.Count -eq 0) ($m -join '|')
+$m = @(Update-Reatasare -Mem $mem -Stare (StNorm 'env_01A' 1 'conectat' 'session_01S1') -Vie $true -Acum $T0.AddMinutes(5))
+Verifica 'acelasi mediu: nimic de spus' ($m.Count -eq 0 -and $null -eq $mem.reatasare)
+$stStrain = StNorm 'env_01Z' 999; $stStrain.pidClaude = 1
+$m = @(Update-Reatasare -Mem $mem -Stare $stStrain -Vie $true -Acum $T0.AddMinutes(6))
+Verifica 'indicator scris de alt pid (nu puntea noastra): nu e pierdere de mediu' ($m.Count -eq 0 -and $null -eq $mem.reatasare -and $mem.mediu -eq 'env_01A')
+$m = @(Update-Reatasare -Mem $mem -Stare (StNorm 'env_01B') -Vie $true -Acum $T0.AddMinutes(10))
+Verifica 'mediu diferit la puntea noastra -> reatasare ceruta pentru sesiunea principala' ($mem.reatasare -and $mem.reatasare.pas -eq 'cerut' -and $mem.reatasare.sesiune -eq 'session_01S1' -and $mem.reatasare.mediuVechi -eq 'env_01A' -and $mem.reatasare.mediuNou -eq 'env_01B' -and ($m -join '|') -match 'Environment deleted') ($m -join '|')
+Verifica 'memoria pastreaza mediul vechi pana la reatasare' ($mem.mediu -eq 'env_01A')
+$d = Get-DecizieSupraveghere -Punte $Chat -Stare (StNorm 'env_01B') -ReleuViu $true -ClaudeViu $true -Veche '' -InternetOk $true -InternetStabilMin 30 -LoginValid $true -LoginRevalidatLa $null -Istoric @() -Acum $T0.AddMinutes(10) -Mem $mem -Strain ''
+Verifica 'decizie: punte normala vie + reatasare ceruta -> reporneste in mod reatasare cu sesiunea' ($d.Actiune -eq 'reporneste' -and $d.Mod -eq 'reatasare' -and $d.Sesiune -eq 'session_01S1') "$($d.Actiune) $($d.Mod)"
+$d = Get-DecizieSupraveghere -Punte $Chat -Stare (StNorm 'env_01B') -ReleuViu $true -ClaudeViu $true -Veche '' -InternetOk $false -InternetStabilMin 0 -LoginValid $true -LoginRevalidatLa $null -Istoric @() -Acum $T0.AddMinutes(10) -Mem $mem -Strain ''
+Verifica 'reatasarea respecta "fara internet"' ($d.Actiune -eq 'asteapta' -and $d.Motiv -match 'internet')
+$d = Get-DecizieSupraveghere -Punte $Chat -Stare (StNorm 'env_01B') -ReleuViu $true -ClaudeViu $true -Veche '' -InternetOk $true -InternetStabilMin 30 -LoginValid $true -LoginRevalidatLa $null -Istoric $ist3 -Acum $T0 -Mem $mem -Strain ''
+Verifica 'reatasarea respecta limita de 3 porniri/ora' ($d.Actiune -eq 'asteapta' -and $d.LimitaAtinsa)
+$ist2 = @((Get-DataIso $T0.AddMinutes(-30)), (Get-DataIso $T0.AddMinutes(-5)))
+$d = Get-DecizieSupraveghere -Punte $Chat -Stare (StNorm 'env_01B') -ReleuViu $true -ClaudeViu $true -Veche '' -InternetOk $true -InternetStabilMin 30 -LoginValid $true -LoginRevalidatLa $null -Istoric $ist2 -Acum $T0 -Mem $mem -Strain ''
+Verifica 'bugetul dus-intors: cu 2 porniri recente reatasarea (2 porniri) e amanata' ($d.Actiune -eq 'asteapta' -and $d.LimitaAtinsa -and $d.Motiv -match 'cere 2 porniri') $d.Motiv
+$d = Get-DecizieSupraveghere -Punte $Chat -Stare (StNorm 'env_01B') -ReleuViu $true -ClaudeViu $true -Veche '' -InternetOk $true -InternetStabilMin 30 -LoginValid $true -LoginRevalidatLa $null -Istoric @($ist2[0]) -Acum $T0 -Mem $mem -Strain ''
+Verifica 'cu 1 pornire recenta: reatasarea incape (1 + 2 <= 3)' ($d.Actiune -eq 'reporneste' -and $d.Mod -eq 'reatasare')
+$mem.rezervareRevenire = $ist2[1]   # jetonul = una din intrarile din fereastra
+$d = Get-DecizieSupraveghere -Punte $Chat -Stare (StNorm 'env_01B') -ReleuViu $true -ClaudeViu $true -Veche '' -InternetOk $true -InternetStabilMin 30 -LoginValid $true -LoginRevalidatLa $null -Istoric $ist2 -Acum $T0 -Mem $mem -Strain ''
+Verifica 'intoarcerea deja rezervata (jeton in fereastra): o noua incercare de reatasare cere doar 1 (2 + 1 <= 3)' ($d.Actiune -eq 'reporneste' -and $d.Mod -eq 'reatasare')
+Verifica 'Test-JetonPrezent: prezent in fereastra, absent cand a expirat / lipseste' ((Test-JetonPrezent -Mem $mem -Istoric $ist2) -and -not (Test-JetonPrezent -Mem $mem -Istoric @($ist2[0])) -and -not (Test-JetonPrezent -Mem @{ rezervareRevenire = $null } -Istoric $ist2))
+$stRv = StNorm 'env_01A' 2 'conectat'; $stRv.mod = 'reatasare'; $stRv.sesiuneReatasare = $mem.reatasare.sesiune
+$mem.reatasare.pas = 'conectata'
+$mem.rezervareRevenire = Get-DataIso $T0.AddMinutes(-70)   # jeton iesit din fereastra
+$d = Get-DecizieSupraveghere -Punte $Chat -Stare $stRv -ReleuViu $true -ClaudeViu $true -Veche '' -InternetOk $true -InternetStabilMin 30 -LoginValid $true -LoginRevalidatLa $null -Istoric $ist3 -Acum $T0 -Mem $mem -Strain ''
+Verifica 'intoarcerea cu jeton EXPIRAT (nu mai e in fereastra) costa o pornire: cu 3 recente -> asteapta' ($d.Actiune -eq 'asteapta' -and $d.LimitaAtinsa) $d.Motiv
+$mem.rezervareRevenire = $ist3[2]
+$d = Get-DecizieSupraveghere -Punte $Chat -Stare $stRv -ReleuViu $true -ClaudeViu $true -Veche '' -InternetOk $true -InternetStabilMin 30 -LoginValid $true -LoginRevalidatLa $null -Istoric $ist3 -Acum $T0 -Mem $mem -Strain ''
+Verifica 'intoarcerea cu jeton in fereastra costa 0: trece si cu 3 recente' ($d.Actiune -eq 'reporneste' -and $d.Mod -eq 'normal' -and $d.Revenire) $d.Motiv
+$mem.reatasare.pas = 'cerut'
+$mem.rezervareRevenire = $null
+$d = Get-DecizieSupraveghere -Punte $Chat -Stare (StNorm 'env_01B') -ReleuViu $false -ClaudeViu $false -Veche '' -InternetOk $true -InternetStabilMin 30 -LoginValid $true -LoginRevalidatLa $null -Istoric @() -Acum $T0 -Mem $mem -Strain 'alta punte serveste folderul (claude PID 4242, din indicatorul CLI-ului)'
+Verifica 'punte straina vie (indicator) -> nimic, fara dublura' ($d.Actiune -eq 'nimic' -and $d.Motiv -match 'PID 4242')
+# puntea de reatasare: pornita, conectata -> revenire la normal
+$mem.reatasare.pas = 'in-curs'
+$stR = StNorm 'env_01A' 2 'pornire'; $stR.mod = 'reatasare'; $stR.sesiuneReatasare = 'session_01S1'; $stR.pornitLa = Get-DataIso $T0.AddMinutes(11)
+$m = @(Update-Reatasare -Mem $mem -Stare $stR -Vie $true -Acum $T0.AddMinutes(13))
+Verifica 'punte de reatasare pornita, inca neconectata (2 min) -> astept' ($m.Count -eq 0 -and $mem.reatasare.pas -eq 'in-curs')
+$d = Get-DecizieSupraveghere -Punte $Chat -Stare $stR -ReleuViu $true -ClaudeViu $true -Veche '' -InternetOk $true -InternetStabilMin 30 -LoginValid $true -LoginRevalidatLa $null -Istoric @() -Acum $T0.AddMinutes(13) -Mem $mem -Strain ''
+Verifica 'decizie: punte de reatasare in curs -> nimic (fara regulile de problema)' ($d.Actiune -eq 'nimic')
+$stR.stare = 'conectat'; $stR.aFostConectat = $true
+$m = @(Update-Reatasare -Mem $mem -Stare $stR -Vie $true -Acum $T0.AddMinutes(14))
+Verifica 'punte de reatasare conectata -> pas "conectata" + mesaj' ($mem.reatasare.pas -eq 'conectata' -and ($m -join '|') -match 's-a conectat') ($m -join '|')
+$d = Get-DecizieSupraveghere -Punte $Chat -Stare $stR -ReleuViu $true -ClaudeViu $true -Veche '' -InternetOk $true -InternetStabilMin 30 -LoginValid $true -LoginRevalidatLa $null -Istoric @() -Acum $T0.AddMinutes(14) -Mem $mem -Strain ''
+Verifica 'decizie: reatasare conectata -> reporneste in mod normal' ($d.Actiune -eq 'reporneste' -and $d.Mod -eq 'normal') "$($d.Actiune) $($d.Mod)"
+$mem.reatasare.pas = 'revenire'; $mem.reatasare.mediuReatasat = 'env_01A'
+$m = @(Update-Reatasare -Mem $mem -Stare (StNorm 'env_01A' 3) -Vie $true -Acum $T0.AddMinutes(20))
+Verifica 'puntea normala refoloseste mediul reatasat -> incheiata, memoria pe mediul reatasat' ($null -eq $mem.reatasare -and $mem.mediu -eq 'env_01A' -and ($m -join '|') -match 'incheiata') ($m -join '|')
+# revenirea are termen si rezultat explicit (Jakarinos r1 P1): fara indicatorul puntii normale -> dupa 10 min "necunoscut" = incercare esuata
+$mem.reatasare = @{ sesiune = 'session_01S1'; mediuVechi = 'env_01A'; mediuNou = 'env_01B'; pas = 'revenire'; incercari = 0; candidati = 0; deLa = 'x'; mediuReatasat = 'env_01A' }
+$stFara = StNorm '' 10; $stFara.pornitLa = Get-DataIso $T0.AddMinutes(22)
+$m = @(Update-Reatasare -Mem $mem -Stare $stFara -Vie $true -Acum $T0.AddMinutes(25))
+Verifica 'revenire: punte conectata fara indicator de 3 min -> astept' ($m.Count -eq 0 -and $mem.reatasare.pas -eq 'revenire')
+$stStrain2 = StNorm 'env_01A' 999; $stStrain2.pidClaude = 10; $stStrain2.pornitLa = Get-DataIso $T0.AddMinutes(22)
+$m = @(Update-Reatasare -Mem $mem -Stare $stStrain2 -Vie $true -Acum $T0.AddMinutes(33))
+Verifica 'revenire: indicatorul nu e al puntii (alt pid) de 11 min -> rezultat necunoscut = incercare esuata, cerut din nou' ($mem.reatasare.pas -eq 'cerut' -and $mem.reatasare.incercari -eq 1 -and ($m -join '|') -match 'necunoscut') ($m -join '|')
+$mem.reatasare.pas = 'revenire'
+$stW2 = StNorm 'env_01A' 11; $stW2.mediuPierdutLa = Get-DataIso $T0.AddMinutes(34)
+$m = @(Update-Reatasare -Mem $mem -Stare $stW2 -Vie $true -Acum $T0.AddMinutes(35))
+Verifica 'revenire: CLI-ul spune "Could not reuse" -> esuata imediat (a doua) -> renunt' ($null -eq $mem.reatasare -and $mem.renuntari.ContainsKey('session_01S1') -and ($m -join '|') -match 'renunt') ($m -join '|')
+# esec: puntea normala primeste alt mediu de doua ori -> renunt
+$mem = Get-MemoriePunte -Sup @{} -Nume 'chat'; $mem.mediu = 'env_01A'; $mem.sesiune = 'session_01S1'
+$mem.reatasare = @{ sesiune = 'session_01S1'; mediuVechi = 'env_01A'; mediuNou = 'env_01B'; pas = 'revenire'; incercari = 0; candidati = 0; deLa = 'x'; mediuReatasat = 'env_01A' }
+$m = @(Update-Reatasare -Mem $mem -Stare (StNorm 'env_01C' 4) -Vie $true -Acum $T0.AddMinutes(30))
+Verifica 'alt mediu dupa revenire -> incercarea 1 esuata, cerut din nou' ($mem.reatasare.pas -eq 'cerut' -and $mem.reatasare.incercari -eq 1 -and ($m -join '|') -match 'incerc din nou') ($m -join '|')
+$mem.reatasare.pas = 'revenire'
+$m = @(Update-Reatasare -Mem $mem -Stare (StNorm 'env_01C' 5) -Vie $true -Acum $T0.AddMinutes(40))
+Verifica 'a doua esuare -> renunt: sesiunea in renuntari, memoria fara mediu, mesaj "de verificat in aplicatie"' ($null -eq $mem.reatasare -and $mem.renuntari.ContainsKey('session_01S1') -and $null -eq $mem.mediu -and ($m -join '|') -match 'renunt') ($m -join '|')
+$m = @(Update-Reatasare -Mem $mem -Stare (StNorm 'env_01C' 5) -Vie $true -Acum $T0.AddMinutes(45))
+Verifica 'dupa renuntare: adopta mediul curent, fara alta reatasare' ($mem.mediu -eq 'env_01C' -and $null -eq $mem.reatasare -and $m.Count -eq 0)
+# sesiune negasita -> urmatoarea candidata, apoi "nu mai am alta"
+$mem = Get-MemoriePunte -Sup @{} -Nume 'chat'; $mem.mediu = 'env_01A'; $mem.sesiune = 'session_01S1'; $mem.sesiuniActive = @('session_01S2')
+$mem.reatasare = @{ sesiune = 'session_01S1'; mediuVechi = 'env_01A'; mediuNou = 'env_01B'; pas = 'in-curs'; incercari = 0; candidati = 0; deLa = 'x'; mediuReatasat = $null }
+$stN = StNorm '' 6 'oprit'; $stN.mod = 'reatasare'; $stN.sesiuneReatasare = 'session_01S1'; $stN.sesiuneNegasita = $true; $stN.codIesire = 1
+$m = @(Update-Reatasare -Mem $mem -Stare $stN -Vie $false -Acum $T0.AddMinutes(50))
+Verifica 'sesiunea negasita -> trec la urmatoarea candidata' ($mem.reatasare.sesiune -eq 'session_01S2' -and $mem.reatasare.pas -eq 'cerut' -and $mem.negasite.ContainsKey('session_01S1')) ($m -join '|')
+$m = @(Update-Reatasare -Mem $mem -Stare $stN -Vie $false -Acum $T0.AddMinutes(52))
+Verifica 'aceeasi iesire citita din nou (ex. astept plafonul): nu mai arde o candidata' ($m.Count -eq 0 -and $mem.reatasare.sesiune -eq 'session_01S2' -and -not $mem.negasite.ContainsKey('session_01S2'))
+$stN.sesiuneReatasare = 'session_01S2'; $stN.pidClaude = 61; $stN.iesitLa = Get-DataIso $T0.AddMinutes(54)
+$m = @(Update-Reatasare -Mem $mem -Stare $stN -Vie $false -Acum $T0.AddMinutes(55))
+Verifica 'nicio candidata ramasa -> fara reatasare, retin mediul nou' ($null -eq $mem.reatasare -and ($m -join '|') -match 'nu mai am alta') ($m -join '|')
+# puntea de reatasare a iesit fara sa se conecteze (alt motiv) -> incercare esuata, nu renunt la prima
+$mem.reatasare = @{ sesiune = 'session_01S3'; mediuVechi = 'env_01A'; mediuNou = 'env_01B'; pas = 'in-curs'; incercari = 0; candidati = 0; deLa = 'x'; mediuReatasat = $null }
+$stE = StNorm '' 7 'oprit'; $stE.mod = 'reatasare'; $stE.sesiuneReatasare = 'session_01S3'; $stE.codIesire = 1; $stE.iesitLa = Get-DataIso $T0.AddMinutes(59)
+$m = @(Update-Reatasare -Mem $mem -Stare $stE -Vie $false -Acum $T0.AddMinutes(60))
+Verifica 'iesire fara conectare -> incercare esuata, cerut din nou' ($mem.reatasare.pas -eq 'cerut' -and $mem.reatasare.incercari -eq 1)
+$mem.reatasare.pas = 'in-curs'
+$m = @(Update-Reatasare -Mem $mem -Stare $stE -Vie $false -Acum $T0.AddMinutes(60.5))
+Verifica 'aceeasi iesire recitita: incercarea NU se numara a doua oara' ($mem.reatasare.incercari -eq 1 -and $m.Count -eq 0)
+# "deja servit" la iesire: reatasarea ramane ceruta; decizia asteapta 60 min (fara bucla)
+$stE.dejaServit = $true; $stE.iesitLa = Get-DataIso $T0.AddMinutes(60); $mem.reatasare.pas = 'in-curs'
+$m = @(Update-Reatasare -Mem $mem -Stare $stE -Vie $false -Acum $T0.AddMinutes(61))
+Verifica 'deja servit la iesirea puntii de reatasare -> ramane ceruta, fara incercare numarata' ($mem.reatasare.pas -eq 'cerut' -and $mem.reatasare.incercari -eq 1)
+$d = Get-DecizieSupraveghere -Punte $Chat -Stare $stE -ReleuViu $false -ClaudeViu $false -Veche '' -InternetOk $true -InternetStabilMin 30 -LoginValid $true -LoginRevalidatLa $null -Istoric @() -Acum $T0.AddMinutes(70) -Mem $mem -Strain ''
+Verifica 'deja servit de 10 min -> asteapta (nu pornesc dublura)' ($d.Actiune -eq 'asteapta' -and $d.DejaServit) $d.Motiv
+$d = Get-DecizieSupraveghere -Punte $Chat -Stare $stE -ReleuViu $false -ClaudeViu $false -Veche '' -InternetOk $true -InternetStabilMin 30 -LoginValid $true -LoginRevalidatLa $null -Istoric @() -Acum $T0.AddMinutes(125) -Mem $mem -Strain ''
+Verifica 'deja servit de 65 min -> porneste (in mod reatasare, cerut)' ($d.Actiune -eq 'porneste' -and $d.Mod -eq 'reatasare' -and $d.Sesiune -eq 'session_01S3') "$($d.Actiune) $($d.Mod)"
+# fara sesiuni cunoscute (id lipsa / invalid): mediu nou -> doar retinut, comportamentul de azi
+$mem = Get-MemoriePunte -Sup @{} -Nume 'chat'; $mem.mediu = 'env_01A'; $mem.sesiune = 'nu e id'; $mem.sesiuniActive = @('a b')
+$m = @(Update-Reatasare -Mem $mem -Stare (StNorm 'env_01B' 8 'conectat' $null) -Vie $true -Acum $T0)
+Verifica 'id lipsa/invalid: mediu nou retinut, fara reatasare' ($null -eq $mem.reatasare -and $mem.mediu -eq 'env_01B' -and ($m -join '|') -match 'nu stiu nicio sesiune') ($m -join '|')
+# avertismentul CLI "Could not reuse" tratat o singura data
+$mem = Get-MemoriePunte -Sup @{} -Nume 'chat'; $mem.mediu = 'env_01A'; $mem.sesiune = 'session_01S1'
+$stW = StNorm 'env_01B' 9; $stW.mediuPierdutLa = Get-DataIso $T0
+$m = @(Update-Reatasare -Mem $mem -Stare $stW -Vie $true -Acum $T0)
+Verifica 'avertisment "Could not reuse" -> reatasare ceruta' ($mem.reatasare -and $mem.reatasare.pas -eq 'cerut')
+$mem.reatasare = $null; $mem.mediu = 'env_01B'
+$m = @(Update-Reatasare -Mem $mem -Stare $stW -Vie $true -Acum $T0.AddMinutes(1))
+Verifica 'acelasi avertisment la rularea urmatoare -> nu porneste a doua reatasare' ($null -eq $mem.reatasare -and $m.Count -eq 0) ($m -join '|')
+# punte veche (v2) fara campurile v3 in stare -> tratata ca normala, fara exceptii
+$stV2 = @{ stare = 'conectat'; pidClaude = 1; pornitLa = (Get-DataIso $T0) }
+$m = @(Update-Reatasare -Mem (Get-MemoriePunte -Sup @{} -Nume 'chat') -Stare $stV2 -Vie $true -Acum $T0)
+Verifica 'stare v2 (fara mod/indicator) -> nimic' ($m.Count -eq 0)
+
+# ---------------------------------------------------------------------------------------------------------------------------
 Write-Output 'T10 o rulare completa a supervizorului cu dependente false (internet picat -> revine; login; limita)'
 # Lumea falsa sta in $script:W; blocurile de dependente o citesc prin $script: (fara GetNewClosure, ca sa vada functiile din lib).
 function New-Lume {
   $l = @{ Net = $false; Login = @{}; Porniri = New-Object System.Collections.ArrayList; Opriri = New-Object System.Collections.ArrayList
-          Jurnal = New-Object System.Collections.ArrayList; Sup = $null; Stari = @{}; Vii = @{}; Veche = @{}; Alarma = $null; LoginApeluri = 0 }
+          Jurnal = New-Object System.Collections.ArrayList; Sup = $null; Stari = @{}; Vii = @{}; Veche = @{}; Alarma = $null; LoginApeluri = 0
+          # v3: indicatorul CLI-ului per punte, punte straina, mediul pe care il primeste urmatoarea punte (normala / de reatasare)
+          Indicatoare = @{}; Strain = @{}; MediuUrmator = @{}; MediuReatasare = @{}; SesiuneIndicator = @{}; ReatasareConecteaza = $true
+          PorniriMod = New-Object System.Collections.ArrayList }
   foreach ($p in $Cfg) { $l.Login[(Get-CheieCont $p.ConfigDir)] = [pscustomobject]@{ Valid = $true; ExpiraLa = $T0.AddDays(20); Eroare = $null } }
   return $l
 }
@@ -245,13 +445,25 @@ $Dp = @{
   CitesteStarePunte = { param($p) $script:W.Stari[$p.Nume] }
   Procese = { param($p, $st) $v = $script:W.Vii[$p.Nume]; if ($v -is [string] -and $v -eq 'orfan') { @{ ReleuViu = $false; ClaudeViu = $true } } else { $b = [bool]$v; @{ ReleuViu = $b; ClaudeViu = $b } } }
   Veche = { param($p, $st) $script:W.Veche[$p.Nume] }
+  CitesteIndicator = { param($p) $script:W.Indicatoare[$p.Nume] }
+  Strain = { param($p, $st, $ind) $script:W.Strain[$p.Nume] }
   Internet = { $script:W.Net }
   Login = { param($cfg) $script:W.LoginApeluri++; $script:W.Login[(Get-CheieCont $cfg)] }
-  # o punte (re)pornita are stare noua, pornita "acum" (ca releul real)
-  Porneste = { param($p)
+  # o punte (re)pornita are stare noua, pornita "acum" (ca releul real); indicatorul ei = mediul pe care "il da serverul"
+  Porneste = { param($p, $mod, $sesiune)
     if ($script:W.PornireArunca -contains $p.Nume) { throw 'eroare simulata la pornire' }
-    [void]$script:W.Porniri.Add($p.Nume); $script:W.Vii[$p.Nume] = $true
-    $n = New-StarePunte -Nume $p.Nume -PidReleu 1 -StartReleu 'x' -Acum $script:AcumTest; $n.stare = 'conectat'; $script:W.Stari[$p.Nume] = $n
+    [void]$script:W.Porniri.Add($p.Nume); [void]$script:W.PorniriMod.Add(('{0}:{1}:{2}' -f $p.Nume, $mod, $sesiune)); $script:W.Vii[$p.Nume] = $true
+    $n = New-StarePunte -Nume $p.Nume -PidReleu 1 -StartReleu 'x' -Acum $script:AcumTest; $n.stare = 'conectat'; $n.pidClaude = 1; $n.aFostConectat = $true
+    $mediu = $script:W.MediuUrmator[$p.Nume]
+    if ($mod -eq 'reatasare') {
+      $n.mod = 'reatasare'; $n.sesiuneReatasare = $sesiune; $mediu = $script:W.MediuReatasare[$p.Nume]
+      if (-not $script:W.ReatasareConecteaza) { $n.stare = 'pornire'; $n.aFostConectat = $false }
+    }
+    if ($mediu) {
+      $n.indicator = @{ mediu = $mediu; sesiune = $script:W.SesiuneIndicator[$p.Nume]; sesiuniActive = @(); pid = 1; startIso = $null }
+      $script:W.Indicatoare[$p.Nume] = $n.indicator
+    }
+    $script:W.Stari[$p.Nume] = $n
     @{ Ok = $true; Mesaj = 'fals' } }
   Opreste = { param($p, $st) [void]$script:W.Opriri.Add($p.Nume); -not $script:W.OprireEsueaza }
   ScrieAlarma = { param($t) $script:W.Alarma = $t; if ($t) { 'scris' } else { 'nimic' } }
@@ -341,13 +553,209 @@ Verifica 'exceptie la pornirea module: prinsa, rezervarea salvata inainte' ((@($
 Verifica 'puntea urmatoare (ofertare) e tratata si dupa exceptia de la module' ($W.Porniri[$W.Porniri.Count - 1] -eq 'ofertare' -and ($W.Porniri.Count - $p0) -eq 1)
 $W.PornireArunca = @()
 
+# ---------------------------------------------------------------------------------------------------------------------------
+Write-Output 'T17 v3: reatasarea sesiunilor in lumea falsa (pana de internet 25.11.2026 rejucata; deja servit; punte straina)'
+$script:W = New-Lume; $W = $script:W; $W.Net = $true
+function Jurnal-Numar([string]$Rx) { return @($W.Jurnal | Where-Object { $_ -match $Rx }).Count }
+[void](Ruleaza 1000)
+Verifica 'pornire initiala: 4 punti, toate in mod normal' ($W.Porniri.Count -eq 4 -and @($W.PorniriMod | Where-Object { $_ -notmatch ':normal:$' }).Count -eq 0) ($W.PorniriMod -join ' ')
+# releul vede indicatorul puntii chat: mediul A, sesiunea A1 (+ A2 activa)
+$W.Indicatoare['chat'] = @{ mediu = 'env_01AAAA'; sesiune = 'session_01AAAA1'; sesiuniActive = @('session_01AAAA2'); pid = 1; startIso = $null }
+$W.Stari['chat'].indicator = $W.Indicatoare['chat']
+[void](Ruleaza 1005)
+Verifica 'memoria chat: mediul si sesiunile adoptate din indicator, fara porniri' ($W.Sup.punti['chat'].mediu -eq 'env_01AAAA' -and $W.Sup.punti['chat'].sesiune -eq 'session_01AAAA1' -and (@($W.Sup.punti['chat'].sesiuniActive) -contains 'session_01AAAA2') -and $W.Porniri.Count -eq 4) ($W.Sup.punti['chat'] | ConvertTo-Json -Compress -Depth 4)
+# pana: puntea chat a iesit; cand revine, serverul ii da alt mediu (B) -> sesiunile vechi "Environment deleted"
+$W.Vii['chat'] = $false; $W.Stari['chat'].stare = 'oprit'; $W.Stari['chat'].codIesire = 1; $W.Stari['chat'].iesitLa = Get-DataIso $T0.AddMinutes(1060)
+$W.MediuUrmator['chat'] = 'env_01BBBB'; $W.SesiuneIndicator['chat'] = 'session_01BBBB0'; $W.MediuReatasare['chat'] = 'env_01AAAA'
+$p0 = $W.Porniri.Count
+[void](Ruleaza 1070)
+Verifica 'puntea cazuta e pornita normal (memoria ramane pe mediul A: indicatorul de dinainte era al mediului A)' (($W.Porniri.Count - $p0) -eq 1 -and $W.PorniriMod[$W.PorniriMod.Count - 1] -eq 'chat:normal:' -and $W.Sup.punti['chat'].mediu -eq 'env_01AAAA') ($W.PorniriMod -join ' ')
+[void](Ruleaza 1075)
+Verifica 'mediul nou (B) != cel cunoscut (A) -> oprire + punte de REATASARE cu sesiunea A1' (($W.Porniri.Count - $p0) -eq 2 -and $W.PorniriMod[$W.PorniriMod.Count - 1] -eq 'chat:reatasare:session_01AAAA1' -and $W.Sup.punti['chat'].reatasare.pas -eq 'in-curs') ($W.PorniriMod -join ' ')
+Verifica 'jurnal: mediul s-a schimbat, reatasez' ((Jurnal-Numar '\[chat\] mediul puntii s-a schimbat .*reatasez sesiunea <session-id>|\[chat\] mediul puntii s-a schimbat .*reatasez sesiunea session_01AAAA1') -eq 1) (($W.Jurnal | Select-Object -Last 4) -join ' || ')
+$W.MediuUrmator['chat'] = 'env_01AAAA'   # puntea normala va refolosi mediul reinviat
+[void](Ruleaza 1080)
+Verifica 'puntea de reatasare conectata -> inlocuita cu puntea normala; pasul "revenire" cu mediul reatasat' (($W.Porniri.Count - $p0) -eq 3 -and $W.PorniriMod[$W.PorniriMod.Count - 1] -eq 'chat:normal:' -and $W.Sup.punti['chat'].reatasare.pas -eq 'revenire' -and $W.Sup.punti['chat'].reatasare.mediuReatasat -eq 'env_01AAAA') ($W.Sup.punti['chat'].reatasare | ConvertTo-Json -Compress)
+Verifica 'jurnal: puntea de reatasare s-a conectat' ((Jurnal-Numar '\[chat\] reatasare: puntea cu sesiunea .* s-a conectat') -eq 1)
+[void](Ruleaza 1085)
+Verifica 'puntea normala pe mediul reatasat -> reatasare incheiata, memoria pe mediul A, fara alte porniri' ($null -eq $W.Sup.punti['chat'].reatasare -and $W.Sup.punti['chat'].mediu -eq 'env_01AAAA' -and ($W.Porniri.Count - $p0) -eq 3 -and (Jurnal-Numar '\[chat\] reatasare incheiata') -eq 1) (($W.Jurnal | Select-Object -Last 3) -join ' || ')
+# puntea normala noua si-a creat sesiunea ei (B0, din indicator): devine principala, iar A1 ramane cunoscuta (rezerva)
+Verifica 'memoria: sesiunea principala = cea din indicatorul puntii noi; cea veche ramane in lista' ($W.Sup.punti['chat'].sesiune -eq 'session_01BBBB0' -and (@($W.Sup.punti['chat'].sesiuniActive) -contains 'session_01AAAA1') -and (@($W.Sup.punti['chat'].sesiuniActive) -contains 'session_01AAAA2')) ($W.Sup.punti['chat'] | ConvertTo-Json -Compress -Depth 3)
+$sesEsec = 'session_01BBBB0'
+Cade 'chat' 1075
+[void](Ruleaza 1090)
+Verifica 'cele 3 porniri ale reatasarii intra in plafonul de 3/ora: a patra asteapta' (($W.Porniri.Count - $p0) -eq 3 -and (Jurnal-Numar 'AVERTISMENT \[chat\].*limita') -ge 1)
+$W.Stari['chat'].stare = 'conectat'; $W.Stari['chat'].pidClaude = 1; $W.Stari['chat'].indicator = $W.Indicatoare['chat']
+# esec: dupa reatasare, puntea normala primeste alt mediu (D) de doua ori -> renunt la sesiune, raman pe mediul nou
+[void](Ruleaza 1200)
+# schimbarea mediului la o punte vie se vede si in indicatorul citit de supervizor (acelasi fisier), nu doar in starea releului
+$W.Stari['chat'].indicator = @{ mediu = 'env_01CCCC'; sesiune = 'session_01CCCC0'; sesiuniActive = @(); pid = 1; startIso = $null }
+$W.Indicatoare['chat'] = $W.Stari['chat'].indicator
+$p0 = $W.Porniri.Count
+[void](Ruleaza 1205)
+Verifica 'mediu schimbat la o punte vie -> reatasare (1) cu sesiunea principala curenta' (($W.Porniri.Count - $p0) -eq 1 -and $W.PorniriMod[$W.PorniriMod.Count - 1] -eq ('chat:reatasare:' + $sesEsec)) ($W.PorniriMod[$W.PorniriMod.Count - 1])
+Verifica 'reatasarea a rezervat 2 porniri (dus + intors) in istoric' (@($W.Sup.istoric['chat']).Count -eq 2 -and $W.Sup.punti['chat'].rezervareRevenire) (@($W.Sup.istoric['chat']) -join ',')
+$W.MediuUrmator['chat'] = 'env_01DDDD'
+[void](Ruleaza 1210)
+Verifica 'revenire la normal (2) pe jetonul rezervat: istoricul ramane la 2, jetonul mutat la ora reala a intoarcerii' (($W.Porniri.Count - $p0) -eq 2 -and $W.PorniriMod[$W.PorniriMod.Count - 1] -eq 'chat:normal:' -and @($W.Sup.istoric['chat']).Count -eq 2 -and (@($W.Sup.istoric['chat']) -contains (Get-DataIso $T0.AddMinutes(1210))) -and $W.Sup.punti['chat'].rezervareRevenire -eq (Get-DataIso $T0.AddMinutes(1210)) -and $W.Sup.punti['chat'].revenirePornita) (@($W.Sup.istoric['chat']) -join ',')
+[void](Ruleaza 1215)
+Verifica 'puntea normala pe alt mediu (D) -> incercarea 1 esuata; a doua reatasare (2 porniri) nu mai incape in ora -> amanata, fara pornire' (($W.Porniri.Count - $p0) -eq 2 -and $W.Sup.punti['chat'].reatasare.pas -eq 'cerut' -and (Jurnal-Numar '\[chat\] reatasare: .*incerc din nou') -eq 1 -and (Jurnal-Numar 'AVERTISMENT \[chat\].*reatasarea cere 2 porniri') -eq 1) (($W.Jurnal | Select-Object -Last 3) -join ' || ')
+Verifica 'dupa ce intoarcerea a pornit efectiv, jetonul e uitat (intrarea ramane ca pornire reala)' (-not $W.Sup.punti['chat'].rezervareRevenire -and @($W.Sup.istoric['chat']).Count -eq 2)
+[void](Ruleaza 1220)
+Verifica 'tot amanata (avertismentul nu se repeta in ora)' (($W.Porniri.Count - $p0) -eq 2 -and (Jurnal-Numar 'AVERTISMENT \[chat\].*reatasarea cere 2 porniri') -eq 1)
+[void](Ruleaza 1275)
+Verifica 'dupa ora: a doua reatasare (3)' (($W.Porniri.Count - $p0) -eq 3 -and $W.PorniriMod[$W.PorniriMod.Count - 1] -eq ('chat:reatasare:' + $sesEsec))
+[void](Ruleaza 1280)
+Verifica 'revenire la normal (4)' (($W.Porniri.Count - $p0) -eq 4 -and $W.PorniriMod[$W.PorniriMod.Count - 1] -eq 'chat:normal:')
+[void](Ruleaza 1285)
+Verifica 'tot alt mediu -> renunt: sesiunea in renuntari, fara reatasare, mesaj "de verificat in aplicatie"' ($null -eq $W.Sup.punti['chat'].reatasare -and $W.Sup.punti['chat'].renuntari.ContainsKey($sesEsec) -and (Jurnal-Numar '\[chat\] reatasare: .*renunt dupa 2 incercari') -eq 1) (($W.Jurnal | Select-Object -Last 3) -join ' || ')
+[void](Ruleaza 1290)
+Verifica 'dupa renuntare: mediul nou (D) adoptat, nicio alta pornire' ($W.Sup.punti['chat'].mediu -eq 'env_01DDDD' -and ($W.Porniri.Count - $p0) -eq 4)
+# sesiune negasita: prima candidata e arhivata -> a doua; a doua la fel -> punte normala, mediul nou retinut
+[void](Ruleaza 1400)
+$W.Sup.punti['chat'].sesiune = 'session_01DDDD1'; $W.Sup.punti['chat'].sesiuniActive = @('session_01DDDD2')
+$W.Stari['chat'].indicator = @{ mediu = 'env_01EEEE'; sesiune = $null; sesiuniActive = @(); pid = 1; startIso = $null }
+$W.Indicatoare['chat'] = $W.Stari['chat'].indicator
+$W.ReatasareConecteaza = $false; $W.MediuReatasare['chat'] = $null
+$p0 = $W.Porniri.Count
+[void](Ruleaza 1405)
+Verifica 'reatasare ceruta pentru D1' (($W.Porniri.Count - $p0) -eq 1 -and $W.PorniriMod[$W.PorniriMod.Count - 1] -eq 'chat:reatasare:session_01DDDD1')
+$W.Vii['chat'] = $false; $W.Stari['chat'].stare = 'oprit'; $W.Stari['chat'].codIesire = 1; $W.Stari['chat'].sesiuneNegasita = $true; $W.Stari['chat'].iesitLa = Get-DataIso $T0.AddMinutes(1406)
+[void](Ruleaza 1410)
+Verifica 'D1 negasita -> urmatoarea candidata D2' (($W.Porniri.Count - $p0) -eq 2 -and $W.PorniriMod[$W.PorniriMod.Count - 1] -eq 'chat:reatasare:session_01DDDD2' -and (Jurnal-Numar '\[chat\] reatasare: sesiunea .* nu mai exista .*incerc sesiunea') -eq 1)
+$W.Vii['chat'] = $false; $W.Stari['chat'].stare = 'oprit'; $W.Stari['chat'].codIesire = 1; $W.Stari['chat'].sesiuneNegasita = $true; $W.Stari['chat'].iesitLa = Get-DataIso $T0.AddMinutes(1411)
+$W.MediuUrmator['chat'] = 'env_01EEEE'
+[void](Ruleaza 1415)
+Verifica 'D2 negasita -> nu mai am alta: punte normala, fara reatasare' (($W.Porniri.Count - $p0) -eq 3 -and $W.PorniriMod[$W.PorniriMod.Count - 1] -eq 'chat:normal:' -and $null -eq $W.Sup.punti['chat'].reatasare -and (Jurnal-Numar '\[chat\] reatasare: .*nu mai am alta') -eq 1) ($W.PorniriMod -join ' ')
+Verifica 'rezervarea intoarcerii eliberata (3 porniri reale = 3 intrari in istoric, nu 4)' (@($W.Sup.istoric['chat']).Count -eq 3 -and -not $W.Sup.punti['chat'].rezervareRevenire) (@($W.Sup.istoric['chat']) -join ',')
+[void](Ruleaza 1420)
+Verifica 'mediul E adoptat; fara alte porniri' ($W.Sup.punti['chat'].mediu -eq 'env_01EEEE' -and ($W.Porniri.Count - $p0) -eq 3)
+$W.ReatasareConecteaza = $true
+# indicator strain cu ALT mediu, lasat de o punte oprita, cand memoria are sesiuni: NU se adopta (Jakarinos r1 P1); puntea noua il
+# refoloseste, diferenta porneste reatasarea, iar "serverul" (puntea de reatasare) spune unde e sesiunea -> acolo ramanem
+[void](Ruleaza 1500)
+$W.Vii['chat'] = $false; $W.Stari['chat'].stare = 'oprit'; $W.Stari['chat'].codIesire = 1; $W.Stari['chat'].iesitLa = Get-DataIso $T0.AddMinutes(1500)
+$W.Sup.punti['chat'].mediu = 'env_01EEEE'; $W.Sup.punti['chat'].sesiune = 'session_01EEEE1'; $W.Sup.punti['chat'].sesiuniActive = @()
+$W.Indicatoare['chat'] = @{ mediu = 'env_01FFFF'; sesiune = 'session_01FFFF0'; sesiuniActive = @(); pid = 4242; startIso = $null }   # scriitor mort (Strain gol)
+$W.MediuUrmator['chat'] = 'env_01FFFF'; $W.SesiuneIndicator['chat'] = 'session_01FFFF0'; $W.MediuReatasare['chat'] = 'env_01FFFF'   # serverul: E1 e acum pe F
+$p0 = $W.Porniri.Count
+[void](Ruleaza 1505)
+Verifica 'indicator strain cu alt mediu + sesiuni cunoscute: NU e adoptat, punte normala pornita, rand in jurnal' (($W.Porniri.Count - $p0) -eq 1 -and $W.Sup.punti['chat'].mediu -eq 'env_01EEEE' -and (Jurnal-Numar '\[chat\] indicatorul folderului arata alt mediu .*nu il adopt') -eq 1) ($W.Sup.punti['chat'] | ConvertTo-Json -Compress -Depth 3)
+[void](Ruleaza 1510)
+Verifica 'mediul F != E cunoscut -> reatasarea sesiunii E1 (reconciliere prin server)' (($W.Porniri.Count - $p0) -eq 2 -and $W.PorniriMod[$W.PorniriMod.Count - 1] -eq 'chat:reatasare:session_01EEEE1')
+[void](Ruleaza 1515)
+[void](Ruleaza 1520)
+Verifica 'serverul a pus E1 pe F -> puntea normala pe F, reatasare incheiata, memoria pe F cu E1 pastrata' (($W.Porniri.Count - $p0) -eq 3 -and $null -eq $W.Sup.punti['chat'].reatasare -and $W.Sup.punti['chat'].mediu -eq 'env_01FFFF' -and (@(Get-SesiuniDeReatasat $W.Sup.punti['chat']) -contains 'session_01EEEE1')) ($W.Sup.punti['chat'] | ConvertTo-Json -Compress -Depth 3)
+# punte v2 inca vie la upgrade: starea ei nu are "indicator"; supervizorul ia indicatorul citit de el (pid = puntea) si memoreaza (Jakarinos r1 P2)
+[void](Ruleaza 1600)
+$W.Stari['module'] = @{ stare = 'conectat'; pidClaude = 1; pidReleu = 1; pornitLa = (Get-DataIso $T0.AddMinutes(900)); stareDeLa = (Get-DataIso $T0.AddMinutes(900)); ultimaIesire = (Get-DataIso $T0.AddMinutes(1599)) }
+$W.Sup.punti['module'] = $null
+$W.Indicatoare['module'] = @{ mediu = 'env_01MMMM'; sesiune = 'session_01MMMM1'; sesiuniActive = @(); pid = 1; startIso = $null }
+[void](Ruleaza 1605)
+Verifica 'punte v2 vie (stare fara campuri v3): memoria adoptata din indicatorul citit de supervizor' ($W.Sup.punti['module'].mediu -eq 'env_01MMMM' -and $W.Sup.punti['module'].sesiune -eq 'session_01MMMM1') ($W.Sup.punti['module'] | ConvertTo-Json -Compress -Depth 3)
+$W.Indicatoare['module'] = @{ mediu = 'env_01NNNN'; sesiune = 'session_01NNNN1'; sesiuniActive = @(); pid = 99; startIso = $null }
+[void](Ruleaza 1610)
+Verifica 'indicator cu alt pid decat puntea vie: ignorat (memoria neschimbata, fara reatasare)' ($W.Sup.punti['module'].mediu -eq 'env_01MMMM' -and $null -eq $W.Sup.punti['module'].reatasare)
+$W.Indicatoare['module'] = @{ mediu = 'env_01MMMM'; sesiune = 'session_01MMMM1'; sesiuniActive = @(); pid = 1; startIso = $null }
+# reatasarea NU porneste cand nu incap 2 porniri in ora (P2): 2 porniri recente -> amanata
+[void](Ruleaza 1700)
+$W.Sup.istoric['ofertare'] = @((Get-DataIso $T0.AddMinutes(1690)), (Get-DataIso $T0.AddMinutes(1695)))
+$W.Sup.punti['ofertare'].mediu = 'env_01OOOO'; $W.Sup.punti['ofertare'].sesiune = 'session_01OOOO1'
+$W.Stari['ofertare'].pidClaude = 1; $W.Stari['ofertare'].stare = 'conectat'; $W.Stari['ofertare'].indicator = @{ mediu = 'env_01PPPP'; sesiune = $null; sesiuniActive = @(); pid = 1; startIso = $null }
+$W.Indicatoare['ofertare'] = $W.Stari['ofertare'].indicator
+$p0 = $W.Porniri.Count
+[void](Ruleaza 1705)
+Verifica '2 porniri recente: reatasarea (care cere 2) e amanata, puntea normala ramane' (($W.Porniri.Count - $p0) -eq 0 -and $W.Sup.punti['ofertare'].reatasare.pas -eq 'cerut' -and (Jurnal-Numar 'AVERTISMENT \[ofertare\].*reatasarea cere 2 porniri') -eq 1)
+$W.MediuReatasare['ofertare'] = 'env_01OOOO'; $W.MediuUrmator['ofertare'] = 'env_01OOOO'
+[void](Ruleaza 1760)
+Verifica 'cand incap: reatasarea porneste' (($W.Porniri.Count - $p0) -eq 1 -and $W.PorniriMod[$W.PorniriMod.Count - 1] -eq 'ofertare:reatasare:session_01OOOO1')
+[void](Ruleaza 1765); [void](Ruleaza 1770)
+Verifica 'dus-intors incheiat' (($W.Porniri.Count - $p0) -eq 2 -and $null -eq $W.Sup.punti['ofertare'].reatasare -and $W.Sup.punti['ofertare'].mediu -eq 'env_01OOOO' -and -not $W.Sup.punti['ofertare'].rezervareRevenire)
+# intoarcere INTARZIATA (Jakarinos r2 P2): plecare la 1905, fara internet pana la 1950 -> intoarcerea la 1955 muta jetonul la 1955;
+# la 1970 plecarea a expirat, dar intoarcerea (1955) conteaza inca -> cel mult 2 porniri noi pana la 2015, nu 3
+[void](Ruleaza 1900)
+$W.Sup.punti['ofertare'].mediu = 'env_01OOOO'; $W.Sup.punti['ofertare'].sesiune = 'session_01OOOO1'
+$W.Stari['ofertare'].indicator = @{ mediu = 'env_01QQQQ'; sesiune = $null; sesiuniActive = @(); pid = 1; startIso = $null }; $W.Indicatoare['ofertare'] = $W.Stari['ofertare'].indicator
+$W.MediuReatasare['ofertare'] = 'env_01OOOO'; $W.MediuUrmator['ofertare'] = 'env_01OOOO'
+$p0 = $W.Porniri.Count
+[void](Ruleaza 1905)
+Verifica 'plecare (reatasare) la 1905: 2 intrari' (($W.Porniri.Count - $p0) -eq 1 -and @($W.Sup.istoric['ofertare']).Count -eq 2) (@($W.Sup.istoric['ofertare']) -join ',')
+$W.Net = $false
+[void](Ruleaza 1910); [void](Ruleaza 1930); [void](Ruleaza 1950)
+Verifica 'fara internet: intoarcerea asteapta, puntea cu o sesiune ramane' (($W.Porniri.Count - $p0) -eq 1 -and $W.Sup.punti['ofertare'].reatasare.pas -eq 'conectata')
+$W.Net = $true
+[void](Ruleaza 1955)
+Verifica 'intoarcerea la 1955 pe jeton: istoric = plecarea (1905) + intoarcerea (1955), nu doua intrari la 1905' (($W.Porniri.Count - $p0) -eq 2 -and (@($W.Sup.istoric['ofertare'] | Sort-Object) -join ',') -eq ((Get-DataIso $T0.AddMinutes(1905)) + ',' + (Get-DataIso $T0.AddMinutes(1955)))) (@($W.Sup.istoric['ofertare']) -join ',')
+[void](Ruleaza 1960)
+Verifica 'intoarcerea confirmata, memoria pe O' ($null -eq $W.Sup.punti['ofertare'].reatasare -and $W.Sup.punti['ofertare'].mediu -eq 'env_01OOOO')
+Cade 'ofertare' 1955; [void](Ruleaza 1970)
+Cade 'ofertare' 1960; [void](Ruleaza 1975)
+Cade 'ofertare' 1965; [void](Ruleaza 1980)
+Verifica 'dupa expirarea plecarii: doar 2 reporniri noi (1970, 1975) + intoarcerea de la 1955 = 3 in ora; a 4-a asteapta' (($W.Porniri.Count - $p0) -eq 4 -and (Jurnal-Numar 'AVERTISMENT \[ofertare\] deconectata .*limita de 3') -ge 1) (@($W.Sup.istoric['ofertare']) -join ',')
+# intoarcere INTRERUPTA intre salvarea pasului si efect (Jakarinos r2 P2): pasul "revenire" + jetonul mutat sunt salvate, dar puntea cu o sesiune
+# e inca vie; istoricul e plin (3). La reluare intoarcerea se face pe jeton (cost 0), nu e blocata de plafon
+[void](Ruleaza 2000)
+$W.Sup.punti['ofertare'].mediu = 'env_01OOOO'; $W.Sup.punti['ofertare'].sesiune = 'session_01OOOO1'
+$W.Sup.punti['ofertare'].reatasare = @{ sesiune = 'session_01OOOO1'; mediuVechi = 'env_01OOOO'; mediuNou = 'env_01QQQQ'; pas = 'revenire'; incercari = 0; candidati = 0; deLa = (Get-DataIso $T0.AddMinutes(1990)); mediuReatasat = 'env_01OOOO' }
+$W.Sup.punti['ofertare'].rezervareRevenire = Get-DataIso $T0.AddMinutes(1995); $W.Sup.punti['ofertare'].revenirePornita = $true
+$W.Sup.istoric['ofertare'] = @((Get-DataIso $T0.AddMinutes(1960)), (Get-DataIso $T0.AddMinutes(1990)), (Get-DataIso $T0.AddMinutes(1995)))
+$W.Vii['ofertare'] = $true
+$W.Stari['ofertare'] = New-StarePunte -Nume 'ofertare' -PidReleu 1 -StartReleu 'x' -Acum $T0.AddMinutes(1990)
+$W.Stari['ofertare'].mod = 'reatasare'; $W.Stari['ofertare'].sesiuneReatasare = 'session_01OOOO1'; $W.Stari['ofertare'].stare = 'conectat'; $W.Stari['ofertare'].aFostConectat = $true; $W.Stari['ofertare'].pidClaude = 1
+$W.Indicatoare['ofertare'] = @{ mediu = 'env_01OOOO'; sesiune = $null; sesiuniActive = @(); pid = 1; startIso = $null }
+$p0 = $W.Porniri.Count
+[void](Ruleaza 2005)
+Verifica 'reluare dupa intrerupere: intoarcerea porneste pe jeton (istoric plin, dar cost 0), istoricul ramane la 3' (($W.Porniri.Count - $p0) -eq 1 -and $W.PorniriMod[$W.PorniriMod.Count - 1] -eq 'ofertare:normal:' -and @($W.Sup.istoric['ofertare']).Count -eq 3 -and (@($W.Sup.istoric['ofertare']) -contains (Get-DataIso $T0.AddMinutes(2005)))) (@($W.Sup.istoric['ofertare']) -join ',')
+[void](Ruleaza 2010)
+Verifica 'intoarcerea confirmata si jetonul uitat' ($null -eq $W.Sup.punti['ofertare'].reatasare -and -not $W.Sup.punti['ofertare'].rezervareRevenire -and @($W.Sup.istoric['ofertare']).Count -eq 3) (($W.Sup.punti['ofertare'] | ConvertTo-Json -Compress -Depth 4) + ' | ' + (@($W.Sup.istoric['ofertare']) -join ',') + ' | ' + (($W.Jurnal | Select-Object -Last 3) -join ' || '))
+# "deja servit" (bucla din 25.11.2026): puntea iese cu 409 la fiecare pornire -> acum NU se mai reporneste la 5 min
+[void](Ruleaza 2200)
+$W.Vii['module'] = $false; $W.Stari['module'].stare = 'oprit'; $W.Stari['module'].codIesire = 1; $W.Stari['module'].dejaServit = $true
+$W.Stari['module'].ultimaEroare = 'Error: This folder is already served by another Claude Code on this device. Stop it first.'; $W.Stari['module'].iesitLa = Get-DataIso $T0.AddMinutes(2201)
+$p0 = $W.Porniri.Count; $j0 = $W.Jurnal.Count
+[void](Ruleaza 2205); [void](Ruleaza 2210); [void](Ruleaza 2215); [void](Ruleaza 2220)
+Verifica 'deja servit: 4 rulari, ZERO porniri (fara bucla)' (($W.Porniri.Count - $p0) -eq 0) ($W.PorniriMod -join ' ')
+Verifica 'deja servit: o singura linie in jurnal' ((@($W.Jurnal | Select-Object -Skip $j0 | Where-Object { $_ -match '\[module\] astept: folderul era servit' }).Count) -eq 1) (($W.Jurnal | Select-Object -Skip $j0) -join ' || ')
+[void](Ruleaza 2265)
+Verifica 'dupa 60 min fara punte straina vizibila: o singura repornire' (($W.Porniri.Count - $p0) -eq 1 -and $W.PorniriMod[$W.PorniriMod.Count - 1] -eq 'module:normal:')
+# punte straina vie (indicatorul CLI-ului are un scriitor viu, din afara releului): nimic, o linie pe ora
+[void](Ruleaza 2300)
+$W.Vii['ofertare'] = $false; $W.Stari['ofertare'].stare = 'oprit'; $W.Stari['ofertare'].codIesire = 1; $W.Stari['ofertare'].iesitLa = Get-DataIso $T0.AddMinutes(2300)
+$W.Strain['ofertare'] = 'alta punte serveste folderul (claude PID 4242, din indicatorul CLI-ului)'
+$p0 = $W.Porniri.Count; $j0 = $W.Jurnal.Count
+[void](Ruleaza 2305); [void](Ruleaza 2310); [void](Ruleaza 2315)
+Verifica 'punte straina vie -> nicio pornire, o linie in jurnal' (($W.Porniri.Count - $p0) -eq 0 -and (@($W.Jurnal | Select-Object -Skip $j0 | Where-Object { $_ -match '\[ofertare\] alta punte serveste folderul .*PID 4242.*nu pornesc dublura' }).Count) -eq 1) (($W.Jurnal | Select-Object -Skip $j0) -join ' || ')
+$W.Strain['ofertare'] = ''
+[void](Ruleaza 2320)
+Verifica 'punte straina disparuta -> pornim' (($W.Porniri.Count - $p0) -eq 1 -and $W.PorniriMod[$W.PorniriMod.Count - 1] -eq 'ofertare:normal:')
+# punte straina care s-a oprit a lasat indicatorul ei si memoria e goala: la pornirea normala il adoptam (mediul in care sunt sesiunile acum)
+[void](Ruleaza 2400)
+$W.Vii['redari'] = $false; $W.Stari['redari'].stare = 'oprit'; $W.Stari['redari'].codIesire = 1; $W.Stari['redari'].iesitLa = Get-DataIso $T0.AddMinutes(2400)
+$W.Indicatoare['redari'] = @{ mediu = 'env_01RRRR'; sesiune = 'session_01RRRR1'; sesiuniActive = @(); pid = 777; startIso = $null }
+$W.MediuUrmator['redari'] = 'env_01RRRR'; $W.SesiuneIndicator['redari'] = 'session_01RRRR1'
+[void](Ruleaza 2405)
+Verifica 'la pornirea normala memoria goala adopta indicatorul existent (mediul R, sesiunea R1)' ($W.Sup.punti['redari'].mediu -eq 'env_01RRRR' -and $W.Sup.punti['redari'].sesiune -eq 'session_01RRRR1') ($W.Sup.punti['redari'] | ConvertTo-Json -Compress -Depth 3)
+[void](Ruleaza 2410)
+Verifica 'puntea noua pe acelasi mediu R -> nicio reatasare' ($null -eq $W.Sup.punti['redari'].reatasare)
+# -DoarVerifica arata si pasul de reatasare, fara efecte
+$W.Stari['redari'].indicator = @{ mediu = 'env_01SSSS'; sesiune = $null; sesiuniActive = @(); pid = 1; startIso = $null }
+$W.Indicatoare['redari'] = $W.Stari['redari'].indicator
+$opDv = $W.Opriri.Count; $jDv = $W.Jurnal.Count
+$act = Ruleaza 2415 -Dv
+Verifica '-DoarVerifica: "redari: reporneste [reatasare]" fara efecte' ((@($act) -join '|') -match 'redari: reporneste \[reatasare\]' -and $W.Opriri.Count -eq $opDv -and $W.Jurnal.Count -eq $jDv) (@($act) -join '|')
+
 Write-Output 'T11 fisierul de stare: dus-intors JSON (Windows PowerShell 5.1)'
 $f = Join-Path $Tmp 'sup.json'
 $W.Sup.istoric['chat'] = @((Get-DataIso $T0), (Get-DataIso $T0.AddMinutes(5))); $W.Sup.istoric['module'] = @((Get-DataIso $T0))
+$W.Sup.punti['chat'].reatasare = @{ sesiune = 'session_01AAAA1'; mediuVechi = 'env_01AAAA'; mediuNou = 'env_01BBBB'; pas = 'cerut'; incercari = 1; candidati = 0; deLa = (Get-DataIso $T0); mediuReatasat = $null }
 [void](Write-JsonAtomic $f $W.Sup)
 $r = Read-JsonSigur $f
 Verifica 'istoric = lista de texte ISO (nu {value,Count}), si cu un singur element' (@($r.istoric['chat']).Count -eq 2 -and @($r.istoric['module']).Count -eq 1 -and ($r.istoric['chat'] | Select-Object -First 1) -is [string] -and (ConvertFrom-DataIso ($r.istoric['chat'] | Select-Object -First 1))) (($r.istoric | ConvertTo-Json -Compress -Depth 5) + ' ' + ($W.Sup.istoric | ConvertTo-Json -Compress -Depth 5))
 Verifica 'conturi pastrate' ($r.conturi['implicit'].Valid -eq $true)
+$mc = Get-MemoriePunte -Sup $r -Nume 'chat'
+Verifica 'memoria puntii dupa dus-intors: mediu, sesiuni (lista), renuntari (hashtable), reatasare (hashtable cu pas)' ($mc.mediu -eq 'env_01FFFF' -and @($mc.sesiuniActive).Count -ge 1 -and $mc.renuntari -is [hashtable] -and $mc.renuntari.ContainsKey($sesEsec) -and $mc.reatasare -is [hashtable] -and $mc.reatasare.pas -eq 'cerut' -and $mc.reatasare.incercari -eq 1) ($mc | ConvertTo-Json -Compress -Depth 4)
+$mr = Get-MemoriePunte -Sup $r -Nume 'redari'
+Verifica 'memorie cu sesiuniActive goala dupa dus-intors: tablou gol, nu null' ($null -ne $mr.sesiuniActive -and @($mr.sesiuniActive).Count -eq 0)
 Set-Content -Path $f -Value '{ stricat'
 Verifica 'JSON stricat -> null (fara exceptie)' ($null -eq (Read-JsonSigur $f))
 
@@ -371,14 +779,17 @@ if (-not $FaraProcese) {
     'if ($env:CLAUDE_CONFIG_DIR) { L ("[23:10:03] Info: config " + $env:CLAUDE_CONFIG_DIR) }'
     'if ($args.Count -gt 0) { Start-Sleep -Seconds ([int]$args[0]) }'
     '[Console]::Error.WriteLine("Error: test stderr pentru sk-ant-oat01-SECRET' + 'DETEST si cse_TEST0123456789")'
+    # ca pe 25.11.2026 (409 la inregistrare): cauza pe o linie, numaratoarea pe urmatoarea (textele CLI 2.1.319)
+    '[Console]::Error.WriteLine("Error: This folder is already served by another Claude Code on this device. Stop it first.")'
+    '[Console]::Error.WriteLine("Exiting in about 50 seconds.")'
     'exit 3'
   )
   Set-Content -Path $fals -Value $continut -Encoding ASCII
   $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
   $releu = Join-Path $PSScriptRoot 'punte_releu.ps1'
-  function Start-ReleuTest([string]$Nume, [string]$Asteapta = '0') {
-    $a = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" -Nume {1} -Folder "{2}" -Afisat "Test punte" -DirStare "{3}" -DirJurnal "{4}" -Claude "{5}" -TestScriptFals "{6}" -TestArg {7}' -f `
-         $releu, $Nume, $folder, $dirSt, $dirJ, $ps, $fals, $Asteapta
+  function Start-ReleuTest([string]$Nume, [string]$Asteapta = '0', [string]$Extra = '') {
+    $a = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" -Nume {1} -Folder "{2}" -Afisat "Test punte" -DirStare "{3}" -DirJurnal "{4}" -Claude "{5}" -TestScriptFals "{6}" -TestArg {7} {8}' -f `
+         $releu, $Nume, $folder, $dirSt, $dirJ, $ps, $fals, $Asteapta, $Extra
     Start-Process -FilePath $ps -ArgumentList $a -WindowStyle Hidden -PassThru
   }
   $env:CLAUDE_CODE_OAUTH_TOKEN = $PrefixTok + 'TESTNUTREBUIESAAJUNGA'
@@ -390,13 +801,32 @@ if (-not $FaraProcese) {
   Verifica 'stare scrisa: oprit, cod 3' ($st -and $st.stare -eq 'oprit' -and $st.codIesire -eq 3) ($st | ConvertTo-Json -Compress)
   Verifica 'durata raportata de punte retinuta (725 s)' ($st -and $st.deconectatSec -eq 725)
   Verifica 'eroare fatala si credential marcate' ($st -and $st.eroareFatalaLa -and $st.credentialLa)
-  Verifica 'ultima eroare = stderr mascat (fara token, fara id sesiune)' ($st -and $st.ultimaEroare -match 'test stderr' -and $st.ultimaEroare -notmatch 'SECRETDETEST' -and $st.ultimaEroare -notmatch 'TEST0123456789')
+  Verifica 'stderr citit linie cu linie, mascat (fara token, fara id sesiune)' ($st -and (@($st.stderrUltimele) -join '|') -match 'test stderr' -and (@($st.stderrUltimele) -join '|') -notmatch 'SECRETDETEST' -and (@($st.stderrUltimele) -join '|') -notmatch 'TEST0123456789') (@($st.stderrUltimele) -join '|')
+  Verifica 'ultima eroare = cauza reala (409 deja servit), NU "Exiting in about"' ($st -and $st.ultimaEroare -match 'already served' -and $st.ultimaEroare -notmatch 'Exiting' -and $st.dejaServit -eq $true) $st.ultimaEroare
+  Verifica 'stare: mod normal, argumente retinute, aFostConectat' ($st -and $st.mod -eq 'normal' -and $st.argumente -match '--name' -and $st.aFostConectat -eq $true)
   $jt = ''; if (Test-Path (Join-Path $dirJ 'punti.log')) { $jt = [IO.File]::ReadAllText((Join-Path $dirJ 'punti.log')) }
-  Verifica 'jurnal: pornita, conectata, deconectata, oprita' ($jt -match 'punte pornita' -and $jt -match '\] conectata' -and $jt -match 'deconectata' -and $jt -match 's-a oprit \(cod 3\)') $jt
+  Verifica 'jurnal: pornita, conectata, deconectata, oprita cu cauza reala + marcaj deja servit' ($jt -match 'punte pornita' -and $jt -match '\] conectata' -and $jt -match 'deconectata' -and $jt -match 's-a oprit \(cod 3\): .*already served.*\[deja servit') $jt
+  Verifica 'jurnal: linia "folderul e deja servit" o singura data' (@([regex]::Matches($jt, 'folderul e deja servit de alta punte')).Count -eq 1)
   Verifica 'tokenul din mediu NU a ajuns la punte' ($jt -notmatch 'TOKEN MOSTENIT')
   Verifica 'CLAUDE_CONFIG_DIR nu a ajuns la puntea cu config implicit' ($jt -notmatch 'Info: config')
   Verifica 'jurnal fara URL-uri, tokenuri, id-uri' ($jt -notmatch 'https://' -and $jt -notmatch 'oat01' -and $jt -notmatch 'TEST0123456789')
   Verifica 'fisierul ultimele.log scris' (@(Get-ChildItem $dirSt -Filter '*.ultimele.log').Count -eq 1)
+
+  Write-Output 'T12b releu in mod REATASARE (--session-id) + indicatorul CLI-ului citit in stare'
+  $fInd = Join-Path $Tmp 'indicator_test.json'
+  Set-Content -Path $fInd -Value '{"sessionId":"session_01TESTREATASARE01","environmentId":"env_01TESTMEDIU00001","source":"standalone","pid":1,"procStart":"134401117631176444"}' -Encoding ASCII
+  $numeR = 'autotest-' + [guid]::NewGuid().ToString('N').Substring(0, 6)
+  $rR = Start-ReleuTest $numeR '0' ('-SesiuneId session_01TESTREATASARE01 -TestCaleIndicator "' + $fInd + '"')
+  $iesitR = $rR.WaitForExit(60000)
+  $stR = $null; if ($iesitR) { $stR = Read-JsonSigur (Join-Path $dirSt "$numeR.stare.json") }
+  Verifica 'releul de reatasare se termina' $iesitR
+  Verifica 'stare: mod reatasare, sesiunea retinuta, argumentele CLI = --session-id fara --spawn/--name' ($stR -and $stR.mod -eq 'reatasare' -and $stR.sesiuneReatasare -eq 'session_01TESTREATASARE01' -and $stR.argumente -match '--session-id' -and $stR.argumente -notmatch 'spawn' -and $stR.argumente -notmatch '--name') ($stR | ConvertTo-Json -Compress)
+  Verifica 'indicatorul CLI-ului citit in stare (mediu, sesiune, pid, startIso)' ($stR -and $stR.indicator -and $stR.indicator.mediu -eq 'env_01TESTMEDIU00001' -and $stR.indicator.sesiune -eq 'session_01TESTREATASARE01' -and $stR.indicator.pid -eq 1 -and $stR.indicator.startIso -eq '2026-11-25T20:22:43.1176444Z') ($stR.indicator | ConvertTo-Json -Compress)
+  $jt2 = [IO.File]::ReadAllText((Join-Path $dirJ 'punti.log'))
+  Verifica 'jurnal: "punte de REATASARE pornita pentru sesiunea <session-id>" (id mascat)' ($jt2 -match 'punte de REATASARE pornita pentru sesiunea <session-id>' -and $jt2 -notmatch 'TESTREATASARE01')
+  $rI = Start-ReleuTest ('autotest-' + [guid]::NewGuid().ToString('N').Substring(0, 6)) '0' '-SesiuneId "a b"'
+  $iesitI = $rI.WaitForExit(30000)
+  Verifica 'id de sesiune nesigur -> releul refuza (cod 2), fara punte' ($iesitI -and $rI.ExitCode -eq 2) "cod $($rI.ExitCode)"
 
   Write-Output 'T13 doua relee pe aceeasi punte (mutex): al doilea iese fara sa porneasca a doua punte'
   $nume2 = 'autotest-' + [guid]::NewGuid().ToString('N').Substring(0, 6)
@@ -417,6 +847,6 @@ if (-not $FaraProcese) {
 
 Remove-Item -LiteralPath $Tmp -Recurse -Force -ErrorAction SilentlyContinue
 Write-Output ''
-Write-Output ("AUTOTEST punti v2: {0} ok, {1} esuate" -f $script:ok, $script:esec)
+Write-Output ("AUTOTEST punti v3: {0} ok, {1} esuate" -f $script:ok, $script:esec)
 if ($script:esec -gt 0) { exit 1 }
 exit 0
