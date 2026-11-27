@@ -5,7 +5,7 @@ import {
   tronsonNrDinCod, cheieDinServer, codDinCheie, aziBucuresti, valideazaFisier, sha256Hex, caleFisier, valideazaIncarcare,
   mapeazaEroareRpc, normalizeazaCitire, mapeazaRaspunsEdge, randuriDinCitire, parseazaLipire, pregatesteRanduriConfirmare,
   combinaCitiri, randArhivaPentruStare, calculeazaVerificari, filtreazaBuletine, coduriDinPachete, valideazaEliminare,
-  MAX_PDF_OCTETI,
+  MAX_PDF_OCTETI, combinaSemnaleCitiri,
 } from './izoBuletineNdtLogica.js'
 import { comparaCitiri } from './lib/izoNdt.js'
 import { createHash, webcrypto } from 'node:crypto'
@@ -354,5 +354,72 @@ describe('randuriDinCitire', () => {
     const r = randuriDinCitire({ randuri: [{ cod_raw: 'T12S1', rezultat: 'ACCEPTED', start_mm: 0, observatii: null }, { cod_raw: 'T12S2' }] })
     expect(r[0]).toMatchObject({ cod_raw: 'T12S1', rezultat: 'ACCEPTED', start_mm: 0, observatii: '' })
     expect(r[0]._id).not.toBe(r[1]._id)
+  })
+})
+
+// ── runda 2 (Jakarinos #1218 r1) ─────────────────────────────────────────
+describe('parseazaLipire — antet recunoscut explicit, nimic pierdut (r1 P1 :257)', () => {
+  it('„ILIZIBIL<TAB>respins” pe prima linie rămâne rând, marcat de verificat (codul vechi îl sărea ca antet)', () => {
+    const r = parseazaLipire('ILIZIBIL\trespins\t28.10.2026\nT12S125\tacceptat\t28.10.2026')
+    expect(r.antetSarit).toBe(false)
+    expect(r.erori).toEqual([])
+    expect(r.randuri.map(x => [x.cod_raw, x.rezultat])).toEqual([['ILIZIBIL', 'respins'], ['T12S125', 'acceptat']])
+    expect(r.randuri[0]._verifica).toMatch(/fără nicio cifră/)
+    expect(r.randuri[1]._verifica).toBeUndefined()
+    expect(r.deVerificat).toBe(1)
+  })
+  it.each([
+    ['Cod sudură\tRezultat', true], ['COD SUDURA\tREZULTAT\tDATA', true], ['Nr. sudură\tRezultat examinare', true], ['Weld No.\tResult', true],
+    ['Sudura', true], ['cod\t\tdata', true],
+    ['Sudura\trespins', false], ['ILIZIBIL\trespins', false], ['Observatii\tacceptat', false], ['nr crt\trezultat', false], ['T12S1\tRezultat', false],
+  ])('esteAntetLipire pe „%s” → %s (prima linie)', (linie, antet) => {
+    const r = parseazaLipire(`${linie}\nT12S125\tacceptat`)
+    expect(r.antetSarit).toBe(antet)
+    expect(r.randuri.length).toBe(antet ? 1 : 2)
+  })
+  it('antetul se sare doar pe prima linie cu date; un rând fără cifre mai jos rămâne și e marcat', () => {
+    const r = parseazaLipire('T12S125\tacceptat\nCod sudură\tRezultat')
+    expect(r.antetSarit).toBe(false)
+    expect(r.randuri.map(x => x.cod_raw)).toEqual(['T12S125', 'Cod sudură'])
+    expect(r.randuri[1]._verifica).toBeTruthy()
+  })
+  it('rândul marcat dă avertisment pe rândul lui în verificări (nu trece tăcut la confirmare)', () => {
+    const r = parseazaLipire('ILIZIBIL\trespins\t28.10.2026\nT12S125\tacceptat\t28.10.2026')
+    const v = calculeazaVerificari({ randuri: r.randuri, buletin: { id: 1, metoda: 'PM', numar: '1', data_buletin: '2026-10-28' }, tronsonCod: 'T12', coduriPachete: new Set(['12|125|']), eliminate: [], arhiva: [] })
+    expect(v.peRand[0].map(p => p.cod)).toContain('rand_de_verificat')
+    expect(v.peRand[1]?.some(p => p.cod === 'rand_de_verificat')).toBeFalsy()
+  })
+})
+
+describe('combinaSemnaleCitiri — semnalele ambelor citiri rămân după „Aplică” (r1 P1 :544)', () => {
+  const buletin = { id: 1, metoda: 'PA-UT', numar: '401', data_buletin: '2026-10-28' }
+  const A = { antet: { numar: '401', data: '2026-10-28', nr_randuri_tiparit: 2 }, randuri: [], incerte: [], partial: false, pagini_necitite: [], model: 'm1' }
+  const B = { antet: { numar: '410', data: '2026-10-28', nr_randuri_tiparit: 3 }, randuri: [], incerte: ['T12S126.rezultat'], partial: true, pagini_necitite: [3, 2], model: 'm2' }
+  const coduriV = c => calculeazaVerificari({ randuri: [{ cod_raw: 'T12S125', rezultat: 'acceptat', data_inspectie: '2026-10-28' }, { cod_raw: 'T12S126', rezultat: 'acceptat', data_inspectie: '2026-10-28' }],
+    citire: c, buletin, tronsonCod: 'T12', coduriPachete: new Set(['12|125|', '12|126|']), eliminate: [], arhiva: [] }).probleme.map(p => p.cod)
+  it('a doua citire parțială / cu pagini necitite / incerte / alt total / alt număr: toate avertismentele rămân', () => {
+    const c = combinaSemnaleCitiri(A, B)
+    expect(c.partial).toBe(true)
+    expect(c.pagini_necitite).toEqual([2, 3])
+    expect(c.incerte).toEqual([{ citire: 'a doua', valoare: 'T12S126.rezultat' }])
+    expect(c.tiparit_diferit).toEqual([2, 3])
+    expect(c.antet.nr_randuri_tiparit).toBeNull()
+    const v = coduriV(c)
+    for (const k of ['citire_partiala', 'pagini_necitite', 'valori_incerte', 'numar_randuri_diferit', 'antet_numar']) expect(v).toContain(k)
+    // doar prima citire (ce rămânea în cod înainte) = zero avertismente: dovada că fără combinare se pierd
+    expect(coduriV(A).filter(k => ['citire_partiala', 'pagini_necitite', 'valori_incerte', 'numar_randuri_diferit', 'antet_numar'].includes(k))).toEqual([])
+  })
+  it('semnalele primei citiri se păstrează și ele; totalul comun rămâne cunoscut', () => {
+    const c = combinaSemnaleCitiri({ ...A, partial: true, pagini_necitite: [4], incerte: ['x'] }, { ...A, antet: { ...A.antet } })
+    expect(c.partial).toBe(true)
+    expect(c.partial_din).toEqual(['prima'])
+    expect(c.pagini_necitite).toEqual([4])
+    expect(c.incerte).toEqual([{ citire: 'prima', valoare: 'x' }])
+    expect(c.antet.nr_randuri_tiparit).toBe(2)
+    expect(c.tiparit_diferit).toBeNull()
+  })
+  it('fără a doua citire = prima neschimbată', () => {
+    expect(combinaSemnaleCitiri(A, null)).toBe(A)
+    expect(combinaSemnaleCitiri(null, null)).toBeNull()
   })
 })

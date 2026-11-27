@@ -15,7 +15,7 @@ import {
   BUCKET_NDT, METODE, METODE_OBLIGABILE, STARI_BULETIN, ETICHETA_STARE, CAMPURI_INDICATII, VARIANTE_ALEGERE,
   tronsonNrDinCod, codDinCheie, fmtMoment, fmtData, valideazaFisier, sha256Hex, caleFisier, valideazaIncarcare,
   mapeazaEroareRpc, mapeazaRaspunsEdge, randGol, randuriDinCitire, parseazaLipire, pregatesteRanduriConfirmare,
-  combinaCitiri, randArhivaPentruStare, calculeazaVerificari, filtreazaBuletine, coduriDinPachete, valideazaEliminare,
+  combinaCitiri, combinaSemnaleCitiri, randArhivaPentruStare, calculeazaVerificari, filtreazaBuletine, coduriDinPachete, valideazaEliminare,
 } from './izoBuletineNdtLogica.js'
 
 const G = {
@@ -79,13 +79,42 @@ export default function IzoBuletineNdt({ proiectId, tronsoane, initialTronsonId 
   const [reloadKey, setReloadKey] = useState(0)
   const [toast, setToast] = useState(null)
   const gen = useRef(0)
+  const deschideDupa = useRef(null)               // buletinul de deschis după trecerea pe tronsonul lui (dublura de pe alt tronson)
+  const nesalvat = useRef(false)                  // confirmarea are o citire / rânduri nesalvate (se pierd la închidere)
   const tronson = useMemo(() => (tronsoane || []).find(t => t.id === tronsonId) || null, [tronsoane, tronsonId])
   const reincarca = () => setReloadKey(k => k + 1)
   const anunta = (msg, c = G.green) => { setToast({ msg, c }); setTimeout(() => setToast(null), 4000) }
+  // TODO(PR #1218 r1, P1 :291/:523): citirea AI și corecturile stau doar în ecran până la confirmare; păstrarea lor pe
+  // server cere un tabel nou (decizia proprietarului). Până atunci: avertisment vizibil + confirmare la închidere.
+  const poatePleca = () => !nesalvat.current || window.confirm('Citirea și rândurile din tabel nu sunt salvate (se salvează doar la confirmare). Dacă închizi, se pierd. Închizi oricum?')
+  useEffect(() => {
+    const laIesire = e => { if (nesalvat.current) { e.preventDefault(); e.returnValue = '' } }
+    window.addEventListener('beforeunload', laIesire)
+    return () => window.removeEventListener('beforeunload', laIesire)
+  }, [])
 
   useEffect(() => { if (!tronsonId && tronsoane?.length) setTronsonId(tronsoane[0].id) }, [tronsoane, tronsonId])
-  // alt tronson: se închid panourile (rezultatele vechi nu se aplică pe tronsonul nou, L24)
-  useEffect(() => { setDeschis(null); setIncarcare(false) }, [tronsonId, proiectId])
+  // alt tronson: se închid panourile (rezultatele vechi nu se aplică pe tronsonul nou, L24); excepție: buletinul cerut explicit
+  useEffect(() => { setDeschis(deschideDupa.current); deschideDupa.current = null; setIncarcare(false) }, [tronsonId, proiectId])
+
+  // deschide un buletin oriunde ar fi pe proiect: pe tronsonul curent direct; pe alt tronson, trece pe el și îl deschide acolo
+  const deschideBuletin = async (id, tIdCunoscut = null) => {
+    let tId = tIdCunoscut
+    if (tId == null) {
+      if (date?.tronsonId === tronsonId && date.buletine.some(b => b.id === id)) tId = tronsonId
+      else {
+        const { data, error } = await supabase.from('sud_buletine').select('id, tronson_id').eq('proiect_id', proiectId).eq('id', id).maybeSingle()
+        if (error || !data) { anunta(`Buletinul #${id} nu s-a putut găsi${error ? `: ${error.message}` : ''}.`, G.red); return }
+        tId = data.tronson_id
+      }
+    }
+    setIncarcare(false)
+    if (tId === tronsonId) { setDeschis(id); reincarca(); return }
+    if (!(tronsoane || []).some(t => t.id === tId)) { anunta(`Buletinul #${id} e pe un tronson care nu e în lista acestui proiect.`, G.red); return }
+    deschideDupa.current = id
+    setTronsonId(tId)
+  }
+  const codTronson = id => (tronsoane || []).find(t => t.id === id)?.cod || `#${id}`
 
   // dreptul de scriere (owner sau MP): aceeași funcție ca serverul (R9); eroare ≠ „n-ai drept” (L18)
   useEffect(() => {
@@ -142,7 +171,7 @@ export default function IzoBuletineNdt({ proiectId, tronsoane, initialTronsonId 
       {toast && <div style={{ position:'fixed', bottom:24, right:24, padding:'12px 18px', background:G.card, border:`1px solid ${toast.c}`, borderRadius:10, color:G.text, fontSize:13, zIndex:9999, maxWidth:420 }}>{toast.msg}</div>}
       <div style={{ ...S.card, display:'flex', flexWrap:'wrap', gap:12, alignItems:'center' }}>
         <div style={{ fontSize:18, fontWeight:700 }}>🧪 Buletine NDT</div>
-        <select value={tronsonId || ''} onChange={e => setTronsonId(Number(e.target.value))} style={S.input} aria-label="Tronson">
+        <select value={tronsonId || ''} onChange={e => { if (poatePleca()) setTronsonId(Number(e.target.value)) }} style={S.input} aria-label="Tronson">
           {tronsoane.map(t => <option key={t.id} value={t.id}>{t.cod}</option>)}
         </select>
         <select value={filtre.metoda} onChange={e => setFiltre(f => ({ ...f, metoda: e.target.value }))} style={S.input} aria-label="Filtru metodă">
@@ -154,7 +183,7 @@ export default function IzoBuletineNdt({ proiectId, tronsoane, initialTronsonId 
           {STARI_BULETIN.map(s => <option key={s} value={s}>{ETICHETA_STARE[s]}</option>)}
         </select>
         {drept.scriere
-          ? <button style={S.btnP} onClick={() => { setIncarcare(true); setDeschis(null) }} disabled={!tronson}>⬆ Încarcă buletin</button>
+          ? <button style={S.btnP} onClick={() => { if (!poatePleca()) return; setIncarcare(true); setDeschis(null) }} disabled={!tronson}>⬆ Încarcă buletin</button>
           : <span style={{ fontSize:12, color: drept.eroare ? G.red : G.muted }}>{drept.eroare ? `Dreptul nu s-a putut verifica: ${drept.eroare}` : 'Doar citire (încarcă managerul de proiect sau owner-ul).'}</span>}
       </div>
 
@@ -162,15 +191,16 @@ export default function IzoBuletineNdt({ proiectId, tronsoane, initialTronsonId 
       {eroare && <div style={{ ...S.card, borderColor:G.red, color:G.red }}>Nu s-au putut citi buletinele: {eroare}</div>}
 
       {incarcare && tronson && drept.scriere && (
-        <IncarcarePanel key={`inc-${tronson.id}`} proiectId={proiectId} tronson={tronson}
-          onInchide={() => setIncarcare(false)} onDeschide={id => { setIncarcare(false); setDeschis(id); reincarca() }}
+        <IncarcarePanel key={`inc-${tronson.id}`} proiectId={proiectId} tronson={tronson} codTronson={codTronson}
+          onInchide={() => setIncarcare(false)} onDeschide={deschideBuletin}
           onReincarca={reincarca} />
       )}
 
       {buletinDeschis && tronson && (
         <BuletinDetaliu key={`b-${buletinDeschis.id}`} buletin={buletinDeschis} tronson={tronson} poateScrie={drept.scriere}
           buletineTronson={dateTronson.buletine} eliminate={dateTronson.eliminate} numeOm={numeOm}
-          onInchide={() => setDeschis(null)} onSchimbat={(msg, c) => { if (msg) anunta(msg, c); reincarca() }} />
+          onNesalvat={v => { nesalvat.current = v }}
+          onInchide={() => { if (poatePleca()) setDeschis(null) }} onSchimbat={(msg, c) => { if (msg) anunta(msg, c); reincarca() }} />
       )}
 
       {dateTronson && (
@@ -180,7 +210,7 @@ export default function IzoBuletineNdt({ proiectId, tronsoane, initialTronsonId 
             <tbody>
               {!lista.length && <tr><td style={S.td} colSpan={8}>{dateTronson.buletine.length ? 'Niciun buletin cu filtrele alese.' : `Niciun buletin pe tronsonul ${tronson?.cod || ''}.`}</td></tr>}
               {lista.map(b => (
-                <tr key={b.id} onClick={() => { setDeschis(b.id); setIncarcare(false) }} style={{ cursor:'pointer', background: deschis === b.id ? G.purple + '18' : 'transparent' }}>
+                <tr key={b.id} onClick={() => { if (deschis === b.id || !poatePleca()) return; setDeschis(b.id); setIncarcare(false) }} style={{ cursor:'pointer', background: deschis === b.id ? G.purple + '18' : 'transparent' }}>
                   <td style={S.td}><b>{b.metoda}</b></td>
                   <td style={S.td}>{b.numar}{b.fortat_motiv && <span title={`Încărcat forțat: ${b.fortat_motiv}`} style={{ color:G.orange }}> ⚑</span>}</td>
                   <td style={S.td}>{fmtData(b.data_buletin)}</td>
@@ -235,7 +265,7 @@ function LinkPdf({ buletin }) {
 }
 
 // ── încărcarea ──────────────────────────────────────────────────────────
-function IncarcarePanel({ proiectId, tronson, onInchide, onDeschide, onReincarca }) {
+function IncarcarePanel({ proiectId, tronson, codTronson, onInchide, onDeschide, onReincarca }) {
   const [fisier, setFisier] = useState(null)
   const [sha, setSha] = useState(null)
   const [eroareFisier, setEroareFisier] = useState(null)
@@ -247,6 +277,8 @@ function IncarcarePanel({ proiectId, tronson, onInchide, onDeschide, onReincarca
   const [rez, setRez] = useState(null)               // eroarea mapată a ultimei încercări
   const [lucru, setLucru] = useState(false)
   const tok = useRef(0)
+  // panoul închis / înlocuit de o încărcare nouă: răspunsurile vechi nu mai închid panoul nou și nu schimbă selecția (L24)
+  useEffect(() => () => { tok.current++ }, [])
 
   const alege = async (file) => {
     const t = ++tok.current
@@ -263,7 +295,7 @@ function IncarcarePanel({ proiectId, tronson, onInchide, onDeschide, onReincarca
       if (t !== tok.current) return
       setFisier(file); setSha(h)
       // dublura pe amprentă, ÎNAINTE de orice urcare sau cost (§6 pct. 2); serverul o verifică oricum la înregistrare
-      const { data, error } = await supabase.from('sud_buletine').select('id, metoda, numar, data_buletin, stare')
+      const { data, error } = await supabase.from('sud_buletine').select('id, tronson_id, metoda, numar, data_buletin, stare')
         .eq('proiect_id', proiectId).eq('fisier_sha256', h).neq('stare', 'anulat').limit(1)
       if (t !== tok.current) return
       if (error) setDublura({ eroare: error.message })
@@ -291,13 +323,13 @@ function IncarcarePanel({ proiectId, tronson, onInchide, onDeschide, onReincarca
         p_fisier_path: path, p_fisier_nume: fisier.name, p_sha256: sha, p_citiri: null, p_forteaza_motiv: v.valori.forteazaMotiv,
       })
       if (t !== tok.current) return
-      if (!error && data != null) { onDeschide(Number(data)); return }
+      if (!error && data != null) { onDeschide(Number(data), tronson.id); return }
       const m = mapeazaEroareRpc(error || { message: 'răspuns gol' }, status)
       if (m.tip === 'necunoscut') {
         // L05: nu se știe dacă înregistrarea a trecut → se recitește din bază după amprentă, nu se reîncearcă orbește
-        const r = await supabase.from('sud_buletine').select('id').eq('proiect_id', proiectId).eq('fisier_sha256', sha).neq('stare', 'anulat').limit(1)
+        const r = await supabase.from('sud_buletine').select('id, tronson_id').eq('proiect_id', proiectId).eq('fisier_sha256', sha).neq('stare', 'anulat').limit(1)
         if (t !== tok.current) return
-        if (!r.error && r.data?.length) { onDeschide(r.data[0].id); return }
+        if (!r.error && r.data?.length) { onDeschide(r.data[0].id, r.data[0].tronson_id); return }
         m.mesaj += r.error ? ' Nici recitirea nu a mers: verifică lista înainte să reîncerci.' : ' Buletinul nu apare în bază: poți reîncerca.'
       }
       if (m.tip === 'fisier_expirat') setUrcat(null)
@@ -346,7 +378,7 @@ function IncarcarePanel({ proiectId, tronson, onInchide, onDeschide, onReincarca
       </div>
       {dublura && (dublura.eroare
         ? <Mesaj c={G.yellow}>Verificarea dublurii nu s-a putut face ({dublura.eroare}); serverul o face oricum la înregistrare.</Mesaj>
-        : <Mesaj c={G.yellow}>Fișierul e deja încărcat: <a href="#" style={{ color:G.blue }} onClick={e => { e.preventDefault(); onDeschide(dublura.id) }}>buletinul {dublura.metoda} {dublura.numar} din {fmtData(dublura.data_buletin)} ({ETICHETA_STARE[dublura.stare]})</a>. Nu e nevoie să-l încarci din nou.</Mesaj>)}
+        : <Mesaj c={G.yellow}>Fișierul e deja încărcat: <a href="#" style={{ color:G.blue }} onClick={e => { e.preventDefault(); onDeschide(dublura.id, dublura.tronson_id) }}>buletinul {dublura.metoda} {dublura.numar} din {fmtData(dublura.data_buletin)} ({ETICHETA_STARE[dublura.stare]}){dublura.tronson_id !== tronson.id ? `, pe tronsonul ${codTronson(dublura.tronson_id)}` : ''}</a>. Nu e nevoie să-l încarci din nou.</Mesaj>)}
       {cuForteaza && (
         <div style={{ marginTop:10, padding:10, border:`1px solid ${G.orange}66`, borderRadius:8 }}>
           <div style={{ fontSize:12, color:G.orange, marginBottom:6 }}>E alt laborator, cu același număr și aceeași dată? Poți încărca oricum, cu motiv (se înregistrează).</div>
@@ -356,7 +388,7 @@ function IncarcarePanel({ proiectId, tronson, onInchide, onDeschide, onReincarca
       {rez && (
         <Mesaj c={rez.tip === 'necunoscut' ? G.yellow : G.red}>
           {rez.mesaj}
-          {(rez.tip === 'fisier_dublura' || rez.tip === 'buletin_dublura') && rez.id && <> <a href="#" style={{ color:G.blue }} onClick={e => { e.preventDefault(); onDeschide(rez.id) }}>Deschide buletinul #{rez.id}</a></>}
+          {(rez.tip === 'fisier_dublura' || rez.tip === 'buletin_dublura') && rez.id && <> <a href="#" style={{ color:G.blue }} onClick={e => { e.preventDefault(); onDeschide(rez.id, rez.tip === 'buletin_dublura' ? tronson.id : null) }}>Deschide buletinul #{rez.id}</a></>}
         </Mesaj>
       )}
       {orfan && rez.tip !== 'buletin_dublura' && <Mesaj c={G.muted}>Fișierul urcat rămâne în arhivă neînregistrat și se curăță automat (nu se poate șterge în primele 2 ore).</Mesaj>}
@@ -369,7 +401,7 @@ function IncarcarePanel({ proiectId, tronson, onInchide, onDeschide, onReincarca
 }
 
 // ── detaliul unui buletin: PDF alături + rânduri (confirmare sau citire) ─
-function BuletinDetaliu({ buletin, tronson, poateScrie, buletineTronson, eliminate, numeOm, onInchide, onSchimbat }) {
+function BuletinDetaliu({ buletin, tronson, poateScrie, buletineTronson, eliminate, numeOm, onNesalvat, onInchide, onSchimbat }) {
   const [url, setUrl] = useState(null)
   const [eroareUrl, setEroareUrl] = useState(null)
   const [motivAnulare, setMotivAnulare] = useState('')
@@ -411,7 +443,7 @@ function BuletinDetaliu({ buletin, tronson, poateScrie, buletineTronson, elimina
         </div>
         <div style={{ flex:'1 1 520px', minWidth:360 }}>
           {buletin.stare === 'ciorna' && poateScrie
-            ? <Confirmare buletin={buletin} tronson={tronson} buletineTronson={buletineTronson} eliminate={eliminate} onSchimbat={onSchimbat} />
+            ? <Confirmare buletin={buletin} tronson={tronson} buletineTronson={buletineTronson} eliminate={eliminate} onSchimbat={onSchimbat} onNesalvat={onNesalvat} />
             : <RanduriConfirmate buletin={buletin} />}
           {buletin.stare === 'ciorna' && !poateScrie && <Mesaj c={G.muted}>Ciornă: rândurile le confirmă managerul de proiect.</Mesaj>}
           {poateScrie && buletin.stare !== 'anulat' && (
@@ -463,9 +495,11 @@ function RanduriConfirmate({ buletin }) {
 }
 
 // ── confirmarea: citire AI / manuală, verificări, alegeri, confirmare ───
-function Confirmare({ buletin, tronson, buletineTronson, eliminate, onSchimbat }) {
+function Confirmare({ buletin, tronson, buletineTronson, eliminate, onSchimbat, onNesalvat }) {
   const [randuri, setRanduri] = useState([])
   const [citire, setCitire] = useState(null)          // prima citire AI (normalizată)
+  const [citire2, setCitire2] = useState(null)        // a doua citire, în comparația deschisă
+  const [citire2Aplicata, setCitire2Aplicata] = useState(null)   // a doua citire din care s-au aplicat alegerile (semnalele ei rămân, L12)
   const [comparatie, setComparatie] = useState(null)  // comparaCitiri(prima, a doua)
   const [alegeri, setAlegeri] = useState({})
   const [ctx, setCtx] = useState({ coduriPachete: null, arhiva: null, eroare: null, gata: false })
@@ -476,6 +510,12 @@ function Confirmare({ buletin, tronson, buletineTronson, eliminate, onSchimbat }
   const tok = useRef(0)
   const tNr = tronsonNrDinCod(tronson.cod)
   useEffect(() => () => { tok.current++ }, [])
+  // munca nesalvată (citire AI / rânduri în tabel) se anunță părintelui: închiderea panoului cere confirmare
+  const areNesalvat = !!citire || randuri.length > 0
+  useEffect(() => { onNesalvat?.(areNesalvat) }, [areNesalvat]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => { onNesalvat?.(false) }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // pe durata unei cereri (citire / confirmare) tabelul e blocat: ce se trimite = ce se vede (L24, Jakarinos #1218 r1)
+  const blocat = !!lucru
 
   // sursele verificărilor: sudurile din pachetele tronsonului + rândurile buletinelor confirmate (necitite = null, L18)
   const idsConfirmate = useMemo(() => buletineTronson.filter(b => b.stare === 'confirmat').map(b => b.id).join(','), [buletineTronson])
@@ -501,9 +541,10 @@ function Confirmare({ buletin, tronson, buletineTronson, eliminate, onSchimbat }
   }, [tronson.id, tronson.cod, idsConfirmate]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const cheiEliminate = useMemo(() => (Array.isArray(eliminate) ? eliminate.filter(e => e.activ).map(e => e.cheie) : null), [eliminate])
+  const citireVerificata = useMemo(() => combinaSemnaleCitiri(citire, citire2Aplicata), [citire, citire2Aplicata])
   const verificari = useMemo(() => calculeazaVerificari({
-    randuri, citire, buletin, tronsonCod: tronson.cod, coduriPachete: ctx.gata ? ctx.coduriPachete : null, eliminate: cheiEliminate, arhiva: ctx.gata ? ctx.arhiva : null,
-  }), [randuri, citire, buletin, tronson.cod, ctx, cheiEliminate])
+    randuri, citire: citireVerificata, buletin, tronsonCod: tronson.cod, coduriPachete: ctx.gata ? ctx.coduriPachete : null, eliminate: cheiEliminate, arhiva: ctx.gata ? ctx.arhiva : null,
+  }), [randuri, citireVerificata, buletin, tronson.cod, ctx, cheiEliminate])
   const pregatit = useMemo(() => pregatesteRanduriConfirmare(randuri), [randuri])
   const eroriPeRand = useMemo(() => {
     const m = {}
@@ -523,12 +564,12 @@ function Confirmare({ buletin, tronson, buletineTronson, eliminate, onSchimbat }
       const r = mapeazaRaspunsEdge({ data, error, corp })
       if (r.tip !== 'ok') { setMesaj({ c: r.tip === 'necunoscut' || r.tip === 'nepublicat' ? G.yellow : G.red, t: r.mesaj }); return }
       if (model === 'principal') {
-        setCitire(r.citire); setRanduri(randuriDinCitire(r.citire)); setComparatie(null); setAlegeri({}); setVerificat(false)
+        setCitire(r.citire); setRanduri(randuriDinCitire(r.citire)); setComparatie(null); setCitire2(null); setCitire2Aplicata(null); setAlegeri({}); setVerificat(false)
         setMesaj({ c: G.green, t: `Citite ${r.citire.randuri.length} rânduri${r.citire.model ? ` (${r.citire.model})` : ''}. Verifică-le pe PDF înainte de confirmare.` })
       } else {
         const cmp = comparaCitiri(citire, r.citire, { tronson: tNr })
         if (!cmp.ok) { setMesaj({ c: G.red, t: `Citirile nu se pot compara: ${cmp.erori.join(', ')}` }); return }
-        setComparatie(cmp); setAlegeri({})
+        setComparatie(cmp); setCitire2(r.citire); setAlegeri({})
         setMesaj({ c: G.blue, t: `A doua citire: ${cmp.rezumat.potrivit} rânduri potrivite, ${cmp.randuri.length - cmp.rezumat.potrivit} de ales.` })
       }
     } catch (e) {
@@ -539,17 +580,21 @@ function Confirmare({ buletin, tronson, buletineTronson, eliminate, onSchimbat }
   }
 
   const aplicaAlegerile = () => {
+    if (blocat) return
     const r = combinaCitiri(comparatie, alegeri)
     if (r.nealese.length) { setMesaj({ c: G.red, t: `Mai ai de ales pe ${r.nealese.length} rânduri.` }); return }
-    setRanduri(r.randuri); setComparatie(null); setVerificat(false)
+    // semnalele (parțial, pagini necitite, incerte, antet) ale AMBELOR citiri rămân până la confirmare
+    setRanduri(r.randuri); setCitire2Aplicata(citire2); setComparatie(null); setCitire2(null); setVerificat(false)
     setMesaj({ c: G.green, t: `Tabelul are acum ${r.randuri.length} rânduri, din alegerile tale.` })
   }
 
   const adaugaLipite = () => {
+    if (blocat) return
     const r = parseazaLipire(lipire)
     if (r.erori.length) { setMesaj({ c: G.red, t: r.erori.join(' ') }); return }
     setRanduri(x => [...x, ...r.randuri]); setLipire(null); setVerificat(false)
-    setMesaj({ c: G.green, t: `Adăugate ${r.randuri.length} rânduri${r.antetSarit ? ' (rândul de antet a fost sărit)' : ''}.` })
+    const extra = [r.antetSarit && 'rândul de antet a fost sărit', r.deVerificat && `${r.deVerificat} cu codul fără cifre, marcate de verificat`].filter(Boolean)
+    setMesaj({ c: r.deVerificat ? G.yellow : G.green, t: `Adăugate ${r.randuri.length} rânduri${extra.length ? ` (${extra.join('; ')})` : ''}.` })
   }
 
   const confirma = async () => {
@@ -567,7 +612,12 @@ function Confirmare({ buletin, tronson, buletineTronson, eliminate, onSchimbat }
     if (['versiune', 'stare', 'necunoscut'].includes(m.tip)) onSchimbat()
   }
 
-  const schimba = (i, k, v) => { setRanduri(x => x.map((r, j) => (j === i ? { ...r, [k]: v } : r))); setVerificat(false) }
+  // marcajul „de verificat” al lipirii rămâne cât timp codul n-are nicio cifră (corectat de om = scos)
+  const schimba = (i, k, v) => {
+    if (blocat) return
+    setRanduri(x => x.map((r, j) => (j !== i ? r : k === 'cod_raw' && r._verifica && /\d/.test(v) ? { ...r, [k]: v, _verifica: undefined } : { ...r, [k]: v }))); setVerificat(false)
+  }
+  const stergeRand = i => { if (blocat) return; setRanduri(x => x.filter((_, j) => j !== i)); setVerificat(false) }
   const globale = verificari.probleme.filter(p => p.index === null)
   const ordine = { eroare: 0, atentie: 1, info: 2 }
   return (
@@ -579,14 +629,15 @@ function Confirmare({ buletin, tronson, buletineTronson, eliminate, onSchimbat }
         <button style={S.btnS} onClick={() => setLipire(lipire === null ? '' : null)} disabled={!!lucru}>📋 Lipește din Excel</button>
       </div>
       {mesaj && <Mesaj c={mesaj.c}>{mesaj.t}</Mesaj>}
+      {areNesalvat && <Mesaj c={G.yellow}>⚠ {citire ? 'Citirea AI și rândurile' : 'Rândurile'} din tabel nu sunt salvate: se salvează doar la confirmare. Dacă închizi panoul înainte, se pierd{citire ? ' (iar citirea cu AI trebuie refăcută)' : ''}.</Mesaj>}
       {lipire !== null && (
         <div style={{ margin:'8px 0' }}>
           <div style={{ fontSize:12, color:G.muted }}>Coloanele, în ordine: cod, rezultat, dată, start, end, lungime, înălțime, adâncime, observații.</div>
-          <textarea value={lipire} onChange={e => setLipire(e.target.value)} rows={5} style={{ ...S.input, width:'100%', fontFamily:'monospace' }} />
-          <button style={S.btnS} onClick={adaugaLipite}>Adaugă rândurile</button>
+          <textarea value={lipire} onChange={e => setLipire(e.target.value)} rows={5} style={{ ...S.input, width:'100%', fontFamily:'monospace' }} disabled={blocat} />
+          <button style={S.btnS} onClick={adaugaLipite} disabled={blocat}>Adaugă rândurile</button>
         </div>
       )}
-      {comparatie && <AlegeriComparatie comparatie={comparatie} alegeri={alegeri} setAlegeri={setAlegeri} onAplica={aplicaAlegerile} onRenunta={() => setComparatie(null)} />}
+      {comparatie && <AlegeriComparatie comparatie={comparatie} alegeri={alegeri} setAlegeri={setAlegeri} blocat={blocat} onAplica={aplicaAlegerile} onRenunta={() => { if (!blocat) { setComparatie(null); setCitire2(null) } }} />}
 
       <div style={{ margin:'10px 0', display:'flex', flexDirection:'column', gap:4 }}>
         <div style={{ fontSize:12, fontWeight:700 }}>Verificări automate · <span style={{ color:G.yellow }}>{verificari.rezumat.atentie} avertismente</span> · <span style={{ color:G.blue }}>{verificari.rezumat.info} informații</span>{!ctx.gata && <span style={{ color:G.muted }}> · se citesc pachetele și arhiva…</span>}</div>
@@ -611,10 +662,10 @@ function Confirmare({ buletin, tronson, buletineTronson, eliminate, onSchimbat }
                   {Object.keys(ETICHETA_CAMP).map(k => (
                     <td key={k} style={{ ...S.td, minWidth: k === 'cod_raw' ? 130 : k === 'observatii' ? 140 : CAMPURI_INDICATII.includes(k) ? 54 : 84 }}>
                       <input style={{ ...S.cell, borderColor: pr.some(p => p.camp === k) ? G.red : G.border2, color: k === 'rezultat' ? (rez === 'acceptat' ? G.green : rez === 'respins' ? G.red : G.text) : G.text }}
-                        value={r[k] ?? ''} onChange={e => schimba(i, k, e.target.value)} aria-label={`${ETICHETA_CAMP[k]} rând ${i + 1}`} />
+                        value={r[k] ?? ''} onChange={e => schimba(i, k, e.target.value)} disabled={blocat} aria-label={`${ETICHETA_CAMP[k]} rând ${i + 1}`} />
                     </td>
                   ))}
-                  <td style={S.td}><button style={{ ...S.btnS, padding:'2px 6px', fontSize:11 }} onClick={() => { setRanduri(x => x.filter((_, j) => j !== i)); setVerificat(false) }} title="Șterge rândul">✕</button></td>
+                  <td style={S.td}><button style={{ ...S.btnS, padding:'2px 6px', fontSize:11 }} onClick={() => stergeRand(i)} disabled={blocat} title="Șterge rândul" aria-label={`Șterge rândul ${i + 1}`}>✕</button></td>
                 </tr>
               )
               return pr.length ? [rand, <tr key={`p-${r._id}`} style={{ background: fond }}><td /><td colSpan={10} style={{ padding:'0 8px 6px', fontSize:11 }}>{pr.map((p, j) => <div key={j} style={{ color:CULOARE_NIVEL[p.nivel] }}>{p.mesaj}</div>)}</td></tr>] : [rand]
@@ -626,7 +677,7 @@ function Confirmare({ buletin, tronson, buletineTronson, eliminate, onSchimbat }
       <div style={{ display:'flex', flexWrap:'wrap', gap:10, alignItems:'center', marginTop:12 }}>
         {verificari.rezumat.atentie > 0 && (
           <label style={{ fontSize:12, color:G.yellow, display:'flex', gap:6, alignItems:'center' }}>
-            <input type="checkbox" checked={verificat} onChange={e => setVerificat(e.target.checked)} /> Am verificat avertismentele pe PDF
+            <input type="checkbox" checked={verificat} onChange={e => setVerificat(e.target.checked)} disabled={blocat} /> Am verificat avertismentele pe PDF
           </label>
         )}
         <button style={S.btnP} onClick={confirma} disabled={!!lucru || !pregatit.ok || !!comparatie}>{lucru === 'confirmare' ? 'Se confirmă…' : `✔ Confirmă ${randuri.length} rânduri`}</button>
@@ -641,7 +692,7 @@ function Confirmare({ buletin, tronson, buletineTronson, eliminate, onSchimbat }
 const ETICHETA_COMPARATIE = { diferit: 'diferit', incert: 'incert', dublat: 'de două ori', doar_in_A: 'doar în prima', doar_in_B: 'doar în a doua' }
 const ETICHETA_VARIANTA = { a: 'prima', b: 'a doua', pastreaza: 'păstrează', scoate: 'scoate' }
 const rezumatRand = r => !r ? '—' : [r.cod_raw, r.rezultat, r.data_inspectie, ...CAMPURI_INDICATII.map(k => r[k]).filter(x => x != null && x !== ''), r.observatii].filter(x => x != null && x !== '').join(' · ')
-function AlegeriComparatie({ comparatie, alegeri, setAlegeri, onAplica, onRenunta }) {
+function AlegeriComparatie({ comparatie, alegeri, setAlegeri, blocat, onAplica, onRenunta }) {
   const deAles = comparatie.randuri.filter(x => VARIANTE_ALEGERE[x.stare])
   return (
     <div style={{ margin:'10px 0', padding:10, border:`1px solid ${G.blue}66`, borderRadius:8 }}>
@@ -655,7 +706,7 @@ function AlegeriComparatie({ comparatie, alegeri, setAlegeri, onAplica, onRenunt
             <div style={{ flex:1 }}>
               {VARIANTE_ALEGERE[x.stare].map(v => (
                 <label key={v} style={{ display:'flex', gap:6, alignItems:'flex-start', cursor:'pointer' }}>
-                  <input type="radio" name={`al-${x.cheie}`} checked={alegeri[x.cheie] === v} onChange={() => setAlegeri(a => ({ ...a, [x.cheie]: v }))} />
+                  <input type="radio" name={`al-${x.cheie}`} checked={alegeri[x.cheie] === v} disabled={blocat} onChange={() => setAlegeri(a => ({ ...a, [x.cheie]: v }))} />
                   <span><b>{ETICHETA_VARIANTA[v]}</b>{v === 'a' || v === 'b' ? `: ${x.stare === 'dublat' ? (x[v] || []).map(rezumatRand).join(' | ') : rezumatRand(x[v])}` : ''}</span>
                 </label>
               ))}
@@ -664,8 +715,8 @@ function AlegeriComparatie({ comparatie, alegeri, setAlegeri, onAplica, onRenunt
         ))}
       </div>
       <div style={{ display:'flex', gap:8, marginTop:8 }}>
-        <button style={S.btnP} onClick={onAplica}>Aplică alegerile</button>
-        <button style={S.btnS} onClick={onRenunta}>Renunță (rămâne prima citire)</button>
+        <button style={S.btnP} onClick={onAplica} disabled={blocat}>Aplică alegerile</button>
+        <button style={S.btnS} onClick={onRenunta} disabled={blocat}>Renunță (rămâne prima citire)</button>
       </div>
     </div>
   )

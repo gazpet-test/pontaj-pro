@@ -235,15 +235,31 @@ export function randuriDinCitire(citire) {
   })
 }
 
+// Antetul recunoscut EXPLICIT (L12, Jakarinos #1218 r1): prima celulă = una dintre etichetele coloanei de cod,
+// iar a doua (dacă există) = o etichetă a coloanei de rezultat. Forma comparată: minuscule, fără diacritice,
+// orice alt semn → un spațiu. Orice altceva (ex. „ILIZIBIL<TAB>respins”) rămâne RÂND, marcat pentru verificare.
+const ANTET_COD = new Set(['cod', 'cod sudura', 'cod suduri', 'codul sudurii', 'sudura', 'suduri', 'nr sudura', 'numar sudura',
+  'nr suduri', 'identificare sudura', 'marca sudura', 'simbol sudura', 'weld', 'weld no', 'weld nr', 'weld number', 'weld id', 'joint', 'joint no', 'joint number'])
+const ANTET_REZULTAT = new Set(['rezultat', 'rezultatul', 'rezultat examinare', 'rezultatul examinarii', 'apreciere', 'evaluare', 'calificativ',
+  'concluzie', 'admis respins', 'acceptat respins', 'result', 'evaluation', 'acc rej'])
+const formaAntet = v => txt(v).normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+/** Linia lipită e antetul tabelului? Doar după etichetele cunoscute (fără ghicit din „nu are cifre”). */
+export function esteAntetLipire(celule) {
+  if (!Array.isArray(celule) || !ANTET_COD.has(formaAntet(celule[0]))) return false
+  return celule.length < 2 || !areText(celule[1]) || ANTET_REZULTAT.has(formaAntet(celule[1]))
+}
+export const MOTIV_VERIFICA_LIPIRE = 'Rând lipit cu codul fără nicio cifră (poate un antet nerecunoscut sau un cod ilizibil): verifică-l pe PDF; dacă e antet, șterge-l.'
+
 /**
  * Text lipit din Excel (TAB între coloane, rând nou între rânduri), în ordinea COLOANE_LIPIRE.
- * Liniile goale se sar (Excel pune una la final); un rând de antet (prima celulă = text fără cifre)
- * se sare și se spune. Mai multe coloane decât
+ * Liniile goale se sar (Excel pune una la final). Se sare DOAR un antet recunoscut explicit (esteAntetLipire),
+ * pe prima linie cu date, și se spune. Orice alt rând rămâne în tabel (nimic pierdut, L12); cele cu codul fără
+ * nicio cifră primesc `_verifica` (avertisment pe rând până la corectarea codului). Mai multe coloane decât
  * tabelul = eroare pe linie, nu tăiere (L12/L21).
- * @returns {{randuri:Array, erori:string[], antetSarit:boolean}}
+ * @returns {{randuri:Array, erori:string[], antetSarit:boolean, deVerificat:number}}
  */
 export function parseazaLipire(text) {
-  const out = { randuri: [], erori: [], antetSarit: false }
+  const out = { randuri: [], erori: [], antetSarit: false, deVerificat: 0 }
   const linii = String(text ?? '').split(/\r?\n/)
   linii.forEach((linie, i) => {
     if (!/\S/.test(linie)) return
@@ -253,13 +269,13 @@ export function parseazaLipire(text) {
       out.erori.push(`Linia ${i + 1} are ${celule.length} coloane; tabelul are ${COLOANE_LIPIRE.length} (cod, rezultat, dată, start, end, lungime, înălțime, adâncime, observații).`)
       return
     }
-    // antet: doar prima linie cu date, iar prima ei celulă e text fără nicio cifră (orice cod de sudură are cifre)
-    if (!out.randuri.length && !out.erori.length && !out.antetSarit && /[^\d\s]/.test(celule[0] || '') && !/\d/.test(celule[0] || '')) {
+    if (!out.randuri.length && !out.erori.length && !out.antetSarit && esteAntetLipire(celule)) {
       out.antetSarit = true
       return
     }
     const r = randGol()
     COLOANE_LIPIRE.forEach((k, j) => { r[k] = celule[j] ?? '' })
+    if (areText(r.cod_raw) && !/\d/.test(r.cod_raw)) { r._verifica = MOTIV_VERIFICA_LIPIRE; out.deVerificat++ }
     out.randuri.push(r)
   })
   return out
@@ -344,6 +360,31 @@ export function combinaCitiri(comparatie, alegeri = {}) {
   return { randuri, nealese }
 }
 
+/**
+ * Semnalele de completitudine ale AMBELOR citiri, păstrate după „Aplică alegerile” până la confirmare (L12, Jakarinos #1218 r1):
+ * partial = oricare; pagini necitite = reuniunea; incerte = toate, cu citirea din care vin; totalul tipărit = cel comun
+ * (două valori diferite → null + `tiparit_diferit`, nu se alege una). Antetul primei citiri rămâne `antet`, al celei
+ * de-a doua merge în `antet_b` (verificat și el față de buletinul înregistrat). Rândurile NU sunt aici (le dă tabelul).
+ */
+export function combinaSemnaleCitiri(a, b) {
+  if (!a) return b || null
+  if (!b) return a
+  const tA = a.antet?.nr_randuri_tiparit ?? null, tB = b.antet?.nr_randuri_tiparit ?? null
+  const diferit = Number.isInteger(tA) && Number.isInteger(tB) && tA !== tB
+  const pagini = [...new Set([...(a.pagini_necitite || []), ...(b.pagini_necitite || [])])].sort((x, y) => x - y)
+  return {
+    antet: { ...(a.antet || {}), nr_randuri_tiparit: diferit ? null : (tA ?? tB) },
+    antet_b: b.antet || null,
+    tiparit_diferit: diferit ? [tA, tB] : null,
+    randuri: [],
+    incerte: [...(a.incerte || []).map(x => ({ citire: 'prima', valoare: x })), ...(b.incerte || []).map(x => ({ citire: 'a doua', valoare: x }))],
+    partial: a.partial === true || b.partial === true,
+    partial_din: [a.partial === true && 'prima', b.partial === true && 'a doua'].filter(Boolean),
+    pagini_necitite: pagini,
+    model: [a.model, b.model].filter(Boolean).join(' + ') || null,
+  }
+}
+
 // ── rândurile din arhivă (sud_buletin_randuri) → intrarea lui starePeSudura ─
 /**
  * Un rând confirmat din BD + antetul buletinului lui → forma cerută de starePeSudura.
@@ -389,25 +430,31 @@ export function calculeazaVerificari({ randuri, citire = null, buletin, tronsonC
   const tiparit = citire?.antet?.nr_randuri_tiparit ?? null
   if (Number.isInteger(tiparit) && tiparit > 0) {
     if (lista.length !== tiparit) probleme.push(P('numar_randuri', 'atentie', `Buletinul arată ${tiparit} rânduri (ultimul nr. crt. / total tipărit); în tabel sunt ${lista.length}.`))
+  } else if (Array.isArray(citire?.tiparit_diferit)) {
+    probleme.push(P('numar_randuri_diferit', 'atentie', `Cele două citiri dau totaluri tipărite diferite (${citire.tiparit_diferit.join(' / ')}): numără rândurile pe PDF (ultimul nr. crt.).`))
   } else {
     probleme.push(P('numar_randuri_necunoscut', 'info', 'Totalul tipărit al buletinului nu e cunoscut: numără rândurile pe PDF (ultimul nr. crt.).'))
   }
 
-  // 5. citire parțială / pagini necitite / valori incerte
-  if (citire?.partial === true) probleme.push(P('citire_partiala', 'atentie', 'Citirea AI spune că e parțială: verifică pe PDF rândurile lipsă.'))
+  // 5. citire parțială / pagini necitite / valori incerte (după a doua citire: din AMBELE, combinaSemnaleCitiri)
+  const dinCitiri = citire?.partial_din?.length ? ` (${citire.partial_din.join(', ')} citire)` : ''
+  if (citire?.partial === true) probleme.push(P('citire_partiala', 'atentie', `Citirea AI spune că e parțială${dinCitiri}: verifică pe PDF rândurile lipsă.`))
   if (citire?.pagini_necitite?.length) probleme.push(P('pagini_necitite', 'atentie', `Pagini necitite: ${citire.pagini_necitite.join(', ')}.`))
   if (citire?.incerte?.length) probleme.push(P('valori_incerte', 'atentie', `Citirea AI are ${citire.incerte.length} valori incerte: verifică-le pe PDF.`))
 
-  // antetul citit față de ce s-a înregistrat (corectura = anulare + reîncărcare, R5)
-  const a = citire?.antet
-  if (a) {
-    if (areText(a.numar) && canonNr(a.numar) !== canonNr(buletin?.numar)) probleme.push(P('antet_numar', 'atentie', `Numărul citit („${txt(a.numar)}”) diferă de cel înregistrat („${txt(buletin?.numar)}”). Dacă e greșit înregistrat: anulează și reîncarcă.`))
+  // rândurile lipite cu codul fără cifre (posibil antet nerecunoscut): rămân în tabel, marcate (parseazaLipire)
+  lista.forEach((r, i) => { if (r?._verifica) probleme.push(P('rand_de_verificat', 'atentie', r._verifica, i)) })
+
+  // antetul citit față de ce s-a înregistrat (corectura = anulare + reîncărcare, R5); după a doua citire, ambele antete
+  for (const [a, din] of [[citire?.antet, ''], [citire?.antet_b, ' (a doua citire)']]) {
+    if (!a) continue
+    if (areText(a.numar) && canonNr(a.numar) !== canonNr(buletin?.numar)) probleme.push(P('antet_numar', 'atentie', `Numărul citit${din} („${txt(a.numar)}”) diferă de cel înregistrat („${txt(buletin?.numar)}”). Dacă e greșit înregistrat: anulează și reîncarcă.`))
     const dA = dataIso(typeof a.data === 'string' ? a.data : null)
-    if (typeof dA === 'string' && dA !== buletin?.data_buletin) probleme.push(P('antet_data', 'atentie', `Data citită (${fmtData(dA)}) diferă de cea înregistrată (${fmtData(buletin?.data_buletin)}).`))
+    if (typeof dA === 'string' && dA !== buletin?.data_buletin) probleme.push(P('antet_data', 'atentie', `Data citită${din} (${fmtData(dA)}) diferă de cea înregistrată (${fmtData(buletin?.data_buletin)}).`))
     const mA = normalizeazaMetoda(a.metoda)
-    if (mA && metoda && mA !== metoda) probleme.push(P('antet_metoda', 'atentie', `Metoda citită (${mA}) diferă de cea aleasă (${metoda}).`))
+    if (mA && metoda && mA !== metoda) probleme.push(P('antet_metoda', 'atentie', `Metoda citită${din} (${mA}) diferă de cea aleasă (${metoda}).`))
     const tA = tronsonNrDinCod(a.tronson) ?? (/^\s*\d{1,3}\s*$/.test(txt(a.tronson)) ? Number(txt(a.tronson)) : null)
-    if (areText(a.tronson) && tNr !== null && tA !== tNr) probleme.push(P('antet_tronson', 'atentie', `Tronsonul citit („${txt(a.tronson)}”) diferă de tronsonul încărcării (${txt(tronsonCod)}).`))
+    if (areText(a.tronson) && tNr !== null && tA !== tNr) probleme.push(P('antet_tronson', 'atentie', `Tronsonul citit${din} („${txt(a.tronson)}”) diferă de tronsonul încărcării (${txt(tronsonCod)}).`))
   }
 
   // 4. codurile: normalizare, existență în pachete, dubluri, eliminate
