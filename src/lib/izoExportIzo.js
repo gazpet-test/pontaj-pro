@@ -4,7 +4,7 @@
 // Fără Supabase, fără DOM. Regulile de business (starea pe sudură, coloanele K–M, lipsurile) sunt în izoNdt.js
 // (o singură definiție, L19); aici doar: rândurile din BD → intrarea lor, fotografia trimisă la
 // fn_sud_export_inregistreaza, gruparea lipsurilor pentru fereastră, planul ZIP-ului, numele fișierului și
-// diferențele „export depășit” (R6).
+// diferențele „export depășit” (R6), amprenta pachetului și a rândurilor lui.
 
 import { starePeSudura, verificaExport, coloaneCentralizator, normalizeazaRandBuletin, dataRo, METODE_CENTRALIZATOR } from './izoNdt.js'
 
@@ -95,7 +95,7 @@ export function evalueazaExportIzo({ pachet, tronson, tevi, arhiva }) {
     if (conv.nepotrivite.length) verificare.avertismente.push(el('randuri_buletin_nepotrivite', null, `${conv.nepotrivite.length} rânduri din buletinele confirmate au cod de sudură nepotrivit pe tronson și nu acoperă nicio sudură.`))
     for (const b of conv.faraRanduri) verificare.avertismente.push(el('buletin_fara_randuri', null, `Buletinul ${eticheta(b)} e confirmat, dar nu i s-a citit niciun rând.`))
   }
-  const fotografie = ok && metode !== undefined ? construiesteFotografie({ arhiva, verificare }) : null
+  const fotografie = ok && metode !== undefined ? construiesteFotografie({ arhiva, verificare, pachet, tevi }) : null
   return { stare, verificare, fotografie, info: conv ? { nrBuletine: (arhiva.buletine || []).length, nepotrivite: conv.nepotrivite.length } : null }
 }
 
@@ -105,8 +105,11 @@ export function evalueazaExportIzo({ pachet, tronson, tevi, arhiva }) {
  * pentru citirea diferențelor mai târziu, serverul o ignoră), cheile sudurilor eliminate active, metodele obligatorii,
  * lipsurile blocante (= cele deblocate de MP; la exportul complet []) și avertismentele. Ordonate, ca două citiri egale
  * să dea aceeași fotografie.
+ * În plus (Jakarinos #1219 r1 P1): amprenta PACHETULUI (pachet) și a RÂNDURILOR lui (randuri), din exact copia folosită la
+ * generare. Serverul NU le compară (fn_sud_export_inregistreaza verifică doar buletine / eliminate / metode / lipsuri); le
+ * compară clientul: imediat înainte de generare și din nou înainte de înregistrare (verificaPachetNeschimbat) + „export depășit”.
  */
-export function construiesteFotografie({ arhiva, verificare }) {
+export function construiesteFotografie({ arhiva, verificare, pachet, tevi }) {
   const buletine = (arhiva.buletine || []).map(b => ({ id: Number(b.id), versiune: Number(b.versiune), eticheta: eticheta(b) }))
     .sort((a, b) => a.id - b.id)
   const scurt = l => l.map(x => ({ cod: x.cod, rand: x.rand ?? null, mesaj: x.mesaj }))
@@ -116,7 +119,83 @@ export function construiesteFotografie({ arhiva, verificare }) {
     metode: [...(arhiva.metode || [])].map(String).sort(),
     lipsuri_blocante: scurt(verificare.blocajeDeblocabile),
     avertismente: scurt(verificare.avertismente),
+    pachet: amprentaPachet(pachet),
+    randuri: amprentaRanduri(tevi),
   }
+}
+
+// ── 4b. amprenta pachetului și a rândurilor (R6 pe pachet) ───────────────
+// Câmpurile rândului care intră în Excel (exportCentralizatorXlsx) sau în verificare; id-ul prinde și rândurile înlocuite.
+export const CAMPURI_RAND_AMPRENTA = ['id', 'poz_in_pachet', 'tip_rand', 'serie_unica', 'sudura_cod', 'sudura_refacuta', 'lungime_m', 'tip',
+  'dimensiune', 'sarja', 'unghi_curba', 'lot', 'observatii', 'pm_cod', 'pa_ut_cod', 'ut_cod']
+const CAMPURI_NUMERICE = new Set(['poz_in_pachet', 'lungime_m', 'unghi_curba'])
+// Forma canonică doar pentru comparare (nu se scrie nicăieri): gol / null = null; numeric „12.50” = 12.5 (PostgREST vs editor).
+function valCanonica(camp, v) {
+  if (camp === 'id') return v === null || v === undefined ? null : String(v)
+  if (camp === 'sudura_refacuta') return v === true
+  if (v === null || v === undefined) return null
+  if (CAMPURI_NUMERICE.has(camp)) {
+    if (typeof v === 'number') return Number.isFinite(v) ? v : String(v)
+    if (!/\S/.test(String(v))) return null
+    const n = Number(v)
+    return Number.isFinite(n) ? n : String(v)
+  }
+  const s = String(v)
+  return /\S/.test(s) ? s : null
+}
+// hash nesecret, determinist (cyrb53 pe 64 de biți): detectează o schimbare, nu e o dovadă criptografică
+function hash64(s) {
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i)
+    h1 = Math.imul(h1 ^ c, 2654435761); h2 = Math.imul(h2 ^ c, 1597334677)
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909)
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909)
+  return (h2 >>> 0).toString(16).padStart(8, '0') + (h1 >>> 0).toString(16).padStart(8, '0')
+}
+const cmpId = (a, b) => {
+  const x = Number(a), y = Number(b)
+  if (Number.isFinite(x) && Number.isFinite(y) && x !== y) return x - y
+  return String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0
+}
+
+/** Amprenta pachetului: id, updated_at, km start, revizie, cod. null = pachet necunoscut. */
+export function amprentaPachet(p) {
+  if (!p || p.id === null || p.id === undefined) return null
+  return {
+    id: Number(p.id),
+    updated_at: p.updated_at === null || p.updated_at === undefined ? null : String(p.updated_at),
+    km_start_m: valCanonica('lungime_m', p.km_start_m),
+    revizie: valCanonica('lungime_m', p.revizie),
+    cod_document_full: valCanonica('cod', p.cod_document_full),
+  }
+}
+
+/** Amprenta deterministă a rândurilor (ordinea de citire nu contează: sortate pe id). null = rânduri necitite. */
+export function amprentaRanduri(tevi) {
+  if (!Array.isArray(tevi)) return null
+  const linii = tevi.map(r => CAMPURI_RAND_AMPRENTA.map(c => valCanonica(c, r?.[c]))).sort((a, b) => cmpId(a[0], b[0]))
+  return { numar: linii.length, amprenta: hash64(JSON.stringify([CAMPURI_RAND_AMPRENTA, linii])) }
+}
+
+/**
+ * Diferențele pe pachet + rânduri între două fotografii (sau fotografie vs amprentele recitite din BD).
+ * Amprentă lipsă pe oricare parte = o diferență explicită (necunoscut ≠ neschimbat, L18).
+ */
+export function diferentePachet(veche, curenta, cand = 'după export') {
+  const vp = veche?.pachet, vr = veche?.randuri, cp = curenta?.pachet, cr = curenta?.randuri
+  if (!vp || !vr) return ['Exportul anterior nu are amprenta pachetului: nu se poate spune dacă rândurile sunt la zi.']
+  if (!cp || !cr) return ['Pachetul sau rândurile lui nu s-au putut citi: nu se poate spune dacă sunt la zi.']
+  const dif = []
+  if (vp.id !== cp.id) dif.push(`Alt pachet (${vp.id} → ${cp.id}).`)
+  if (vp.km_start_m !== cp.km_start_m) dif.push(`Km start s-a schimbat ${cand}: ${vp.km_start_m ?? '—'} → ${cp.km_start_m ?? '—'}.`)
+  if (vp.revizie !== cp.revizie) dif.push(`Revizia s-a schimbat ${cand}: ${vp.revizie ?? '—'} → ${cp.revizie ?? '—'}.`)
+  if (vp.cod_document_full !== cp.cod_document_full) dif.push(`Codul documentului s-a schimbat ${cand}.`)
+  if (vr.numar !== cr.numar) dif.push(`Numărul de rânduri s-a schimbat ${cand}: ${vr.numar} → ${cr.numar}.`)
+  else if (vr.amprenta !== cr.amprenta) dif.push(`Rândurile pachetului s-au schimbat ${cand} (serie, sudură, lungime, tip, dimensiune, șarjă sau PM / PA-UT / UT).`)
+  if (vp.updated_at !== cp.updated_at && !dif.length) dif.push(`Pachetul a fost salvat ${cand}.`)
+  return dif
 }
 
 // ── 5. lipsurile → fereastra ─────────────────────────────────────────────
@@ -245,5 +324,7 @@ export function diferenteFotografie(veche, curenta) {
   const prima = (l, k) => l.find(x => cheieLipsa(x) === k)
   for (const [k, n] of lc) if ((lv.get(k) || 0) < n) dif.push(`Lipsă nouă: ${prima(curenta.lipsuri_blocante, k).mesaj}`)
   for (const [k, n] of lv) if ((lc.get(k) || 0) < n) dif.push(`Lipsă rezolvată: ${prima(veche.lipsuri_blocante, k).mesaj}`)
+  // pachetul + rândurile lui (km, revizie, serie, lungime, …): o schimbare aici face exportul depășit chiar fără buletine noi
+  dif.push(...diferentePachet(veche, curenta, 'după export'))
   return dif
 }

@@ -1284,7 +1284,11 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
         .from('executie_proiecte').select('*').eq('id', p.proiect_id).single()
       if (errProiect) return { ok: false, eroare: 'Eroare load proiect: ' + errProiect.message }
       const rez = await executaExportIzo(supabase, { pachet: p, tronson: tr, proiect, tevi: tv, evaluare, arhiva, incomplet, motiv, genereazaXlsx: generateCentralizatorXlsx })
-      if (!rez.ok) return rez
+      if (!rez.ok) {
+        // pachetul s-a schimbat în BD: editorul se reîncarcă ÎNAINTE ca „Redeschide verificarea” să-i copieze starea
+        if (rez.surseSchimbate && pachetIdRef.current === idLaStart) await Promise.all([refetchPachet(), refetchTevi()])
+        return rez
+      }
       // descărcare locală (exportul e deja înregistrat)
       const url = URL.createObjectURL(new Blob([rez.bytes], { type: 'application/zip' }))
       const a = document.createElement('a')
@@ -1295,6 +1299,7 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
       if (rez.avertisment) onWarn(rez.avertisment)
+      if (rez.separat) onWarn(`Arhiva are ${(rez.bytes.length / 1024 / 1024).toFixed(1)} MB, peste limita de 50 MB a serverului: pe server s-au salvat separat Excel-ul și cele ${rez.plan.length} PDF-uri; arhiva completă s-a descărcat pe calculator.`)
       onSuccess(`✓ ${rez.nume} (${(rez.bytes.length / 1024).toFixed(1)} KB · ${rez.plan.length} buletine)`)
       if (pachetIdRef.current === idLaStart) {   // L24: alt pachet deschis între timp → nu-i ating starea
         setShowExport(false)

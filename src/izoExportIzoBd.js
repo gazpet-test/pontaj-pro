@@ -7,11 +7,18 @@
 
 import JSZip from 'jszip'
 import { paginareKeyset } from './hrDeciziiUtil.js'
-import { TIP_EXPORT_IZO, numeExportIzo, planBuletineZip } from './lib/izoExportIzo.js'
+import { TIP_EXPORT_IZO, numeExportIzo, planBuletineZip, amprentaPachet, amprentaRanduri, diferentePachet } from './lib/izoExportIzo.js'
 
 const BUCKET_NDT = 'izo-ndt'
 const BUCKET_PACHETE = 'executie-pachete-pdf'
 const BUCATA_IN = 100   // id-uri pe bucăți în .in() (URL scurt)
+// Bucket-ul executie-pachete-pdf (producție, 27.11.2026): file_size_limit 50 MB; tipurile permise NU includ application/zip
+// (doar pdf, xlsx, xls, dwg/dxf, application/octet-stream, jpeg, png) → ZIP-ul urcă drept octet-stream, cu numele .zip.
+export const LIMITA_FISIER_STORAGE = 50 * 1024 * 1024   // 52.428.800 octeți
+export const MIME_ZIP_STORAGE = 'application/octet-stream'
+const MIME_XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+const MIME_PDF = 'application/pdf'
+const mb = n => (n / 1024 / 1024).toFixed(1).replace('.', ',')
 
 const mesaj = e => (e && (e.message || e.error_description)) || String(e)
 const bucati = (l, n) => { const o = []; for (let i = 0; i < l.length; i += n) o.push(l.slice(i, i + n)); return o }
@@ -94,6 +101,33 @@ export async function citesteUltimExport(sb, pachetId) {
   return { data: data?.[0] || null }
 }
 
+/**
+ * Recitește pachetul + TOATE rândurile lui din BD și le compară cu amprenta din fotografie (Jakarinos #1219 r1 P1).
+ * Serverul nu verifică pachetul la înregistrare, deci verificarea e aici, chemată imediat înainte de generare și din nou
+ * înainte de fn_sud_export_inregistreaza. Citire eșuată = eroare (necunoscut), nu „neschimbat” (L18).
+ * @returns {Promise<{ok:true} | {ok:false, eroare:string, surseSchimbate?:true, pachetSchimbat?:true, dif?:string[]}>}
+ */
+export async function verificaPachetNeschimbat(sb, fotografie) {
+  const id = fotografie?.pachet?.id
+  if (!fotografie?.pachet || !fotografie?.randuri) return { ok: false, eroare: 'Fotografia nu are amprenta pachetului: redeschide fereastra.' }
+  try {
+    const p = await sb.from('executie_pachete_lansare').select('*').eq('id', id).maybeSingle()
+    if (p.error) throw p.error
+    if (!p.data) return { ok: false, surseSchimbate: true, pachetSchimbat: true, eroare: 'Pachetul nu mai există — închide fereastra.' }
+    const tevi = await paginareKeyset((ultim, pas) => {
+      let q = sb.from('executie_tevi').select('*').eq('pachet_id', id)
+      if (ultim != null) q = q.gt('id', ultim)
+      return q.order('id').limit(pas)
+    })
+    for (const r of tevi) if (String(r.pachet_id) !== String(id)) throw new Error(`rândul ${r.id} nu e din pachetul ${id}`)
+    const dif = diferentePachet(fotografie, { pachet: amprentaPachet(p.data), randuri: amprentaRanduri(tevi) }, 'de la deschiderea ferestrei')
+    if (dif.length) return { ok: false, surseSchimbate: true, pachetSchimbat: true, dif, eroare: `Pachetul s-a schimbat — redeschide fereastra. ${dif.join(' ')}` }
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, eroare: `Pachetul nu s-a putut reciti (${mesaj(e)}): exportul s-a oprit, reîncearcă.` }
+  }
+}
+
 async function sha256Hex(bytes) {
   const h = await globalThis.crypto.subtle.digest('SHA-256', bytes)
   return [...new Uint8Array(h)].map(x => x.toString(16).padStart(2, '0')).join('')
@@ -127,18 +161,26 @@ export async function construiesteZip({ numeXlsx, xlsx, pdfuri }) {
 const definitiva = e => !!e && (/^(?:22|23|40|42|55|P0|PGRST)/.test(String(e.code || '')) || (Number(e.status) >= 400 && Number(e.status) < 500))
 
 /**
- * Exportul: PDF-uri → (deblocare) → Excel → ZIP → Storage → fn_sud_export_inregistreaza → rândul în istoric.
- * Generarea folosește EXACT evaluarea (fotografia) din fereastră. Nu se descarcă local nimic neînregistrat.
+ * Exportul: PDF-uri → pachetul recitit → Excel → ZIP → (deblocare) → Storage → pachetul recitit → fn_sud_export_inregistreaza
+ * → rândul în istoric. Generarea folosește EXACT evaluarea (fotografia) din fereastră. Nu se descarcă local nimic neînregistrat.
+ * ZIP peste limita bucket-ului: pe server Excel-ul + fiecare PDF separat (același dosar), înregistrate cu lista fișierelor;
+ * ZIP-ul întreg se descarcă local (separat: true).
  * @param {object} p
  * @param {Function} p.genereazaXlsx  generateCentralizatorXlsx
- * @returns {Promise<{ok:true, bytes, nume, storagePath, exportId, avertisment?:string} | {ok:false, eroare:string, surseSchimbate?:boolean}>}
+ * @param {number} [p.limita]  limita de mărime a unui fișier în Storage (implicit 50 MB; testele o micșorează)
+ * @returns {Promise<{ok:true, bytes, nume, storagePath, fisiere:string[], separat:boolean, exportId, avertisment?:string}
+ *   | {ok:false, eroare:string, surseSchimbate?:boolean, pachetSchimbat?:boolean}>}
  */
-export async function executaExportIzo(sb, { pachet, tronson, proiect, tevi, evaluare, arhiva, incomplet, motiv, genereazaXlsx, fetchImpl, acum = new Date(), uniq }) {
+export async function executaExportIzo(sb, { pachet, tronson, proiect, tevi, evaluare, arhiva, incomplet, motiv, genereazaXlsx, fetchImpl, acum = new Date(), uniq, limita = LIMITA_FISIER_STORAGE }) {
   const fotografie = evaluare?.fotografie
   if (!fotografie) return { ok: false, eroare: 'Fotografia surselor lipsește: redeschide fereastra.' }
   if (evaluare.verificare.blocaje.length) return { ok: false, eroare: 'Exportul are blocaje fără deblocare.' }
   if (!incomplet && fotografie.lipsuri_blocante.length) return { ok: false, eroare: 'Exportul are lipsuri: e nevoie de deblocarea managerului de proiect.' }
   if (incomplet && !fotografie.lipsuri_blocante.length) return { ok: false, eroare: 'Nu există lipsuri de deblocat.' }
+  // copia trimisă la generare = cea din care s-a făcut fotografia (altfel Excel-ul n-ar corespunde verificării)
+  if (diferentePachet(fotografie, { pachet: amprentaPachet(pachet), randuri: amprentaRanduri(tevi) }).length) {
+    return { ok: false, surseSchimbate: true, eroare: 'Copia pachetului nu corespunde verificării: redeschide fereastra.' }
+  }
 
   // 1. buletinele folosite + PDF-urile lor (înainte de orice scriere: o descărcare eșuată nu lasă nimic în urmă)
   let plan
@@ -150,17 +192,43 @@ export async function executaExportIzo(sb, { pachet, tronson, proiect, tevi, eva
     for (const p of plan) pdfuri.push({ fisierZip: p.fisierZip, bytes: await descarcaPdfBuletin(sb, p.buletin, fetchImpl) })
   } catch (e) { return { ok: false, eroare: mesaj(e) } }
 
+  // 1b. pachetul + rândurile din BD = cele din fotografie, IMEDIAT înainte de generare (serverul nu le verifică)
+  const r1 = await verificaPachetNeschimbat(sb, fotografie)
+  if (!r1.ok) return r1
+
   // 2. Excel + ZIP
   const numeXlsx = numeExportIzo(pachet, { incomplet, ext: 'xlsx' })
   const nume = numeExportIzo(pachet, { incomplet, ext: 'zip' })
-  let bytes
+  let bytes, xlsx
   try {
-    const xlsx = await genereazaXlsx({
+    xlsx = await genereazaXlsx({
       pachet, tronson, proiect, tevi,
       ndt: { stare: evaluare.stare, tronsonCtx: tronson?.cod, buletine: plan, incomplet, lipsuri: incomplet ? fotografie.lipsuri_blocante : [] },
     })
     bytes = await construiesteZip({ numeXlsx, xlsx, pdfuri })
   } catch (e) { return { ok: false, eroare: 'Generarea exportului: ' + mesaj(e) } }
+
+  // 2b. mărimea (bucket 50 MB): ZIP-ul încape → un fișier; altfel Excel-ul + fiecare PDF separat, în dosarul exportului.
+  // Un fișier care singur trece de limită = refuz ÎNAINTE de orice scriere (nu se poate livra pe server).
+  const ts = acum.toISOString().slice(0, 10)
+  const cheie = uniq || Math.random().toString(36).slice(2, 10)
+  const separat = bytes.length > limita
+  let fisiere
+  if (!separat) {
+    fisiere = [{ cale: `${pachet.id}/${ts}_${cheie}_${nume}`, bytes, mime: MIME_ZIP_STORAGE }]
+  } else {
+    const dosar = `${pachet.id}/${ts}_${cheie}_${nume.replace(/\.zip$/i, '')}`
+    fisiere = [{ cale: `${dosar}/${numeXlsx}`, bytes: xlsx, mime: MIME_XLSX, nume: numeXlsx },
+      ...pdfuri.map(p => ({ cale: `${dosar}/${p.fisierZip}`, bytes: p.bytes, mime: MIME_PDF, nume: p.fisierZip }))]
+    const mare = fisiere.filter(f => f.bytes.length > limita)
+    if (mare.length) {
+      return { ok: false, eroare: `Arhiva are ${mb(bytes.length)} MB, iar ${mare.map(f => `${f.nume} (${mb(f.bytes.length)} MB)`).join(', ')} `
+        + `trec singure de limita de ${mb(limita)} MB a serverului: exportul nu se poate încărca. Nu s-a scris nimic.` }
+    }
+  }
+  const storagePath = fisiere[0].cale   // calea principală: ZIP-ul, respectiv Excel-ul la livrarea separată
+  const urcate = []   // căile încărcate de ACEST export (doar ele se pot scoate, și doar fără înregistrare)
+  const scoate = async () => { await sb.storage.from(BUCKET_PACHETE).remove(urcate).catch(() => {}) }
 
   // 3. deblocarea MP-ului (doar la incomplet), pentru EXACT lipsurile din fotografie
   let deblocareId = null
@@ -170,38 +238,54 @@ export async function executaExportIzo(sb, { pachet, tronson, proiect, tevi, eva
     deblocareId = d.data
   }
 
-  // 4. Storage
-  const ts = acum.toISOString().slice(0, 10)
-  const cheie = uniq || Math.random().toString(36).slice(2, 10)
-  const storagePath = `${pachet.id}/${ts}_${cheie}_${nume}`
-  const up = await sb.storage.from(BUCKET_PACHETE).upload(storagePath, new Blob([bytes], { type: 'application/zip' }), { contentType: 'application/zip', upsert: false })
-  if (up.error) return { ok: false, eroare: 'Încărcarea arhivei a eșuat (' + mesaj(up.error) + '); nu s-a înregistrat nimic, reîncearcă.' }
+  // 4. Storage. ZIP-ul urcă drept application/octet-stream (application/zip nu e permis în bucket), cu numele .zip.
+  for (const f of fisiere) {
+    const up = await sb.storage.from(BUCKET_PACHETE).upload(f.cale, new Blob([f.bytes], { type: f.mime }), { contentType: f.mime, upsert: false })
+    if (up.error) {
+      // nimic înregistrat: fișierele deja urcate ale ACESTUI export nu sunt referite nicăieri → se scot
+      if (urcate.length) await scoate()
+      return { ok: false, eroare: `Încărcarea ${separat ? f.nume : 'arhivei'} a eșuat (${mesaj(up.error)}); nu s-a înregistrat nimic, reîncearcă.` }
+    }
+    urcate.push(f.cale)
+  }
+
+  // 4b. din nou, chiar înainte de înregistrare: pachetul nu s-a schimbat cât s-a generat / încărcat
+  const r2 = await verificaPachetNeschimbat(sb, fotografie)
+  if (!r2.ok) { await scoate(); return r2 }   // înregistrarea nu s-a cerut → fișierele sunt orfane sigur
 
   // 5. înregistrarea cu fotografia folosită (serverul o compară cu starea curentă: 40001 = sursele s-au schimbat)
-  const reg = await sb.rpc('fn_sud_export_inregistreaza', { p_pachet: pachet.id, p_tip: TIP_EXPORT_IZO, p_fotografie: fotografie, p_deblocare_id: deblocareId, p_fisier_path: storagePath })
+  //    + lista fișierelor (serverul păstrează fotografia întreagă; o ignoră la comparare)
+  const fotografieReg = { ...fotografie, livrare: separat ? 'separat' : 'zip', fisiere: fisiere.map(f => f.cale) }
+  const reg = await sb.rpc('fn_sud_export_inregistreaza', { p_pachet: pachet.id, p_tip: TIP_EXPORT_IZO, p_fotografie: fotografieReg, p_deblocare_id: deblocareId, p_fisier_path: storagePath })
   let exportId = reg.data
   if (reg.error) {
     if (definitiva(reg.error)) {
-      // refuz cert: nimic înregistrat → fișierul încărcat e orfan și se poate scoate (L02: doar după rezultat dovedit)
-      await sb.storage.from(BUCKET_PACHETE).remove([storagePath]).catch(() => {})
+      // refuz cert: nimic înregistrat → fișierele încărcate sunt orfane și se pot scoate (L02: doar după rezultat dovedit)
+      await scoate()
       if (String(reg.error.code) === '40001') return { ok: false, surseSchimbate: true, eroare: 'Sursele s-au schimbat între timp — redeschide fereastra de export.' }
       return { ok: false, eroare: 'Exportul a fost refuzat: ' + mesaj(reg.error) }
     }
-    // rețea / 5xx = necunoscut (L05): nu șterg fișierul; recitesc dacă exportul a ajuns totuși în BD (calea e unică)
+    // rețea / 5xx = necunoscut (L05): nu șterg fișierele; recitesc dacă exportul a ajuns totuși în BD (calea e unică)
     const u = await sb.from('sud_exporturi').select('id').eq('pachet_id', pachet.id).eq('fisier_path', storagePath).limit(1)
     if (!u.error && u.data?.length) exportId = u.data[0].id
     else return { ok: false, eroare: 'Înregistrarea exportului nu s-a putut confirma (' + mesaj(reg.error) + '). Verifică istoricul înainte de a reîncerca.' }
   }
 
-  // 6. istoricul documentelor pachetului (ca până acum)
+  // 6. istoricul documentelor pachetului (ca până acum; la livrarea separată rândul e Excel-ul, PDF-urile stau în același dosar)
   let avertisment
   const { data: auth } = await sb.auth.getUser()
-  const ins = await sb.from('executie_pachete_documente').insert({
+  const titlu = `Export IZO înainte de lansare${incomplet ? ' — INCOMPLET (deblocat)' : ''}`
+  const ins = await sb.from('executie_pachete_documente').insert(separat ? {
+    pachet_id: pachet.id, tip_document: 'centralizator', fisier_path: storagePath, fisier_nume: numeXlsx,
+    fisier_size_bytes: xlsx.length, mime_type: MIME_XLSX,
+    observatii: `${titlu}: arhiva avea ${mb(bytes.length)} MB (peste ${mb(limita)} MB) → pe server Excel-ul + ${plan.length} PDF-uri separate, în același dosar`,
+    uploadat_de: auth?.user?.id || null,
+  } : {
     pachet_id: pachet.id, tip_document: 'centralizator', fisier_path: storagePath, fisier_nume: nume,
     fisier_size_bytes: bytes.length, mime_type: 'application/zip',
-    observatii: `Export IZO înainte de lansare${incomplet ? ' — INCOMPLET (deblocat)' : ''}: Excel + ${plan.length} buletine NDT`,
+    observatii: `${titlu}: Excel + ${plan.length} buletine NDT`,
     uploadat_de: auth?.user?.id || null,
   })
   if (ins.error) avertisment = 'Exportul e înregistrat, dar rândul din istoric n-a fost scris (' + mesaj(ins.error) + ')'
-  return { ok: true, bytes, nume, storagePath, exportId, plan, avertisment }
+  return { ok: true, bytes, nume, storagePath, fisiere: fisiere.map(f => f.cale), separat, exportId, plan, avertisment }
 }

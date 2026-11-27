@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import { createHash } from 'node:crypto'
 import JSZip from 'jszip'
-import { citesteArhivaNdt, executaExportIzo, construiesteZip } from './izoExportIzoBd.js'
+import { citesteArhivaNdt, executaExportIzo, construiesteZip, verificaPachetNeschimbat, LIMITA_FISIER_STORAGE } from './izoExportIzoBd.js'
 import { evalueazaExportIzo } from './lib/izoExportIzo.js'
 
 const PDF = n => new TextEncoder().encode(`%PDF-1.4 buletin ${n}`)
@@ -52,7 +52,12 @@ function clientFals({ tabele = {}, rpc = {}, maxRows = 1000, storage = {}, drept
     storage: {
       from: (b) => ({
         createSignedUrl: async (p) => (storage.semnatEroare ? { data: null, error: { message: 'x' } } : { data: { signedUrl: `https://fals/${b}/${p}` }, error: null }),
-        upload: async (p, blob, o) => { jurnal.upload.push({ b, p, o, marime: blob.size }); return storage.uploadEroare ? { error: { message: 'plin' } } : { data: { path: p }, error: null } },
+        upload: async (p, blob, o) => {
+          jurnal.upload.push({ b, p, o, marime: blob.size, tip: blob.type })
+          if (storage.laUpload) storage.laUpload(p, jurnal.upload.length)
+          const err = typeof storage.uploadEroare === 'function' ? storage.uploadEroare(p, jurnal.upload.length) : storage.uploadEroare
+          return err ? { error: { message: 'plin' } } : { data: { path: p }, error: null }
+        },
         remove: async (l) => { jurnal.remove.push({ b, l }); return { data: null, error: null } },
       }),
     },
@@ -75,13 +80,15 @@ const tabeleBaza = () => ({
   executie_pachete_lansare: [
     { id: 8, tronson_id: 5, km_start_m: 900, total_lungime_m: 100, cod_document_full: 'A' },
     { id: 7, tronson_id: 5, km_start_m: 500, total_lungime_m: 100, cod_document_full: 'B' },
-    { id: 9, tronson_id: 5, km_start_m: 1000, total_lungime_m: 36, cod_document_full: 'C' },
+    { ...pachet },
   ],
+  // rândurile pachetului în BD (PostgREST întoarce numeric ca text uneori: „12.00” = 12)
+  executie_tevi: tevi.map(t => ({ ...t, lungime_m: '12.00' })).reverse(),
   sud_exporturi: [],
 })
-const pachet = { id: 9, proiect_id: 1, tronson_id: 5, km_start_m: 1000, total_lungime_m: 36, cod_document_full: '99_GAZ_X_DWG_00001', revizie: 0 }
+const pachet = { id: 9, proiect_id: 1, tronson_id: 5, km_start_m: 1000, total_lungime_m: 36, cod_document_full: '99_GAZ_X_DWG_00001', revizie: 0, updated_at: '2026-11-27T08:00:00.123456+00:00' }
 const tronson = { id: 5, cod: 'T7', proiect_id: 1 }
-const teava = (poz, serie, sudura_cod) => ({ id: 100 + poz, poz_in_pachet: poz, tip_rand: 'teava', serie_unica: serie, tip: 'L', dimensiune: 'DN300x8', sarja: `SJ${poz}`, lungime_m: 12, sudura_cod })
+const teava = (poz, serie, sudura_cod) => ({ id: 100 + poz, pachet_id: 9, poz_in_pachet: poz, tip_rand: 'teava', serie_unica: serie, tip: 'L', dimensiune: 'DN300x8', sarja: `SJ${poz}`, lungime_m: 12, sudura_cod, pm_cod: null, pa_ut_cod: null, ut_cod: null })
 const tevi = [teava(1, 'S-1', 'T7S1'), teava(2, 'S-2', 'T7S2'), teava(3, 'S-3', null)]
 const fetchFals = (harta) => async (url) => {
   const p = url.replace('https://fals/izo-ndt/', '')
@@ -146,9 +153,14 @@ describe('executaExportIzo — ZIP, Storage, înregistrare', () => {
     const zip = await JSZip.loadAsync(r.bytes)
     expect(Object.keys(zip.files).sort()).toEqual(['99_GAZ_X_DWG_00001_rev0_Centralizator.xlsx', 'buletine/', 'buletine/PA-UT_77_28.10.2026.pdf', 'buletine/PM_5_21.10.2026.pdf'])
     expect(new TextDecoder().decode(await zip.file('buletine/PM_5_21.10.2026.pdf').async('uint8array'))).toBe('%PDF-1.4 buletin b')
-    expect(sb.jurnal.upload).toEqual([{ b: 'executie-pachete-pdf', p: '9/2026-11-27_u1_99_GAZ_X_DWG_00001_rev0_Centralizator.zip', o: { contentType: 'application/zip', upsert: false }, marime: r.bytes.length }])
+    // bucket-ul de producție NU permite application/zip: ZIP-ul urcă drept application/octet-stream, numele rămâne .zip
+    expect(sb.jurnal.upload).toEqual([{ b: 'executie-pachete-pdf', p: '9/2026-11-27_u1_99_GAZ_X_DWG_00001_rev0_Centralizator.zip', o: { contentType: 'application/octet-stream', upsert: false }, marime: r.bytes.length, tip: 'application/octet-stream' }])
     const reg = sb.jurnal.rpc.find(x => x[0] === 'fn_sud_export_inregistreaza')[1]
-    expect(reg).toEqual({ p_pachet: 9, p_tip: 'izo', p_fotografie: evaluare.fotografie, p_deblocare_id: null, p_fisier_path: '9/2026-11-27_u1_99_GAZ_X_DWG_00001_rev0_Centralizator.zip' })
+    expect(reg).toEqual({ p_pachet: 9, p_tip: 'izo', p_fotografie: { ...evaluare.fotografie, livrare: 'zip', fisiere: ['9/2026-11-27_u1_99_GAZ_X_DWG_00001_rev0_Centralizator.zip'] }, p_deblocare_id: null, p_fisier_path: '9/2026-11-27_u1_99_GAZ_X_DWG_00001_rev0_Centralizator.zip' })
+    // fotografia poartă amprenta pachetului (updated_at, km, revizie) și a rândurilor
+    expect(reg.p_fotografie.pachet).toEqual({ id: 9, updated_at: '2026-11-27T08:00:00.123456+00:00', km_start_m: 1000, revizie: 0, cod_document_full: '99_GAZ_X_DWG_00001' })
+    expect(reg.p_fotografie.randuri).toMatchObject({ numar: 3 })
+    expect(r.separat).toBe(false)
     expect(sb.jurnal.rpc.some(x => x[0] === 'fn_sud_export_deblocheaza')).toBe(false)
     expect(sb.jurnal.insert).toEqual([{ t: 'executie_pachete_documente', row: expect.objectContaining({ pachet_id: 9, tip_document: 'centralizator', mime_type: 'application/zip', fisier_nume: r.nume }) }])
     // Excel-ul primește aceeași stare + planul buletinelor (foaia BULETINE)
@@ -223,6 +235,129 @@ describe('executaExportIzo — ZIP, Storage, înregistrare', () => {
     const r = await executaExportIzo(p2.sb, { pachet, tronson, proiect: {}, tevi, evaluare: p2.evaluare, arhiva: p2.arhiva, incomplet: false, genereazaXlsx: genereazaXlsxFals, fetchImpl: fetchFals(pdfuri) })
     expect(r.ok).toBe(false)
     expect(p2.sb.jurnal.rpc.some(x => x[0] === 'fn_sud_export_inregistreaza')).toBe(false)
+  })
+})
+
+// Jakarinos #1219 r1 P1: serverul nu compară pachetul → clientul recitește pachetul + rândurile înainte de generare și de înregistrare
+describe('executaExportIzo — pachetul schimbat după deschiderea ferestrei', () => {
+  const ruleaza = (sb, arhiva, evaluare, extra = {}) => {
+    genereazaXlsxFals.ultim = undefined
+    return executaExportIzo(sb, { pachet, tronson, proiect: {}, tevi, evaluare, arhiva, incomplet: false, genereazaXlsx: genereazaXlsxFals, fetchImpl: fetchFals(pdfuri), uniq: 'u9', ...extra })
+  }
+  const nimicScris = sb => {
+    expect(sb.jurnal.upload).toEqual([])
+    expect(sb.jurnal.rpc.filter(x => x[0] !== 'fn_sud_drept')).toEqual([])
+    expect(sb.jurnal.insert).toEqual([])
+  }
+  it('seria unui rând schimbată în BD (alt utilizator) → refuz „redeschide fereastra” înainte de generare, nimic scris', async () => {
+    const { sb, arhiva, evaluare } = await pregateste()
+    const rand = (await sb.from('executie_tevi').eq('id', 101)).data[0]
+    rand.serie_unica = 'ALTA'
+    const r = await ruleaza(sb, arhiva, evaluare)
+    expect(r).toMatchObject({ ok: false, surseSchimbate: true, pachetSchimbat: true })
+    expect(r.eroare).toMatch(/Pachetul s-a schimbat — redeschide fereastra/)
+    expect(genereazaXlsxFals.ultim).toBe(undefined)
+    nimicScris(sb)
+  })
+  it('km start / revizie / updated_at schimbate pe pachet → refuz; lungimea unui rând → refuz; un rând nou → refuz', async () => {
+    for (const schimba of [
+      t => { t.executie_pachete_lansare.find(p => p.id === 9).km_start_m = 1200 },
+      t => { t.executie_pachete_lansare.find(p => p.id === 9).revizie = 1 },
+      t => { t.executie_pachete_lansare.find(p => p.id === 9).updated_at = '2026-11-27T09:00:00+00:00' },
+      t => { t.executie_tevi.find(x => x.id === 102).lungime_m = '11.5' },
+      t => { t.executie_tevi.find(x => x.id === 102).pm_cod = 'PM 9' },
+      t => { t.executie_tevi.push({ ...teava(4, 'S-4', 'T7S4') }) },
+    ]) {
+      const tab = tabeleBaza()
+      const sb = clientFals({ tabele: tab, rpc: { fn_sud_export_inregistreaza: async () => ({ data: 1, error: null }) } })
+      const arhiva = await citesteArhivaNdt(sb, { proiectId: 1, tronsonId: 5, pachetId: 9, kmStart: 1000 })
+      const evaluare = evalueazaExportIzo({ pachet, tronson, tevi, arhiva })
+      schimba(tab)
+      const r = await ruleaza(sb, arhiva, evaluare)
+      expect(r).toMatchObject({ ok: false, surseSchimbate: true, pachetSchimbat: true })
+      nimicScris(sb)
+    }
+  })
+  it('schimbare între încărcare și înregistrare → fișierul încărcat se scoate, înregistrarea NU se cere', async () => {
+    const tab = tabeleBaza()
+    const sb = clientFals({ tabele: tab, rpc: { fn_sud_export_inregistreaza: async () => ({ data: 1, error: null }) },
+      storage: { laUpload: () => { tab.executie_tevi.find(x => x.id === 101).sudura_cod = 'T7S9' } } })
+    const arhiva = await citesteArhivaNdt(sb, { proiectId: 1, tronsonId: 5, pachetId: 9, kmStart: 1000 })
+    const evaluare = evalueazaExportIzo({ pachet, tronson, tevi, arhiva })
+    const r = await ruleaza(sb, arhiva, evaluare)
+    expect(r).toMatchObject({ ok: false, surseSchimbate: true, pachetSchimbat: true })
+    expect(sb.jurnal.upload).toHaveLength(1)
+    expect(sb.jurnal.remove).toEqual([{ b: 'executie-pachete-pdf', l: [sb.jurnal.upload[0].p] }])
+    expect(sb.jurnal.rpc.some(x => x[0] === 'fn_sud_export_inregistreaza')).toBe(false)
+    expect(sb.jurnal.insert).toEqual([])
+  })
+  it('pachetul nu se poate reciti (eroare) → export oprit cu eroare, NU „neschimbat” (L18)', async () => {
+    const { sb, arhiva, evaluare } = await pregateste({ tabele: { 'executie_tevi:eroare': { message: 'timeout' } } })
+    const r = await ruleaza(sb, arhiva, evaluare)
+    expect(r.ok).toBe(false)
+    expect(r.surseSchimbate).toBeUndefined()
+    expect(r.eroare).toMatch(/nu s-a putut reciti/)
+    nimicScris(sb)
+  })
+  it('copia trimisă la generare diferă de cea din fotografie → refuz', async () => {
+    const { sb, arhiva, evaluare } = await pregateste()
+    const r = await executaExportIzo(sb, { pachet, tronson, proiect: {}, tevi: [teava(1, 'S-X', 'T7S1'), tevi[1], tevi[2]], evaluare, arhiva, incomplet: false, genereazaXlsx: genereazaXlsxFals, fetchImpl: fetchFals(pdfuri) })
+    expect(r).toMatchObject({ ok: false, surseSchimbate: true })
+    nimicScris(sb)
+  })
+  it('verificaPachetNeschimbat: aceeași stare (ordine de citire alta, „12.00” vs 12) → ok; fotografie fără amprentă → refuz', async () => {
+    const { sb, evaluare } = await pregateste()
+    expect(await verificaPachetNeschimbat(sb, evaluare.fotografie)).toEqual({ ok: true })
+    const { pachet: _p, ...faraAmprenta } = evaluare.fotografie
+    expect((await verificaPachetNeschimbat(sb, faraAmprenta)).ok).toBe(false)
+  })
+})
+
+// Jakarinos #1219 r1 P2: bucket-ul are file_size_limit 50 MB → peste limită, fișierele separat (dimensiuni simulate cu `limita`)
+describe('executaExportIzo — arhiva peste limita bucket-ului', () => {
+  it('limita implicită = 50 MB = 52.428.800 octeți', () => {
+    expect(LIMITA_FISIER_STORAGE).toBe(52428800)
+  })
+  it('ZIP > limită: nu urcă ZIP-ul; urcă Excel-ul + fiecare PDF separat în dosarul exportului, înregistrează lista, întoarce ZIP-ul pentru descărcare', async () => {
+    const { sb, arhiva, evaluare } = await pregateste()
+    const r = await executaExportIzo(sb, { pachet, tronson, proiect: {}, tevi, evaluare, arhiva, incomplet: false, genereazaXlsx: genereazaXlsxFals, fetchImpl: fetchFals(pdfuri), uniq: 'u5', acum: new Date('2026-11-27T10:00:00Z'), limita: 100 })
+    expect(r.ok).toBe(true)
+    expect(r.separat).toBe(true)
+    expect(r.bytes.length).toBeGreaterThan(100)                       // ZIP-ul întreg, pentru descărcarea locală
+    expect(Object.keys((await JSZip.loadAsync(r.bytes)).files)).toContain('buletine/PM_5_21.10.2026.pdf')
+    const d = '9/2026-11-27_u5_99_GAZ_X_DWG_00001_rev0_Centralizator'
+    expect(sb.jurnal.upload.map(u => [u.p, u.o.contentType, u.tip])).toEqual([
+      [`${d}/99_GAZ_X_DWG_00001_rev0_Centralizator.xlsx`, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+      [`${d}/buletine/PM_5_21.10.2026.pdf`, 'application/pdf', 'application/pdf'],
+      [`${d}/buletine/PA-UT_77_28.10.2026.pdf`, 'application/pdf', 'application/pdf'],
+    ])
+    expect(sb.jurnal.upload.every(u => u.marime <= 100)).toBe(true)
+    expect(sb.jurnal.upload.some(u => /\.zip$/.test(u.p))).toBe(false)
+    const reg = sb.jurnal.rpc.find(x => x[0] === 'fn_sud_export_inregistreaza')[1]
+    expect(reg.p_fisier_path).toBe(`${d}/99_GAZ_X_DWG_00001_rev0_Centralizator.xlsx`)
+    expect(reg.p_fotografie.livrare).toBe('separat')
+    expect(reg.p_fotografie.fisiere).toEqual(sb.jurnal.upload.map(u => u.p))
+    expect(r.fisiere).toEqual(sb.jurnal.upload.map(u => u.p))
+    expect(sb.jurnal.insert).toEqual([{ t: 'executie_pachete_documente', row: expect.objectContaining({ fisier_path: reg.p_fisier_path, fisier_nume: '99_GAZ_X_DWG_00001_rev0_Centralizator.xlsx', mime_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }) }])
+  })
+  it('un fișier care singur trece de limită → refuz cu mesaj clar, nimic încărcat / deblocat / înregistrat', async () => {
+    const t = { sud_buletin_randuri: [rnd(1, 11, 1), rnd(2, 11, 2), rnd(3, 12, 1)] }   // incomplet: deblocarea NU se cere
+    const rpc = { fn_sud_export_deblocheaza: async () => ({ data: 42, error: null }), fn_sud_export_inregistreaza: async () => ({ data: 1, error: null }) }
+    const { sb, arhiva, evaluare } = await pregateste({ tabele: t, rpc })
+    // PDF-urile de test au 18 octeți, Excel-ul 4: cu limita 10 PDF-urile trec singure de limită, Excel-ul nu
+    const r = await executaExportIzo(sb, { pachet, tronson, proiect: {}, tevi, evaluare, arhiva, incomplet: true, motiv: 'motiv lung', genereazaXlsx: genereazaXlsxFals, fetchImpl: fetchFals(pdfuri), limita: 10 })
+    expect(r.ok).toBe(false)
+    expect(r.eroare).toMatch(/PA-UT_77_28\.10\.2026\.pdf.*limita de .* MB a serverului/)
+    expect(r.eroare).not.toMatch(/Centralizator\.xlsx/)
+    expect(sb.jurnal.upload).toEqual([])
+    expect(sb.jurnal.rpc.filter(x => x[0] !== 'fn_sud_drept')).toEqual([])
+  })
+  it('livrare separată, al doilea fișier eșuează → primul se scoate, nimic înregistrat', async () => {
+    const { sb, arhiva, evaluare } = await pregateste({ storage: { uploadEroare: (p, n) => n === 2 } })
+    const r = await executaExportIzo(sb, { pachet, tronson, proiect: {}, tevi, evaluare, arhiva, incomplet: false, genereazaXlsx: genereazaXlsxFals, fetchImpl: fetchFals(pdfuri), limita: 100 })
+    expect(r.ok).toBe(false)
+    expect(sb.jurnal.remove).toEqual([{ b: 'executie-pachete-pdf', l: [sb.jurnal.upload[0].p] }])
+    expect(sb.jurnal.rpc.some(x => x[0] === 'fn_sud_export_inregistreaza')).toBe(false)
   })
 })
 

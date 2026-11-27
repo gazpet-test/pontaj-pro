@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest'
 import {
   randuriPentruStare, evalueazaExportIzo, construiesteFotografie, grupeazaLipsuri, cereMetode, stareButonExport,
   coloaneAfisate, codDocumentAfisat, codDocumentFisier, numeExportIzo, planBuletineZip, diferenteFotografie,
+  amprentaPachet, amprentaRanduri, diferentePachet,
 } from './izoExportIzo.js'
 import { starePeSudura } from './izoNdt.js'
 
@@ -195,8 +196,52 @@ describe('planBuletineZip — câte un PDF pe buletin distinct, fără dubluri',
   })
 })
 
+// Jakarinos #1219 r1 P1: reproducerea lui (km + serie schimbate → fotografie identică, zero diferențe) trebuie să pice acum
+describe('amprenta pachetului și a rândurilor în fotografie', () => {
+  const ev = (p, tv) => evalueazaExportIzo({ pachet: p, tronson, tevi: tv, arhiva: arhiva() }).fotografie
+  const pUpd = { ...pachet, updated_at: '2026-11-27T08:00:00+00:00' }
+  it('reproducerea review-ului: km start + serie schimbate → fotografie diferită și „export depășit” le spune', () => {
+    const x = ev(pUpd, tevi.map(t => ({ ...t })))
+    const tv2 = tevi.map(t => ({ ...t })); tv2[0].serie_unica = 'DIFERIT'
+    const y = ev({ ...pUpd, km_start_m: 99999 }, tv2)
+    expect(JSON.stringify(x)).not.toBe(JSON.stringify(y))
+    const d = diferenteFotografie(x, y)
+    expect(d).toContain('Km start s-a schimbat după export: 1000 → 99999.')
+    expect(d.some(m => /Rândurile pachetului s-au schimbat/.test(m))).toBe(true)
+  })
+  it('fiecare câmp cerut schimbă amprenta: poz, serie, sudură, lungime, tip, dimensiune, șarjă, PM, PA-UT, UT', () => {
+    const baza = amprentaRanduri(tevi)
+    for (const [camp, val] of [['poz_in_pachet', 7], ['serie_unica', 'X'], ['sudura_cod', 'T7S9'], ['lungime_m', 11.99], ['tip', 'C'],
+      ['dimensiune', 'DN300x9'], ['sarja', 'SJX'], ['pm_cod', 'PM 1'], ['pa_ut_cod', 'PA 1'], ['ut_cod', 'UT 1'], ['id', 999]]) {
+      const tv = tevi.map((t, i) => (i === 1 ? { ...t, [camp]: val } : t))
+      expect(amprentaRanduri(tv).amprenta, camp).not.toBe(baza.amprenta)
+    }
+    expect(amprentaRanduri(tevi.slice(0, 2)).numar).toBe(2)
+  })
+  it('determinist: altă ordine de citire, „12.00” vs 12, "" vs null, câmpuri în plus (_poz_km) → aceeași amprentă', () => {
+    const a = amprentaRanduri(tevi)
+    const b = amprentaRanduri([...tevi].reverse().map(t => ({ ...t, lungime_m: '12.00', pm_cod: '', _poz_km: 5, updated_at: 'x' })))
+    expect(b).toEqual(a)
+  })
+  it('amprenta pachetului: updated_at, km, revizie; revizie schimbată → diferență; doar updated_at → „salvat”', () => {
+    const x = ev(pUpd, tevi)
+    expect(x.pachet).toEqual({ id: 9, updated_at: '2026-11-27T08:00:00+00:00', km_start_m: 1000, revizie: 0, cod_document_full: '99_GAZ_X_DWG_00001' })
+    expect(diferenteFotografie(x, ev({ ...pUpd, revizie: 1 }, tevi))).toContain('Revizia s-a schimbat după export: 0 → 1.')
+    expect(diferenteFotografie(x, ev({ ...pUpd, updated_at: '2026-11-27T09:00:00+00:00' }, tevi))).toEqual(['Pachetul a fost salvat după export.'])
+    expect(diferenteFotografie(x, ev({ ...pUpd }, tevi.map(t => ({ ...t }))))).toEqual([])
+  })
+  it('fără amprentă pe oricare parte → diferență explicită (necunoscut ≠ la zi), nu []', () => {
+    const x = ev(pUpd, tevi)
+    const { pachet: _a, randuri: _b, ...vechi } = x
+    expect(diferentePachet(vechi, x)).toHaveLength(1)
+    expect(diferentePachet(x, { ...x, randuri: null })).toHaveLength(1)
+    expect(amprentaRanduri(undefined)).toBe(null)
+  })
+})
+
 describe('diferenteFotografie — „export depășit” (R6)', () => {
-  const baza = { buletine: [{ id: 11, versiune: 2, eticheta: 'PA-UT 77/28.10.2026' }], eliminate: [], metode: ['PM'], lipsuri_blocante: [] }
+  const amp = { pachet: amprentaPachet({ ...pachet, updated_at: 'u1' }), randuri: amprentaRanduri(tevi) }
+  const baza = { buletine: [{ id: 11, versiune: 2, eticheta: 'PA-UT 77/28.10.2026' }], eliminate: [], metode: ['PM'], lipsuri_blocante: [], ...amp }
   it('aceeași stare → []', () => {
     expect(diferenteFotografie(baza, JSON.parse(JSON.stringify(baza)))).toEqual([])
   })
@@ -204,6 +249,7 @@ describe('diferenteFotografie — „export depășit” (R6)', () => {
     const cur = {
       buletine: [{ id: 11, versiune: 3, eticheta: 'PA-UT 77/28.10.2026' }, { id: 12, versiune: 2, eticheta: 'PM 5/21.10.2026' }],
       eliminate: ['T7S4'], metode: ['PA-UT', 'PM'], lipsuri_blocante: [{ cod: 'buletin_lipsa', rand: 2, mesaj: 'Sudura T7S2 n-are buletin PM acceptat (metodă obligatorie).' }],
+      ...amp,
     }
     expect(diferenteFotografie(baza, cur)).toEqual([
       'Buletin schimbat după export: PA-UT 77/28.10.2026.',
