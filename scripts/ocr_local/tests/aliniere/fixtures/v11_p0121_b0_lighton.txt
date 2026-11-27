@@ -1,0 +1,62 @@
+3.2.3. Breviar de calcul grosime perete tub protecție DN 813x14,2 H = 2 m la subtraversări CF
+
+Verificarea tubului de protectie ø813 mm x 14.2 mm, H = 2 m la subtraversări CF, după API RP 1102
+
+Date de proiectare (intrare):
+
+<table>
+  <tr>
+    <td>Material tub protecție</td>
+    <td>=</td>
+    <td>S355JR</td>
+  </tr>
+  <tr>
+    <td>Diametru exterior, D</td>
+    <td>D =</td>
+    <td>813 mm</td>
+  </tr>
+  <tr>
+    <td>Grosime perete, $t_w$</td>
+    <td>$t_w =$</td>
+    <td>14.2 mm</td>
+  </tr>
+  <tr>
+    <td>Presiunea, p</td>
+    <td>p =</td>
+    <td>0 MPa</td>
+  </tr>
+  <tr>
+    <td>Limita de curgere, SMYS</td>
+    <td>=</td>
+    <td>355 MPa</td>
+  </tr>
+  <tr>
+    <td>Coeficient de siguranță, F</td>
+    <td>F =</td>
+    <td>0.5 - conform clasei 3 de locație</td>
+  </tr>
+  <tr>
+    <td>Adâncimea de pozare, H</td>
+    <td>H =</td>
+    <td>2000 mm</td>
+  </tr>
+  <tr>
+    <td>Mod pozare</td>
+    <td>=</td>
+    <td>Foraj/Batere</td>
+  </tr>
+  <tr>
+    <td>Diametrul găurii, $B_d$</td>
+    <td>$B_d =$</td>
+    <td>864 mm</td>
+  </tr>
+  <tr>
+    <td>Tipul solului</td>
+    <td>=</td>
+    <td>A - nisip slab spre mediu îndesat cu pietriș; argile moi</td>
+  </tr>
+</table>
+
+<div style="text-align: right;">
+  ![image](image_1.png)
+</div>
