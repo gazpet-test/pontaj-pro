@@ -1930,8 +1930,12 @@ function ModalAddAutorizatie({ employeeId, tipuri, onClose, onSaved, showToast, 
     if (reinnoire) {
       if (!numar.trim()) { showToast('Reînnoire: completează numărul noii autorizații', 'warn'); return }
       if (!dataEmitere || (!faraExpirare && !dataExpirare)) { showToast('Reînnoire: completează data emiterii și data expirării', 'warn'); return }
+      // TKT-2026-0396: aceeași autorizație, doar vizată la 6 luni → nu e reînnoire, e viză RTS (ghidăm, nu blocăm mut)
+      if (numar.trim() === (reinnoire.numar_autorizatie || '').trim() && dataExpirare === reinnoire.data_expirare) {
+        showToast(necesitaViza
+          ? 'Aceeași autorizație, doar vizată? Nu se reînnoiește: ✏️ Editează → secțiunea „Viză RTS” → Confirmă viza. Scanul cu viza îl urci cu 📎 din tabel.'
+          : 'Numărul și expirarea sunt identice cu cele vechi — verifică datele', 'warn'); return }
       if (!pdfFile) { showToast('Reînnoire: atașează scanul noii autorizații', 'warn'); return }
-      if (numar.trim() === (reinnoire.numar_autorizatie || '').trim() && dataExpirare === reinnoire.data_expirare) { showToast('Numărul și expirarea sunt identice cu cele vechi — verifică datele', 'warn'); return }
     }
     setSaving(true)
 
@@ -2358,6 +2362,7 @@ function ModalEditAutorizatie({ autorizatie, autorizatii = [], tipuri, onClose, 
               </button>
               <div style={{fontSize:10, color:G.dim, marginTop:6, textAlign:'center'}}>
                 Următoarea viză se calculează automat la {intervalViza} luni după data aleasă.
+                Viza NU e reînnoire (🔄 e doar pentru autorizație nouă, cu alt nr./altă expirare) — scanul cu viza îl urci cu 📎 din tabel.
               </div>
 
               {alteAutorizatiiViza.length > 0 && (
