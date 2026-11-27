@@ -24,6 +24,11 @@ BEGIN
      OR (SELECT count(*) FROM pg_policy WHERE polrelid = 'storage.objects'::regclass AND polname IN ('sud_ndt_citire', 'sud_ndt_incarcare')) <> 2 THEN
     RAISE EXCEPTION '20270114a revenire: starea nu e cea pusa de migrare (obiecte lipsa sau in plus); nimic schimbat';
   END IF;
+  -- L14: lock ÎNAINTEA verificării „fără date” (altfel un rând / fișier scris între numărare și DROP s-ar pierde): tabelele sud_ exclusiv,
+  -- rândul bucket-ului FOR UPDATE (încărcarea unui obiect ia FOR KEY SHARE pe el prin FK-ul storage.objects → buckets). NOWAIT: ocupat = refuz.
+  LOCK TABLE public.sud_metode_proiect, public.sud_buletine, public.sud_buletin_randuri, public.sud_suduri_eliminate,
+             public.sud_export_deblocari, public.sud_exporturi IN ACCESS EXCLUSIVE MODE NOWAIT;
+  PERFORM 1 FROM storage.buckets WHERE id = 'izo-ndt' FOR UPDATE NOWAIT;
   SELECT (SELECT count(*) FROM public.sud_metode_proiect) + (SELECT count(*) FROM public.sud_buletine) + (SELECT count(*) FROM public.sud_buletin_randuri)
        + (SELECT count(*) FROM public.sud_suduri_eliminate) + (SELECT count(*) FROM public.sud_export_deblocari) + (SELECT count(*) FROM public.sud_exporturi)
        + (SELECT count(*) FROM storage.objects WHERE bucket_id = 'izo-ndt') INTO v_n;
