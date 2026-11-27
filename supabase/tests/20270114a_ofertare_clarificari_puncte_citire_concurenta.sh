@@ -24,7 +24,10 @@
 #                              B (RESP): INSERT primul punct → FK așteaptă DELETE-ul necomis. A COMMIT → B: 23503 (părintele nu mai există); niciun orfan.
 #   c_muta_vs_primul_punct     A (RESP): inserează primul punct în C, NECOMIS. B (OF): UPDATE licitatie_id → 42501 IMEDIAT (mutarea e refuzată din
 #                              aplicație și fără puncte — nu mai există cursa din r2); A COMMIT → punctul e pe C, C pe L1.
+#   c_sterge_vs_primul_punct_rollback  ca primul, dar A face ROLLBACK → B șterge (nu erau puncte comise).
+#   c_resp_muta_fara_puncte    secvențial: nici responsabilul nu mută o clarificare fără puncte (42501, mesajul exact); editarea textului trece.
 #   c_service_liber            service_role mută și șterge o clarificare cu puncte fără gardă (porțile serverului sunt în edge / RPC).
+#   Bariera verifică și că B e blocat CHIAR de A (pg_blocking_pids), cu pg_stat_clear_snapshot() la fiecare iterație.
 set -u
 set -o pipefail
 
@@ -165,11 +168,14 @@ asteaptaB() {
   B_STARE="$(sed -n 's/^B_REZ //p' "$B_LOG" | tail -n 1)"; [ -n "$B_STARE" ] || B_STARE='FARA_MARCAJ'
   B_MSG="$(sed -n 's/^B_MSG //p' "$B_LOG" | tail -n 1)"
 }
+# observatorul: B așteaptă pe un lock ȘI e blocat chiar de A (pg_blocking_pids). pg_stat_activity e un instantaneu pe tranzacție → pg_stat_clear_snapshot()
+# la fiecare iterație (review Jakarinos r3 P2: fără el, un B apărut după prima citire n-ar mai fi văzut în aceeași tranzacție DO).
 bariera() {
   local r
-  r="$(psql -X -q -w -d "$BAZA" -tAc "DO \$o\$ DECLARE i int := 0; BEGIN LOOP EXIT WHEN EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND application_name = 'cp_B' AND wait_event_type = 'Lock'); i := i + 1; IF i > 1500 THEN RAISE EXCEPTION 'cp_B nu asteapta pe niciun lock (30 s)'; END IF; PERFORM pg_sleep(0.02); END LOOP; END \$o\$; SELECT 'BARIERA_OK';" 2>&1)"
-  astept BARIERA_OK "$r" "observatorul: B asteapta pe un lock (wait_event_type = Lock)"
+  r="$(psql -X -q -w -d "$BAZA" -tAc "DO \$o\$ DECLARE i int := 0; BEGIN LOOP PERFORM pg_stat_clear_snapshot(); EXIT WHEN EXISTS (SELECT 1 FROM pg_stat_activity b WHERE b.datname = current_database() AND b.application_name = 'cp_B' AND b.wait_event_type = 'Lock' AND EXISTS (SELECT 1 FROM pg_stat_activity a WHERE a.application_name = 'cp_A' AND a.pid = ANY (pg_blocking_pids(b.pid)))); i := i + 1; IF i > 1500 THEN RAISE EXCEPTION 'cp_B nu asteapta pe un lock tinut de cp_A (30 s)'; END IF; PERFORM pg_sleep(0.02); END LOOP; END \$o\$; SELECT 'BARIERA_OK';" 2>&1)"
+  astept BARIERA_OK "$r" "observatorul: B asteapta pe un lock tinut de A (wait_event_type = Lock, pg_blocking_pids)"
 }
+contine() { case "$2" in *"$1"*) echo "      ok  $3 → contine «$1»";; *) echo "      ABATERE  $3 → «$2» (astepta sa contina «$1»)"; esec=$((esec + 1));; esac; }
 stare_c() { q "SELECT coalesce((SELECT licitatie_id::text FROM public.ofertare_clarificari WHERE id = $1), 'LIPSA') || '|' || (SELECT count(*) FROM public.ofertare_clarificari_puncte WHERE clarificare_id = $1)"; }
 
 # ── c_sterge_vs_primul_punct ──
@@ -180,9 +186,24 @@ echo "c_sterge_vs_primul_punct (C1 = 9101): A (RESP) insereaza primul punct NECO
   pornesteB "$(ca $U_OF)" "DELETE FROM public.ofertare_clarificari WHERE id = 9101;"
   bariera
   pasA S1b "COMMIT;"; astept 00000 "$A_STARE" "A: COMMIT"
-  asteaptaB; astept 42501 "$B_STARE" "B: DELETE dupa commit-ul lui A → 42501 (garda vede punctul comis; mesaj: ${B_MSG:--})"
+  asteaptaB; astept 42501 "$B_STARE" "B: DELETE dupa commit-ul lui A → 42501 (garda vede punctul comis)"
+  contine 'Clarificarea are puncte: o sterge doar ownerul sau un responsabil al licitatiei' "$B_MSG" "B: mesajul exact al garzii"
   inchideA
   astept '900201|1' "$(stare_c 9101)" "C1 ramane pe L1 cu punctul"
+}
+
+# ── c_sterge_vs_primul_punct_rollback (varianta cu ROLLBACK în A) ──
+echo "c_sterge_vs_primul_punct_rollback (C1 = 9101, acum cu 1 punct → folosim C4 = 9104 noua): A insereaza primul punct NECOMIS, B sterge → asteapta; A ROLLBACK → B sterge (nu erau puncte)"
+{
+  q "INSERT INTO public.ofertare_clarificari (id, licitatie_id, nr, intrebare, status) VALUES (9104, 900201, 4, 'C4', 'propunere')" > /dev/null
+  deschideA
+  pasA S1Ra "BEGIN;" "$(ca $U_RESP)" "INSERT INTO public.ofertare_clarificari_puncte (clarificare_id, nr, text) VALUES (9104, 1, 'primul punct');"; astept 00000 "$A_STARE" "A: INSERT primul punct, NECOMIS"
+  pornesteB "$(ca $U_OF)" "DELETE FROM public.ofertare_clarificari WHERE id = 9104;"
+  bariera
+  pasA S1Rb "ROLLBACK;"; astept 00000 "$A_STARE" "A: ROLLBACK"
+  asteaptaB; astept 00000 "$B_STARE" "B: DELETE dupa ROLLBACK-ul lui A → trece (clarificarea n-are puncte)"
+  inchideA
+  astept 'LIPSA|0' "$(stare_c 9104)" "C4 stearsa, fara puncte"
 }
 
 # ── c_primul_punct_vs_sterge ──
@@ -198,21 +219,46 @@ echo "c_primul_punct_vs_sterge (C2 = 9102): A (OF) sterge C2 fara puncte, NECOMI
   astept 'LIPSA|0' "$(stare_c 9102)" "C2 stearsa, fara puncte orfane"
 }
 
+# ── c_resp_muta_fara_puncte (secvențial): nici responsabilul nu mută o clarificare fără puncte din aplicație ──
+echo "c_resp_muta_fara_puncte (C3 = 9103, fara puncte): RESP → 42501 cu mesajul garzii; editarea textului trece"
+{
+  R="$(psql -X -q -w -v ON_ERROR_STOP=0 -d "$BAZA" -f - 2>&1 <<SQL | sed -n 's/^R_//p'
+BEGIN;
+$(ca $U_RESP)
+UPDATE public.ofertare_clarificari SET licitatie_id = 900202 WHERE id = 9103;
+\echo R_REZ :SQLSTATE
+\echo R_MSG :LAST_ERROR_MESSAGE
+ROLLBACK;
+BEGIN;
+$(ca $U_RESP)
+UPDATE public.ofertare_clarificari SET intrebare = 'C3 editata' WHERE id = 9103;
+\echo R_EDIT :SQLSTATE
+COMMIT;
+SQL
+)"
+  astept 42501 "$(printf '%s\n' "$R" | sed -n 's/^REZ //p')" "RESP: UPDATE licitatie_id pe o clarificare fara puncte → 42501"
+  contine 'O clarificare nu se muta pe alta licitatie din aplicatie' "$(printf '%s\n' "$R" | sed -n 's/^MSG //p')" "RESP: mesajul exact al garzii"
+  astept 00000 "$(printf '%s\n' "$R" | sed -n 's/^EDIT //p')" "RESP: editarea textului trece"
+  astept '900201|0' "$(stare_c 9103)" "C3 ramane pe L1, fara puncte"
+}
+
 # ── c_muta_vs_primul_punct ──
 echo "c_muta_vs_primul_punct (C3 = 9103): A (RESP) insereaza primul punct NECOMIS; B (OF) muta C3 pe L2 → 42501 imediat (mutarea e refuzata si fara puncte)"
 {
   deschideA
   pasA S3a "BEGIN;" "$(ca $U_RESP)" "INSERT INTO public.ofertare_clarificari_puncte (clarificare_id, nr, text) VALUES (9103, 1, 'primul punct');"; astept 00000 "$A_STARE" "A: INSERT primul punct, NECOMIS"
-  B_REZ_MUTA="$(psql -X -q -w -v ON_ERROR_STOP=0 -d "$BAZA" -f - 2>&1 <<SQL | sed -n 's/^B_REZ //p' | tail -n 1
+  B_MUTA="$(psql -X -q -w -v ON_ERROR_STOP=0 -d "$BAZA" -f - 2>&1 <<SQL | sed -n 's/^B_//p'
 SET lock_timeout = '20s';
 BEGIN;
 $(ca $U_OF)
 UPDATE public.ofertare_clarificari SET licitatie_id = 900202 WHERE id = 9103;
 \echo B_REZ :SQLSTATE
+\echo B_MSG :LAST_ERROR_MESSAGE
 ROLLBACK;
 SQL
 )"
-  astept 42501 "$B_REZ_MUTA" "B: UPDATE licitatie_id cat A e necomis → 42501 fara asteptare (nu exista cursa)"
+  astept 42501 "$(printf '%s\n' "$B_MUTA" | sed -n 's/^REZ //p')" "B: UPDATE licitatie_id cat A e necomis → 42501 fara asteptare (nu exista cursa)"
+  contine 'O clarificare nu se muta pe alta licitatie din aplicatie' "$(printf '%s\n' "$B_MUTA" | sed -n 's/^MSG //p')" "B: mesajul exact al garzii"
   pasA S3b "COMMIT;"; astept 00000 "$A_STARE" "A: COMMIT"
   inchideA
   astept '900201|1' "$(stare_c 9103)" "C3 ramane pe L1, cu punctul lui A"
