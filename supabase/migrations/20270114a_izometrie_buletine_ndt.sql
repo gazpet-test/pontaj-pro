@@ -288,8 +288,9 @@ BEGIN
   SELECT id INTO v_id FROM public.sud_buletine WHERE proiect_id = v_proiect AND fisier_sha256 = p_sha256 AND stare <> 'anulat' LIMIT 1;
   IF v_id IS NOT NULL THEN RAISE EXCEPTION 'sud: fisier_deja_incarcat:%', v_id USING ERRCODE = '23505'; END IF;
   IF nullif(btrim(coalesce(p_forteaza_motiv, '')), '') IS NULL THEN
+    -- aceeași regulă ca indexul sud_buletine_cheie_uq (§22): cheia o ocupă doar buletinele neanulate și NEFORȚATE
     SELECT id INTO v_id FROM public.sud_buletine WHERE tronson_id = p_tronson AND metoda = p_metoda AND numar_cheie = v_cheie
-       AND data_buletin = p_data AND stare <> 'anulat' LIMIT 1;
+       AND data_buletin = p_data AND stare <> 'anulat' AND fortat_motiv IS NULL LIMIT 1;
     IF v_id IS NOT NULL THEN RAISE EXCEPTION 'sud: buletin_deja_incarcat:%', v_id USING ERRCODE = '23505'; END IF;
   END IF;
   INSERT INTO public.sud_buletine (proiect_id, tronson_id, metoda, numar, numar_cheie, data_buletin, firma_citita, fisier_path, fisier_nume,
