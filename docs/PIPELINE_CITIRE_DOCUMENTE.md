@@ -296,6 +296,18 @@ Bandă `gol_de_verificat` la ORICARE cititor = întotdeauna UN rând `banda_goal
 `band` / `page` / `image`, `gol_la`, `celalalt` (cititorul, `text` / `incomplet`, textul brut), citirile brute, `probabil_alba`
 (informație din pixeli, fără efect), `e_cantitate = true`. Marcaj neconsistent (text nevid sau `ok: true`) = citire incompletă →
 `banda_intreaga`. Tipul nou NU e în CHECK-ul din BD: rămâne pe calea laboratorului / cozii (clientul Ofertare nu-l produce).
+**Etichete și valori decalate (`aliniere.py`, 27.11.2026, PT V1 Lot 1 p. 120).** În tabelele „breviar de calcul” eticheta se termină cu
+simbolul („Presiunea, p”) și valoarea începe cu el („p = 0 MPa”). Un cititor poate lua un rând-titlu drept rând de date și atunci TOATE
+valorile alunecă cu un rând („Presiunea, p | = | 355 MPa”), fără ca celălalt cititor să difere vizibil (MinerU dă două liste). Detectorul se
+uită la tabelul FIECĂRUI cititor, singur: simbolurile normalizate (LaTeX `\( \)` / `$`, `_{d}` / `<sub>`, litere grecești, majuscule);
+semnal doar cu ≥ 3 perechi pe același rând din care majoritatea NU se potrivesc. Deplasarea k (±1, ±2) e sigură doar dacă e UNICĂ și
+potrivește ≥ 3 perechi cu cel mult o contradicție → `semnal: aliniere_eticheta_valoare` (cu `cititor`, `k`, `randuri`, `propunere`);
+altfel `nealiniat_deplasare_neclara`, fără propunere. Rândul e de tip `structura_tabele` (tip existent în CHECK-ul din BD, deci fără
+migrare; nu se arbitrează automat, clientul îl trimite la om cu motivul din `motiv_pipeline`), `e_cantitate = true`, și apare CHIAR DACĂ
+cei doi cititori nu diferă acolo. Aceeași funcție (`aliniere.detecteaza`) pune în `text_conv.txt`, ÎNAINTEA tabelului, marcajul „⟦ATENȚIE:
+… etichetele și valorile pot fi decalate cu k rând(uri) — verifică pe imagine pag. N⟧” și propunerea realiniată pe linii „⟦propunere⟧ …”
+(nu încep cu „|”, deci nu arată ca rânduri citite); rândurile citite nu se schimbă; numărate în `aliniere_de_verificat`. Pe PT V1 (V1.1,
+V1.2, Lot 2 V1: 1.797 de tabele) singurul semnal e V1.1 p. 120, LightOn, k = −1.
 **Proveniența marcajelor (#737)**: marcajele scrise de pipeline (⟦rowspan⟧, cadrul ⟦img⟧ + `src`, ⟦tabel_neparsat⟧, ⟦…_invalid⟧, cadrul
 ⟦barat⟧, ^{ }/_{ }) trec prin `_m()`; în modul normal nimic nu se schimbă (segmente, itemi, BD); `segmente_provenienta` dă măștile, cu
 paritate verificată (fail-closed).
@@ -306,7 +318,7 @@ paritate verificată (fail-closed).
 | HIGH_RISK | conținut diferit lângă cifre (număr, UM, semn, cod, coloană), proveniență nestabilită; **sau** diferența fără cifre atinge un termen de material / tehnologie (`TERMENI_MATERIAL`: PEHD/PVC, OL/OȚEL, FONTĂ, BETON, FORAJ/ȘANȚ, MANUAL/MECANIZAT, SUDURĂ, MONTAJ …, cu flexiuni prin rădăcini; „PE” simplu exclus; la rânduri pe perechi de celule (rând cu număr diferit de celule și termen de material = HIGH_RISK); plus calificativ „cu/fără/nu” sau valoare SDR citită ca litere lângă un termen) | arbitrul plătit (cascadă) |
 | DEFER | conținut diferit, nicio cifră (Unicode) la niciun cititor | **restanță** (nu în masă la om) — a doua trecere decisă separat |
 | MARCAJE | conținutul identic, diferă doar marcajele pipeline-ului | om |
-| OM | `structura_tabele`, `banda_intreaga` | om, fără AI |
+| OM | `structura_tabele` (inclusiv semnalele de aliniere etichetă–valoare), `banda_intreaga` | om, fără AI |
 `erp arbitreaza --triere` e permis doar în probă (`--max-apeluri`) până la decizia pentru DEFER.
 
 ### 2.6 Arbitrul (`ofertare-ocr-arbitreaza`)
@@ -458,3 +470,4 @@ cu textul (layout pe 2 coloane) sunt ambigue — marcate manual în `banca\v2\ex
 | 25.11.2026 | #1196 r2 | După Jakarinos r1 (2 × P1: textul gri 245 și „III” gri 200 trec de euristica pe pixeli → două ieșiri goale deveneau acord): schimbare de abordare, nicio bandă nu se mai acceptă automat ca albă. Ieșirea goală curată, pe orice imagine, = `gol_de_verificat` (ok rămâne false), citirea continuă; `compara` scoate mereu rândul `banda_goala_de_verificat` (cu `celalalt` și `probabil_alba` doar informativ); coada ajunge `gata` cu dezacorduri > 0 și `goale_de_verificat`; asamblarea pune marcajul „BANDĂ GOALĂ DE VERIFICAT”. Doar pe calea laboratorului / cozii (`gol_de_verificat=True`); E3 și clientul Ofertare identice cu main (probă pe ambele versiuni), `client.py` readus la main |
 | 26.11.2026 | #1202 | TKT-0329 A, baza de date (20270112a): măsurători, evaluări, semnale între surse și circuitul ciornelor `auto_surse_*`; aplicată pe producție 26.11 după proba pe clona 176 |
 | 26.11.2026 | (acest PR, `ofertare/0329-extragere`) | TKT-0329 A, PR-extragere (Task 6–7): plafonul de pagini înaintea procesării (`_shared/cantMasura.ts`, paritate cu SQL), tipul `formular` eligibil, comparația surselor după fiecare rulare `structurat` (`masuratori.ts`, zero apeluri AI, fail-closed fără fotografie), `aplicaDecizii` mutată în `roluri.ts`; probe Deno (cantMasura, masuratori, structurat) și paritatea regulii numerice; edge-ul se deployează după migrare, cu „da” |
+| 27.11.2026 | (acest PR, `ocr/aliniere-eticheta-valoare`) | OCR local: semnal pentru etichete și valori decalate în tabelele „breviar de calcul” (`aliniere.py`, o singură definiție folosită de `compare.py` și `asamblare.py`): rând `structura_tabele` cu `semnal: aliniere_eticheta_valoare` / `nealiniat_deplasare_neclara` în `dezacorduri.jsonl` (la om, fără AI, chiar dacă cititorii nu diferă), marcaj vizibil + propunere realiniată separată în `text_conv.txt`, motivul la om în `client.py`, contorul în `coada.text_plan`. Fără migrare (tip existent în CHECK), fără schimbări în edge |

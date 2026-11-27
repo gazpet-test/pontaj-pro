@@ -1,0 +1,52 @@
+# 3.2. BREVIARE DE CALCUL GROSIME PERETE TUB PROTECȚIE
+
+## 3.2.1. Breviar de calcul grosime perete tub protecție DN 813x14,2 H = 2 m la subtraversări drumuri
+
+Verificarea tubului de protecție ø813 mm x 14.2 mm, H = 2 m la subtraversări drumuri, după API RP 1102
+
+<table>
+  <tr>
+    <td>Date de proiectare (intrare):</td>
+    <td></td>
+  </tr>
+  <tr>
+    <td>Material conductă (tub protecție)</td>
+    <td>= S355JR</td>
+  </tr>
+  <tr>
+    <td>Diametru exterior, D</td>
+    <td>D = 813 mm</td>
+  </tr>
+  <tr>
+    <td>Grosime perete, $l_w$</td>
+    <td>$l_w$ = 14.2 mm</td>
+  </tr>
+  <tr>
+    <td>Presiunea, p</td>
+    <td>p = 0 MPa</td>
+  </tr>
+  <tr>
+    <td>Limita de curgere, SMYS</td>
+    <td>= 355 MPa</td>
+  </tr>
+  <tr>
+    <td>Coeﬁcient de siguranță, F</td>
+    <td>F = 0.5 - conform clasei 3 de localițe (NT 118/2013)</td>
+  </tr>
+  <tr>
+    <td>Adâncimea de pozare, H</td>
+    <td>H = 2000 mm</td>
+  </tr>
+  <tr>
+    <td>Mod pozare</td>
+    <td>= foraj/baterе</td>
+  </tr>
+  <tr>
+    <td>Diametrul găurii, $B_d$</td>
+    <td>$B_d$ = 864 mm</td>
+  </tr>
+</table>
+
+<div style="text-align: right;">
+  ![image](image_1.png)
+</div>
