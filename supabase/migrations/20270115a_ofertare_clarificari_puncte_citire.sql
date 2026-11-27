@@ -1,10 +1,10 @@
--- Version 20270114120000. NEAPLICAT. Runner: scripts/livrare_migrare.sh --plafon-tranzactie-ms 5000 --amprenta-globala <md5> --diferente-globale
---   supabase/migrations/20270114a_ofertare_clarificari_puncte_citire.l15.tsv (DOAR cu plafon ȘI cu amprenta globală L15 v2: fără pasul „înainte”
+-- Version 20270115120000. NEAPLICAT. Runner: scripts/livrare_migrare.sh --plafon-tranzactie-ms 5000 --amprenta-globala <md5> --diferente-globale
+--   supabase/migrations/20270115a_ofertare_clarificari_puncte_citire.l15.tsv (DOAR cu plafon ȘI cu amprenta globală L15 v2: fără pasul „înainte”
 --   al runnerului în aceeași tranzacție, migrarea refuză în $pre$ — AMPRENTA_GLOBALA_LIPSA). Manifestul .l15.tsv îl generează coordonatorul pe
 --   clonă (scripts/livrare_l15_manifest.sh --iesire, docs/LIVRARE_L15_V2.md §5); lista OBIECTELOR revizuită (generată pe PGlite cu pașii reali
---   ai runnerului): supabase/tests/20270114a_ofertare_clarificari_puncte_citire.l15.obiecte.tsv. Dry-run pe clonă după aplicare (ROLLBACK):
---   supabase/tests/20270114a_ofertare_clarificari_puncte_citire_dryrun.sql.
--- 20270114a_ofertare_clarificari_puncte_citire — Ofertare: punctele unei clarificări (public.ofertare_clarificari_puncte) se citesc și se scriu
+--   ai runnerului): supabase/tests/20270115a_ofertare_clarificari_puncte_citire.l15.obiecte.tsv. Dry-run pe clonă după aplicare (ROLLBACK):
+--   supabase/tests/20270115a_ofertare_clarificari_puncte_citire_dryrun.sql.
+-- 20270115a_ofertare_clarificari_puncte_citire — Ofertare: punctele unei clarificări (public.ofertare_clarificari_puncte) se citesc și se scriu
 --   DOAR de ownerul și de responsabilii licitației clarificării (decizia owner-ului, 27.11.2026, după review-ul PR #1204). Azi: clar_puncte_sel
 --   (SELECT) = USING (auth.uid() IS NOT NULL) — ORICE cont logat citește punctele; clar_puncte_rw (ALL, deci și SELECT, politicile permisive se
 --   combină cu OR) = fn_are_acces_ofertare() — oricine cu modulul Ofertare le scrie și le citește.
@@ -26,7 +26,7 @@
 --      cui trece poarta punctelor; fără puncte, ca azi. Serializarea ștergerii: PostgreSQL blochează rândul (GetTupleForTrigger) ÎNAINTE de a chema
 --      triggerul BEFORE ROW, iar inserarea unui punct ține KEY SHARE pe părinte prin FK → DELETE-ul așteaptă inserarea necomisă, apoi are_puncte
 --      (VOLATILE, instantaneu nou) vede punctul comis și refuză; invers, inserarea punctului așteaptă DELETE-ul necomis și pică pe FK (23503) — nu
---      rămâne niciun punct orfan și niciunul șters pe la spate. Proba cu două sesiuni: supabase/tests/20270114a_…_concurenta.sh (clonă dispensabilă).
+--      rămâne niciun punct orfan și niciunul șters pe la spate. Proba cu două sesiuni: supabase/tests/20270115a_…_concurenta.sh (clonă dispensabilă).
 --      service_role / postgres / RPC-urile DEFINER trec (nu sunt persoane; porțile lor sunt în edge / RPC).
 --   4. CREATE TRIGGER trg_ofertare_clar_parinte_puncte pe public.ofertare_clarificari.
 --   5. ALTER POLICY clar_puncte_sel USING (public.fn_ofertare_clar_puncte_poarta(clarificare_id));
@@ -55,61 +55,61 @@
 --   nicio adresă exportată de UI-ul vechi), APOI migrarea, cât mai aproape de deploy. Rest declarat: filele deschise cu UI-ul vechi peste momentul
 --   migrării ar exporta fără temeiurile de pe puncte până la reîncărcare (Ctrl+Shift+R după deploy, regula casei); serverul nu poate deosebi acel UI.
 --   Independentă de 20270112a (NEAPLICATĂ) și compatibilă cu 20270113a (APLICATĂ 27.11.2026 — proba PGlite rulează cu 20270113a aplicată și fără ea).
--- Revenire: supabase/revenire/20270114a_ofertare_clarificari_puncte_citire_ROLLBACK.sql (readuce cele 2 politici EXACT, apoi șterge triggerul și cele
+-- Revenire: supabase/revenire/20270115a_ofertare_clarificari_puncte_citire_ROLLBACK.sql (readuce cele 2 politici EXACT, apoi șterge triggerul și cele
 --   3 funcții; refuză dacă starea nu e cea pusă aici sau dacă altceva depinde de funcții). Revenirea REDESCHIDE citirea punctelor pentru orice cont
 --   logat: doar la cererea explicită a owner-ului.
--- Probe: scripts/pglite/test_ofertare_clarificari_puncte_citire_local.mjs (scheletul 20270112a + supabase/tests/20270114a_…_schelet.sql, pașii
+-- Probe: scripts/pglite/test_ofertare_clarificari_puncte_citire_local.mjs (scheletul 20270112a + supabase/tests/20270115a_…_schelet.sql, pașii
 --   L15 v2 reali; cazuri de acces pe owner / responsabil 1 / responsabil 2 / autonumit / editor Ofertare / responsabil fără modul / sub-modul /
 --   fără modul / anon, scrieri, mutarea / ștergerea părintelui, refuzuri, revenire, mutanți).
 DO $pre$
 DECLARE v_plafon text; v_alt text;
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres'
-     OR current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20270114a_ofertare_clarificari_puncte_citire:' || txid_current() THEN
-    RAISE EXCEPTION '20270114a: garda start invalida';
+     OR current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20270115a_ofertare_clarificari_puncte_citire:' || txid_current() THEN
+    RAISE EXCEPTION '20270115a: garda start invalida';
   END IF;
   IF EXISTS (SELECT 1 FROM pg_db_role_setting s, unnest(s.setconfig) c WHERE lower(c) LIKE 'gazpet.livrare_migrare=%') THEN
-    RAISE EXCEPTION '20270114a: armare persistenta refuzata';
+    RAISE EXCEPTION '20270115a: armare persistenta refuzata';
   END IF;
   IF current_setting('transaction_isolation') IS DISTINCT FROM 'read committed' THEN
-    RAISE EXCEPTION '20270114a: necesita READ COMMITTED (acum %)', current_setting('transaction_isolation');
+    RAISE EXCEPTION '20270115a: necesita READ COMMITTED (acum %)', current_setting('transaction_isolation');
   END IF;
-  IF current_setting('server_version_num')::int < 170000 THEN RAISE EXCEPTION '20270114a: cere PostgreSQL 17 (plafonul tranzactiei)'; END IF;
+  IF current_setting('server_version_num')::int < 170000 THEN RAISE EXCEPTION '20270115a: cere PostgreSQL 17 (plafonul tranzactiei)'; END IF;
   SELECT setting || '/' || source INTO v_plafon FROM pg_catalog.pg_settings WHERE name = 'transaction_timeout';
   IF v_plafon IS DISTINCT FROM '5000/session'
      OR current_setting('gazpet.plafon_tranzactie', true) IS DISTINCT FROM '5000:' || txid_current() THEN
-    RAISE EXCEPTION '20270114a: PLAFON_TRANZACTIE lipsa: % marcaj % (cerut 5000/session pus de runner inainte de BEGIN + marcajul prologului: livrare_migrare.sh --plafon-tranzactie-ms 5000)',
+    RAISE EXCEPTION '20270115a: PLAFON_TRANZACTIE lipsa: % marcaj % (cerut 5000/session pus de runner inainte de BEGIN + marcajul prologului: livrare_migrare.sh --plafon-tranzactie-ms 5000)',
       coalesce(v_plafon, 'lipsa'), coalesce(nullif(current_setting('gazpet.plafon_tranzactie', true), ''), 'lipsa');
   END IF;
   -- L15 v2: pasul „înainte” al runnerului a rulat în ACEASTĂ tranzacție (tiparul 20270111a / 20270112a / 20270113a)
   IF NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = pg_my_temp_schema() AND c.relkind = 'r' AND c.relname ~ '^ag_ina_[0-9a-f]{16}$'
                     AND c.xmin::text = (txid_current() % 4294967296)::text
                     AND (SELECT count(*) FROM pg_locks l WHERE l.relation = c.oid AND l.pid = pg_backend_pid() AND l.granted) > 0) THEN
-    RAISE EXCEPTION '20270114a: AMPRENTA_GLOBALA_LIPSA: livrarea cere amprenta globala L15 v2 a runnerului (--amprenta-globala + --diferente-globale); nimic schimbat';
+    RAISE EXCEPTION '20270115a: AMPRENTA_GLOBALA_LIPSA: livrarea cere amprenta globala L15 v2 a runnerului (--amprenta-globala + --diferente-globale); nimic schimbat';
   END IF;
   PERFORM set_config('lock_timeout', '100ms', true);
   PERFORM set_config('search_path', 'public, pg_temp', true);
   IF to_regclass('public.ofertare_clarificari_puncte') IS NULL OR (SELECT relkind FROM pg_class WHERE oid = 'public.ofertare_clarificari_puncte'::regclass) <> 'r' THEN
-    RAISE EXCEPTION '20270114a: lipseste tabelul public.ofertare_clarificari_puncte';
+    RAISE EXCEPTION '20270115a: lipseste tabelul public.ofertare_clarificari_puncte';
   END IF;
   IF to_regclass('public.ofertare_clarificari') IS NULL OR (SELECT relkind FROM pg_class WHERE oid = 'public.ofertare_clarificari'::regclass) <> 'r'
      OR NOT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = 'public.ofertare_clarificari'::regclass AND a.attname = 'licitatie_id' AND NOT a.attisdropped AND a.atttypid = 'bigint'::regtype) THEN
-    RAISE EXCEPTION '20270114a: lipseste public.ofertare_clarificari.licitatie_id (bigint) — poarta si garda parintelui o citesc';
+    RAISE EXCEPTION '20270115a: lipseste public.ofertare_clarificari.licitatie_id (bigint) — poarta si garda parintelui o citesc';
   END IF;
   -- FK-ul clarificare_id → ofertare_clarificari(id): legatura pe care se da poarta
   IF NOT EXISTS (SELECT 1 FROM pg_constraint k
                   WHERE k.conrelid = 'public.ofertare_clarificari_puncte'::regclass AND k.contype = 'f' AND k.confrelid = 'public.ofertare_clarificari'::regclass
                     AND k.conkey = ARRAY[(SELECT a.attnum FROM pg_attribute a WHERE a.attrelid = k.conrelid AND a.attname = 'clarificare_id' AND NOT a.attisdropped)]
                     AND k.confkey = ARRAY[(SELECT a.attnum FROM pg_attribute a WHERE a.attrelid = k.confrelid AND a.attname = 'id' AND NOT a.attisdropped)]) THEN
-    RAISE EXCEPTION '20270114a: lipseste FK-ul ofertare_clarificari_puncte.clarificare_id -> ofertare_clarificari(id)';
+    RAISE EXCEPTION '20270115a: lipseste FK-ul ofertare_clarificari_puncte.clarificare_id -> ofertare_clarificari(id)';
   END IF;
   -- reaplicare / coliziune de nume: functiile noi si triggerul nou nu exista inca (nicio supraincarcare)
   IF EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public'
                AND p.proname IN ('fn_ofertare_clar_puncte_poarta', 'fn_ofertare_clar_are_puncte', 'fn_ofertare_clar_parinte_puncte_garda')) THEN
-    RAISE EXCEPTION '20270114a: una din functiile fn_ofertare_clar_puncte_poarta / fn_ofertare_clar_are_puncte / fn_ofertare_clar_parinte_puncte_garda exista deja (reaplicare sau coliziune de nume)';
+    RAISE EXCEPTION '20270115a: una din functiile fn_ofertare_clar_puncte_poarta / fn_ofertare_clar_are_puncte / fn_ofertare_clar_parinte_puncte_garda exista deja (reaplicare sau coliziune de nume)';
   END IF;
   IF EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = 'public.ofertare_clarificari'::regclass AND t.tgname = 'trg_ofertare_clar_parinte_puncte') THEN
-    RAISE EXCEPTION '20270114a: triggerul trg_ofertare_clar_parinte_puncte exista deja';
+    RAISE EXCEPTION '20270115a: triggerul trg_ofertare_clar_parinte_puncte exista deja';
   END IF;
   -- dependenta 1: fn_are_acces_ofertare() din 20260912, neschimbata (corp fara CR, limbaj sql, DEFINER, STABLE, cale sigura, proprietar postgres,
   --   drepturi EXACTE: authenticated + service_role + proprietar, nimic pentru anon / PUBLIC) — aceleasi conditii ca in 20270113a
@@ -122,7 +122,7 @@ BEGIN
                           SELECT pg_get_userbyid(e.grantee) || ':' || e.privilege_type || CASE WHEN e.is_grantable THEN '*' ELSE '' END AS d
                             FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) e) a) = 'authenticated:EXECUTE, postgres:EXECUTE, service_role:EXECUTE')
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'fn_are_acces_ofertare') <> 1 THEN
-    RAISE EXCEPTION '20270114a: fn_are_acces_ofertare() nu e cea din 20260912 (corp md5 429d28e2a61fb24c8009d67050c16c85, sql STABLE DEFINER, cale, proprietar, drepturi exacte sau supraincarcari); coordonatorul da textul exact (pg_get_functiondef)';
+    RAISE EXCEPTION '20270115a: fn_are_acces_ofertare() nu e cea din 20260912 (corp md5 429d28e2a61fb24c8009d67050c16c85, sql STABLE DEFINER, cale, proprietar, drepturi exacte sau supraincarcari); coordonatorul da textul exact (pg_get_functiondef)';
   END IF;
   -- dependenta 2: fn_ofertare_poate_cheltui(bigint, uuid) din 20261124a, neschimbata (corp fara CR, sql, DEFINER, STABLE, cale sigura, proprietar
   --   postgres, drepturi EXACTE: doar service_role + proprietar — de aceea politica trece prin functia noua DEFINER, nu o cheama direct)
@@ -135,7 +135,7 @@ BEGIN
                           SELECT pg_get_userbyid(e.grantee) || ':' || e.privilege_type || CASE WHEN e.is_grantable THEN '*' ELSE '' END AS d
                             FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) e) a) = 'postgres:EXECUTE, service_role:EXECUTE')
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'fn_ofertare_poate_cheltui') <> 1 THEN
-    RAISE EXCEPTION '20270114a: fn_ofertare_poate_cheltui(bigint, uuid) nu e cea din 20261124a (corp md5 07fba9e2e4249481fa9184fc48abc58d, sql STABLE DEFINER, cale, proprietar, drepturi exacte sau supraincarcari); coordonatorul da textul exact (pg_get_functiondef)';
+    RAISE EXCEPTION '20270115a: fn_ofertare_poate_cheltui(bigint, uuid) nu e cea din 20261124a (corp md5 07fba9e2e4249481fa9184fc48abc58d, sql STABLE DEFINER, cale, proprietar, drepturi exacte sau supraincarcari); coordonatorul da textul exact (pg_get_functiondef)';
   END IF;
   -- informativ (nu refuz, in afara perimetrului): vederi peste tabelul de puncte FARA security_invoker ar citi ca proprietarul lor, ocolind politicile
   SELECT string_agg(DISTINCT v.oid::regclass::text, ', ' ORDER BY v.oid::regclass::text) INTO v_alt
@@ -145,7 +145,7 @@ BEGIN
      AND v.oid <> 'public.ofertare_clarificari_puncte'::regclass
      AND NOT ('security_invoker=on' = ANY (coalesce(v.reloptions, ARRAY[]::text[])));
   IF v_alt IS NOT NULL THEN
-    RAISE NOTICE '20270114a: ATENTIE, vederi peste ofertare_clarificari_puncte fara security_invoker (citesc ca proprietarul, in afara acestei migrari): %', v_alt;
+    RAISE NOTICE '20270115a: ATENTIE, vederi peste ofertare_clarificari_puncte fara security_invoker (citesc ca proprietarul, in afara acestei migrari): %', v_alt;
   END IF;
 END $pre$;
 
@@ -156,7 +156,7 @@ DECLARE v_incercari integer := 0; v_t0 timestamptz := clock_timestamp(); v_buget
 BEGIN
   LOOP
     IF clock_timestamp() >= v_t0 + v_buget THEN
-      RAISE EXCEPTION '20270114a: BUGET_LOCK: ofertare_clarificari_puncte ocupat; % incercari, % ms de la prima incercare (bugetul e 1 s de la prima incercare; % ms de la BEGIN); nimic schimbat',
+      RAISE EXCEPTION '20270115a: BUGET_LOCK: ofertare_clarificari_puncte ocupat; % incercari, % ms de la prima incercare (bugetul e 1 s de la prima incercare; % ms de la BEGIN); nimic schimbat',
         v_incercari, round(extract(epoch FROM clock_timestamp() - v_t0) * 1000), round(extract(epoch FROM clock_timestamp() - now()) * 1000) USING ERRCODE = '55P03';
     END IF;
     v_incercari := v_incercari + 1;
@@ -168,7 +168,7 @@ BEGIN
     END;
   END LOOP;
   IF clock_timestamp() >= v_t0 + v_buget THEN
-    RAISE EXCEPTION '20270114a: BUGET_LOCK: lock-ul pe ofertare_clarificari_puncte obtinut abia la % ms de la prima incercare (% incercari; bugetul e 1 s de la prima incercare; % ms de la BEGIN); nimic schimbat',
+    RAISE EXCEPTION '20270115a: BUGET_LOCK: lock-ul pe ofertare_clarificari_puncte obtinut abia la % ms de la prima incercare (% incercari; bugetul e 1 s de la prima incercare; % ms de la BEGIN); nimic schimbat',
       round(extract(epoch FROM clock_timestamp() - v_t0) * 1000), v_incercari, round(extract(epoch FROM clock_timestamp() - now()) * 1000) USING ERRCODE = '55P03';
   END IF;
   PERFORM set_config('gazpet.lock_puternic_la', round(extract(epoch FROM clock_timestamp()) * 1000000)::bigint::text, true);
@@ -176,9 +176,9 @@ BEGIN
   BEGIN
     LOCK TABLE public.ofertare_clarificari IN SHARE ROW EXCLUSIVE MODE NOWAIT;
   EXCEPTION WHEN lock_not_available THEN
-    RAISE EXCEPTION '20270114a: BUGET_LOCK: ofertare_clarificari (parintele) ocupat la % ms de la BEGIN; nimic schimbat', round(extract(epoch FROM clock_timestamp() - now()) * 1000) USING ERRCODE = '55P03';
+    RAISE EXCEPTION '20270115a: BUGET_LOCK: ofertare_clarificari (parintele) ocupat la % ms de la BEGIN; nimic schimbat', round(extract(epoch FROM clock_timestamp() - now()) * 1000) USING ERRCODE = '55P03';
   END;
-  RAISE NOTICE '20270114a: lock la % ms de la BEGIN (% incercari, % ms de la prima incercare)',
+  RAISE NOTICE '20270115a: lock la % ms de la BEGIN (% incercari, % ms de la prima incercare)',
     round(extract(epoch FROM clock_timestamp() - now()) * 1000), v_incercari, round(extract(epoch FROM clock_timestamp() - v_t0) * 1000);
 END $lock$;
 
@@ -200,9 +200,9 @@ BEGIN
                         || '|' || coalesce(pg_get_expr(p.polqual, p.polrelid), '-') || '|' || coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '-') AS detaliu
                  FROM pg_policy p WHERE p.polrelid = 'public.ofertare_clarificari_puncte'::regclass) c ON c.nume = a.nume
    WHERE a.nume IS NULL OR c.nume IS NULL OR a.detaliu IS DISTINCT FROM c.detaliu;
-  IF v_rau IS NOT NULL THEN RAISE EXCEPTION '20270114a: politicile ofertare_clarificari_puncte difera de cele de azi (27.11.2026): %', v_rau; END IF;
+  IF v_rau IS NOT NULL THEN RAISE EXCEPTION '20270115a: politicile ofertare_clarificari_puncte difera de cele de azi (27.11.2026): %', v_rau; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = 'public.ofertare_clarificari_puncte'::regclass AND c.relrowsecurity AND NOT c.relforcerowsecurity) THEN
-    RAISE EXCEPTION '20270114a: RLS pe ofertare_clarificari_puncte nu e activ (sau e fortat)';
+    RAISE EXCEPTION '20270115a: RLS pe ofertare_clarificari_puncte nu e activ (sau e fortat)';
   END IF;
   CREATE TEMP TABLE cp_foto ON COMMIT DROP AS
     SELECT 'acl_tabel' AS ce, coalesce((SELECT string_agg(a.d, ', ' ORDER BY a.d COLLATE "C") FROM (
@@ -239,7 +239,7 @@ BEGIN
     UNION ALL
     SELECT 'politici_nr', (SELECT count(*)::text FROM pg_policy p WHERE p.polrelid = 'public.ofertare_clarificari_puncte'::regclass)
       || '|' || (SELECT count(*)::text FROM pg_policy p WHERE p.polrelid = 'public.ofertare_clarificari'::regclass);
-  RAISE NOTICE '20270114a: stare verificata (2 politici pe puncte, RLS activ, parintele fotografiat)';
+  RAISE NOTICE '20270115a: stare verificata (2 politici pe puncte, RLS activ, parintele fotografiat)';
 END $stare$;
 
 -- ─── 2. Schimbarea: doua functii DEFINER (are puncte / poarta), garda INVOKER pe parinte + triggerul ei, cele 2 politici pe poarta ───────────
@@ -255,7 +255,7 @@ $fn$;
 REVOKE ALL ON FUNCTION public.fn_ofertare_clar_are_puncte(bigint) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.fn_ofertare_clar_are_puncte(bigint) TO authenticated, service_role;
 COMMENT ON FUNCTION public.fn_ofertare_clar_are_puncte(bigint) IS
-  '20270114a: clarificarea are puncte (indiferent de RLS-ul apelantului; doar un boolean). Folosita de garda parintelui fn_ofertare_clar_parinte_puncte_garda.';
+  '20270115a: clarificarea are puncte (indiferent de RLS-ul apelantului; doar un boolean). Folosita de garda parintelui fn_ofertare_clar_parinte_puncte_garda.';
 
 CREATE FUNCTION public.fn_ofertare_clar_puncte_poarta(p_clarificare_id bigint)
 RETURNS boolean
@@ -271,7 +271,7 @@ $fn$;
 REVOKE ALL ON FUNCTION public.fn_ofertare_clar_puncte_poarta(bigint) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.fn_ofertare_clar_puncte_poarta(bigint) TO authenticated, service_role;
 COMMENT ON FUNCTION public.fn_ofertare_clar_puncte_poarta(bigint) IS
-  '20270114a: poarta punctelor unei clarificari (RLS pe ofertare_clarificari_puncte, citire si scriere; garda parintelui; RPC-ul UI inaintea exportului adresei) — utilizatorul curent are acces la modulul Ofertare SI e owner / responsabil 1-2 al licitatiei clarificarii (fn_ofertare_poate_cheltui, 20261124a). Clarificare inexistenta = false.';
+  '20270115a: poarta punctelor unei clarificari (RLS pe ofertare_clarificari_puncte, citire si scriere; garda parintelui; RPC-ul UI inaintea exportului adresei) — utilizatorul curent are acces la modulul Ofertare SI e owner / responsabil 1-2 al licitatiei clarificarii (fn_ofertare_poate_cheltui, 20261124a). Clarificare inexistenta = false.';
 
 -- INVOKER: current_user deosebeste apelul clientului (authenticated / anon) de service_role / postgres / RPC-urile DEFINER (acolo current_user e
 -- proprietarul); existenta punctelor si poarta vin din cele doua functii DEFINER (boolean, indiferent de RLS). Fara parametri de identitate.
@@ -299,7 +299,7 @@ END
 $fn$;
 REVOKE ALL ON FUNCTION public.fn_ofertare_clar_parinte_puncte_garda() FROM PUBLIC, anon, authenticated, service_role;
 COMMENT ON FUNCTION public.fn_ofertare_clar_parinte_puncte_garda() IS
-  '20270114a: garda parintelui (BEFORE UPDATE OF licitatie_id OR DELETE pe ofertare_clarificari): pentru apelurile clientului, o clarificare cu puncte nu se muta pe alta licitatie si se sterge doar de cine trece poarta punctelor (cascada ar sterge punctele). service_role / postgres / RPC-urile DEFINER trec.';
+  '20270115a: garda parintelui (BEFORE UPDATE OF licitatie_id OR DELETE pe ofertare_clarificari): pentru apelurile clientului, o clarificare cu puncte nu se muta pe alta licitatie si se sterge doar de cine trece poarta punctelor (cascada ar sterge punctele). service_role / postgres / RPC-urile DEFINER trec.';
 CREATE TRIGGER trg_ofertare_clar_parinte_puncte BEFORE UPDATE OF licitatie_id OR DELETE ON public.ofertare_clarificari
   FOR EACH ROW EXECUTE FUNCTION public.fn_ofertare_clar_parinte_puncte_garda();
 
@@ -312,10 +312,10 @@ DECLARE v_rau text; v_attnum smallint;
 BEGIN
   SELECT string_agg(coalesce(a.nume, '+' || c.nume) || coalesce(': ' || c.detaliu, ''), '; ' ORDER BY coalesce(a.nume, c.nume)) INTO v_rau
     FROM (VALUES
-      -- >>> POLITICI PUNCTE 20270114a
+      -- >>> POLITICI PUNCTE 20270115a
       ('clar_puncte_sel', 'r|permisiva|{authenticated}|fn_ofertare_clar_puncte_poarta(clarificare_id)|-'),
       ('clar_puncte_rw', '*|permisiva|{authenticated}|fn_ofertare_clar_puncte_poarta(clarificare_id)|fn_ofertare_clar_puncte_poarta(clarificare_id)')
-      -- <<< POLITICI PUNCTE 20270114a
+      -- <<< POLITICI PUNCTE 20270115a
     ) a(nume, detaliu)
     FULL JOIN (SELECT p.polname::text AS nume,
                       p.polcmd::text || '|' || CASE WHEN p.polpermissive THEN 'permisiva' ELSE 'restrictiva' END || '|'
@@ -323,9 +323,9 @@ BEGIN
                         || '|' || coalesce(pg_get_expr(p.polqual, p.polrelid), '-') || '|' || coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '-') AS detaliu
                  FROM pg_policy p WHERE p.polrelid = 'public.ofertare_clarificari_puncte'::regclass) c ON c.nume = a.nume
    WHERE a.nume IS NULL OR c.nume IS NULL OR a.detaliu IS DISTINCT FROM c.detaliu;
-  IF v_rau IS NOT NULL THEN RAISE EXCEPTION '20270114a: postconditie: politicile ofertare_clarificari_puncte: %', v_rau; END IF;
+  IF v_rau IS NOT NULL THEN RAISE EXCEPTION '20270115a: postconditie: politicile ofertare_clarificari_puncte: %', v_rau; END IF;
   -- cele 3 functii noi: corp EXACT (md5 fara CR), limbaj, DEFINER / INVOKER, volatilitate, cale sigura, proprietar postgres, drepturi EXACTE, unice
-  -- >>> FUNCTII 20270114a
+  -- >>> FUNCTII 20270115a
   IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.oid = to_regprocedure('public.fn_ofertare_clar_are_puncte(bigint)')
                    AND md5(replace(p.prosrc, chr(13), '')) = '2245a58f811059df647d9d7032595637' AND l.lanname = 'sql' AND p.prokind = 'f'
                    AND p.prosecdef AND p.provolatile = 'v' AND NOT p.proretset AND pg_get_function_result(p.oid) = 'boolean'
@@ -335,7 +335,7 @@ BEGIN
                           SELECT pg_get_userbyid(e.grantee) || ':' || e.privilege_type || CASE WHEN e.is_grantable THEN '*' ELSE '' END AS d
                             FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) e) a) = 'authenticated:EXECUTE, postgres:EXECUTE, service_role:EXECUTE')
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'fn_ofertare_clar_are_puncte') <> 1 THEN
-    RAISE EXCEPTION '20270114a: postconditie: fn_ofertare_clar_are_puncte(bigint) nu are forma asteptata (corp md5 2245a58f811059df647d9d7032595637, sql VOLATILE DEFINER, cale, proprietar, drepturi exacte, unica)';
+    RAISE EXCEPTION '20270115a: postconditie: fn_ofertare_clar_are_puncte(bigint) nu are forma asteptata (corp md5 2245a58f811059df647d9d7032595637, sql VOLATILE DEFINER, cale, proprietar, drepturi exacte, unica)';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.oid = to_regprocedure('public.fn_ofertare_clar_puncte_poarta(bigint)')
                    AND md5(replace(p.prosrc, chr(13), '')) = 'abd6b68b5b34a67f777045541aeff04a' AND l.lanname = 'sql' AND p.prokind = 'f'
@@ -346,7 +346,7 @@ BEGIN
                           SELECT pg_get_userbyid(e.grantee) || ':' || e.privilege_type || CASE WHEN e.is_grantable THEN '*' ELSE '' END AS d
                             FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) e) a) = 'authenticated:EXECUTE, postgres:EXECUTE, service_role:EXECUTE')
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'fn_ofertare_clar_puncte_poarta') <> 1 THEN
-    RAISE EXCEPTION '20270114a: postconditie: fn_ofertare_clar_puncte_poarta(bigint) nu are forma asteptata (corp md5 abd6b68b5b34a67f777045541aeff04a, sql STABLE DEFINER, cale, proprietar, drepturi exacte, unica)';
+    RAISE EXCEPTION '20270115a: postconditie: fn_ofertare_clar_puncte_poarta(bigint) nu are forma asteptata (corp md5 abd6b68b5b34a67f777045541aeff04a, sql STABLE DEFINER, cale, proprietar, drepturi exacte, unica)';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.oid = to_regprocedure('public.fn_ofertare_clar_parinte_puncte_garda()')
                    AND md5(replace(p.prosrc, chr(13), '')) = 'af05fe431f584442cea2351f4257427f' AND l.lanname = 'plpgsql' AND p.prokind = 'f'
@@ -357,16 +357,16 @@ BEGIN
                           SELECT pg_get_userbyid(e.grantee) || ':' || e.privilege_type || CASE WHEN e.is_grantable THEN '*' ELSE '' END AS d
                             FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) e) a) = 'postgres:EXECUTE')
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'fn_ofertare_clar_parinte_puncte_garda') <> 1 THEN
-    RAISE EXCEPTION '20270114a: postconditie: fn_ofertare_clar_parinte_puncte_garda() nu are forma asteptata (corp md5 af05fe431f584442cea2351f4257427f, plpgsql VOLATILE INVOKER, cale, proprietar, doar proprietarul executa, unica)';
+    RAISE EXCEPTION '20270115a: postconditie: fn_ofertare_clar_parinte_puncte_garda() nu are forma asteptata (corp md5 af05fe431f584442cea2351f4257427f, plpgsql VOLATILE INVOKER, cale, proprietar, doar proprietarul executa, unica)';
   END IF;
-  -- <<< FUNCTII 20270114a
+  -- <<< FUNCTII 20270115a
   -- triggerul: BEFORE (2) + ROW (1) + DELETE (8) + UPDATE (16) = 27, pe coloana licitatie_id, functia garda, fara conditie WHEN, fara argumente, activ (O)
   SELECT a.attnum INTO v_attnum FROM pg_attribute a WHERE a.attrelid = 'public.ofertare_clarificari'::regclass AND a.attname = 'licitatie_id' AND NOT a.attisdropped;
   IF NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = 'public.ofertare_clarificari'::regclass AND t.tgname = 'trg_ofertare_clar_parinte_puncte'
                    AND t.tgfoid = to_regprocedure('public.fn_ofertare_clar_parinte_puncte_garda()') AND t.tgtype = 27 AND t.tgattr = v_attnum::text::int2vector
                    AND t.tgqual IS NULL AND t.tgnargs = 0 AND t.tgenabled = 'O' AND NOT t.tgisinternal)
      OR (SELECT count(*) FROM pg_trigger t WHERE t.tgrelid = 'public.ofertare_clarificari'::regclass AND t.tgname = 'trg_ofertare_clar_parinte_puncte') <> 1 THEN
-    RAISE EXCEPTION '20270114a: postconditie: triggerul trg_ofertare_clar_parinte_puncte nu are forma asteptata (BEFORE UPDATE OF licitatie_id OR DELETE, FOR EACH ROW, garda, fara WHEN / argumente, activ)';
+    RAISE EXCEPTION '20270115a: postconditie: triggerul trg_ofertare_clar_parinte_puncte nu are forma asteptata (BEFORE UPDATE OF licitatie_id OR DELETE, FOR EACH ROW, garda, fara WHEN / argumente, activ)';
   END IF;
   -- fotografia: nimic altceva schimbat (drepturile ambelor tabele, triggerele punctelor, triggerele parintelui fara cel nou, politicile parintelui,
   -- cele 3 functii existente, RLS, numarul politicilor)
@@ -408,11 +408,11 @@ BEGIN
         || '|' || (SELECT count(*)::text FROM pg_policy p WHERE p.polrelid = 'public.ofertare_clarificari'::regclass)
     ) n ON n.ce = f.ce
    WHERE n.val IS DISTINCT FROM f.val;
-  IF v_rau IS NOT NULL THEN RAISE EXCEPTION '20270114a: postconditie: s-a schimbat altceva decat cele 2 politici + functiile + triggerul noi: %', v_rau; END IF;
-  IF (SELECT count(*) FROM cp_foto) <> 10 THEN RAISE EXCEPTION '20270114a: postconditie: fotografia incompleta'; END IF;
-  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20270114a_ofertare_clarificari_puncte_citire:' || txid_current() THEN
-    RAISE EXCEPTION '20270114a: garda final invalida';
+  IF v_rau IS NOT NULL THEN RAISE EXCEPTION '20270115a: postconditie: s-a schimbat altceva decat cele 2 politici + functiile + triggerul noi: %', v_rau; END IF;
+  IF (SELECT count(*) FROM cp_foto) <> 10 THEN RAISE EXCEPTION '20270115a: postconditie: fotografia incompleta'; END IF;
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20270115a_ofertare_clarificari_puncte_citire:' || txid_current() THEN
+    RAISE EXCEPTION '20270115a: garda final invalida';
   END IF;
-  RAISE NOTICE '20270114a: sfarsit la % ms de la BEGIN, lock-uri puternice tinute de % ms', round(extract(epoch FROM clock_timestamp() - now()) * 1000),
+  RAISE NOTICE '20270115a: sfarsit la % ms de la BEGIN, lock-uri puternice tinute de % ms', round(extract(epoch FROM clock_timestamp() - now()) * 1000),
     round(extract(epoch FROM clock_timestamp()) * 1000 - current_setting('gazpet.lock_puternic_la')::numeric / 1000);
 END $post$;

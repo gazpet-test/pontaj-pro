@@ -241,7 +241,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
     // Pasul B: practica CNSC invocată — DOAR temeiurile confirmate și bifate „include în adresă”, cu pagină și link (formatul unic §4).
     // Tabelul poate lipsi până la aplicarea migrării 20261014b → secțiunea pur și simplu nu apare.
     const nrExport = new Set(deTrimis.map(q => q.nr))
-    // 20270114a: punctele (și deci temeiurile de pe puncte, citite prin join cu ele) sunt vizibile doar ownerului / responsabililor licitației.
+    // 20270115a: punctele (și deci temeiurile de pe puncte, citite prin join cu ele) sunt vizibile doar ownerului / responsabililor licitației.
     // Pentru alt cont join-ul ar întoarce 0 rânduri și adresa ar ieși FĂRĂ temeiurile de pe puncte, părând completă (B7) → refuz explicit.
     // Verificarea e PE SERVER, acum, pentru fiecare întrebare exportată (poarta RLS a punctelor, fn_ofertare_clar_puncte_poarta) — nu heuristica
     // UI cu drepturi posibil învechite (review Jakarinos #1210 r1 P1 #3); fără RPC (migrarea neaplicată) sau eroare = export blocat (fail-closed).

@@ -5,7 +5,7 @@
 // autorității și REZOLUȚIA, separată de „am primit răspuns" (deschis / rezolvat / parțial /
 // nerezolvat), cu documentul care a rezolvat efectiv problema. Scenariul auditului: autoritatea
 // răspunde la 2 din 3 puncte sau trimite ulterior o planșă — acum se vede exact ce rămâne deschis.
-// Tabel: ofertare_clarificari_puncte. RLS (20270114a, decizia Răzvan 27.11.2026, după review-ul #1204): citirea ȘI scrierea punctelor doar pentru
+// Tabel: ofertare_clarificari_puncte. RLS (20270115a, decizia Răzvan 27.11.2026, după review-ul #1204): citirea ȘI scrierea punctelor doar pentru
 // cine are modulul Ofertare și e owner / responsabil al licitației clarificării (fn_ofertare_clar_puncte_poarta → fn_ofertare_poate_cheltui).
 // Serverul decide; UI-ul doar nu arată lista goală ca „fără puncte” celui care evident nu trece (poateCheltuiUI, din datele licitației din ecran).
 // ════════════════════════════════════════════════════════════════

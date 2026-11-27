@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Proba de CONCURENȚĂ a migrării 20270114a (Ofertare: punctele clarificărilor doar pentru owner / responsabili; garda părintelui): sesiuni psql REALE,
+# Proba de CONCURENȚĂ a migrării 20270115a (Ofertare: punctele clarificărilor doar pentru owner / responsabili; garda părintelui): sesiuni psql REALE,
 # cu barieră explicită, pe un cluster PostgreSQL ≥ 17 COMPLET DISPENSABIL. PGlite (o singură conexiune) nu poate proba asta: aici a doua operație vine cât
 # prima e încă necomisă și ține lock-urile (KEY SHARE al FK-ului pe părinte / lock-ul exclusiv al DELETE-ului). Același tipar ca
 # supabase/tests/20270112a_ofertare_cantitati_masuratori_concurenta.sh (coproc + \warn + observator pe pg_stat_activity, fără sleep orb).
@@ -9,11 +9,11 @@
 #   * ROLURI la nivel de CLUSTER: anon, authenticated (NOLOGIN NOINHERIT), service_role (NOLOGIN NOINHERIT BYPASSRLS), authenticator (NOINHERIT), create
 #     DOAR dacă lipsesc și ȘTERSE la final doar cele create aici → rulează DOAR cu CP_CLUSTER_DISPENSABIL=da (NU pe clona de producție).
 #   * FIȘIERE: un folder temporar (mktemp -d) cu SQL-ul extras și jurnalele; șters la final. REȚEA: doar psql la cluster. DATE: doar sintetice.
-# CE APLICĂ: scheletul 20270112a (fără CREATE ROLE) + scheletul aditiv 20270114a + secțiunea 2 a migrării (de la „-- ─── 2.” la (fără) „-- ─── 3.”),
+# CE APLICĂ: scheletul 20270112a (fără CREATE ROLE) + scheletul aditiv 20270115a + secțiunea 2 a migrării (de la „-- ─── 2.” la (fără) „-- ─── 3.”),
 #   extrasă EXACT, FĂRĂ $pre$ / $lock$ / $stare$ / $post$ (gărzile runnerului). Aplicarea completă prin runner e pasul SEPARAT al coordonatorului.
 #
 # CUM SE RULEAZĂ (coordonatorul; cere bash ≥ 4 (coproc), psql ≥ 13, python3, conectare ca superuser `postgres`):
-#     CP_CLUSTER_DISPENSABIL=da PGHOST=… PGPORT=… PGUSER=postgres bash supabase/tests/20270114a_ofertare_clarificari_puncte_citire_concurenta.sh <nume_baza_noua>
+#     CP_CLUSTER_DISPENSABIL=da PGHOST=… PGPORT=… PGUSER=postgres bash supabase/tests/20270115a_ofertare_clarificari_puncte_citire_concurenta.sh <nume_baza_noua>
 #   Ieșire: 0 = toate așteptările se țin (ultima linie TOTUL OK) și curățenia a reușit; 1 = cel puțin o așteptare nu se ține; 2 = refuz / folosire greșită.
 #
 # SCENARII (așteptările scrise de mână; review Jakarinos #1210 r2 P1 — cursa „primul punct” vs. părinte):
@@ -38,9 +38,9 @@ fi
 if [ $# -ne 1 ] || ! [[ "$1" =~ ^[a-z][a-z0-9_]{2,40}$ ]]; then echo "folosire: CP_CLUSTER_DISPENSABIL=da $0 <nume_baza_noua (a-z0-9_)>" >&2; exit 2; fi
 BAZA="$1"
 RADACINA="$(cd "$(dirname "$0")/../.." && pwd)"
-MIG="$RADACINA/supabase/migrations/20270114a_ofertare_clarificari_puncte_citire.sql"
+MIG="$RADACINA/supabase/migrations/20270115a_ofertare_clarificari_puncte_citire.sql"
 SCHELET="$RADACINA/supabase/tests/20270112a_ofertare_cantitati_masuratori_schelet.sql"
-SCHELET_P="$RADACINA/supabase/tests/20270114a_ofertare_clarificari_puncte_citire_schelet.sql"
+SCHELET_P="$RADACINA/supabase/tests/20270115a_ofertare_clarificari_puncte_citire_schelet.sql"
 [ -r "$MIG" ] && [ -r "$SCHELET" ] && [ -r "$SCHELET_P" ] || { echo "lipsesc migrarea / scheletele" >&2; exit 2; }
 command -v python3 > /dev/null || { echo "refuz: python3 lipseste (extragerea SQL-ului)" >&2; exit 2; }
 export PGCLIENTENCODING=UTF8
@@ -96,7 +96,7 @@ ca() { printf "SET LOCAL ROLE authenticated; SELECT set_config('request.jwt.clai
 caService() { printf "SET LOCAL ROLE service_role;"; }
 
 # ── 0. rolurile (doar cele care lipsesc), baza, scheletele, secțiunea 2 a migrării ──
-echo "0. baza de unica folosinta: scheletele + sectiunea 2 a migrarii 20270114a"
+echo "0. baza de unica folosinta: scheletele + sectiunea 2 a migrarii 20270115a"
 EXISTENTE=" $("${PSM[@]}" -tAc "SELECT coalesce(string_agg(rolname, ' '), '') FROM pg_roles WHERE rolname IN ('anon', 'authenticated', 'service_role', 'authenticator')") "
 for r in anon authenticated service_role authenticator; do
   case "$EXISTENTE" in *" $r "*) continue;; esac
@@ -128,7 +128,7 @@ PY
 ok $? "SQL-ul extras (schelete, sectiunea 2 a migrarii)"
 [ "$esec" = 0 ] || exit 1
 psql -X -q -w -v ON_ERROR_STOP=1 -d "$BAZA" -1 -f "$D/schelet.sql" > /dev/null; ok $? "scheletele"
-psql -X -q -w -v ON_ERROR_STOP=1 -d "$BAZA" -1 -f "$D/ddl.sql" > /dev/null; ok $? "sectiunea 2 a migrarii 20270114a (o tranzactie)"
+psql -X -q -w -v ON_ERROR_STOP=1 -d "$BAZA" -1 -f "$D/ddl.sql" > /dev/null; ok $? "sectiunea 2 a migrarii 20270115a (o tranzactie)"
 astept '3|1|2' "$(q "SELECT (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname IN ('fn_ofertare_clar_are_puncte', 'fn_ofertare_clar_puncte_poarta', 'fn_ofertare_clar_parinte_puncte_garda')) || '|' || (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.ofertare_clarificari'::regclass AND tgname = 'trg_ofertare_clar_parinte_puncte') || '|' || (SELECT count(*) FROM pg_policy WHERE polrelid = 'public.ofertare_clarificari_puncte'::regclass AND pg_get_expr(polqual, polrelid) = 'fn_ofertare_clar_puncte_poarta(clarificare_id)')")" "obiectele: functii | trigger | politici pe poarta"
 [ "$esec" = 0 ] || exit 1
 

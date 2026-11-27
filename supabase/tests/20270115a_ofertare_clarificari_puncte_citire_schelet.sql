@@ -1,7 +1,7 @@
--- Schema FALSĂ, ADITIVĂ, pentru proba locală a migrării 20270114a (scripts/pglite/test_ofertare_clarificari_puncte_citire_local.mjs).
+-- Schema FALSĂ, ADITIVĂ, pentru proba locală a migrării 20270115a (scripts/pglite/test_ofertare_clarificari_puncte_citire_local.mjs).
 -- Se rulează DUPĂ supabase/tests/20270112a_ofertare_cantitati_masuratori_schelet.sql (rolurile, auth.uid(), profiles, user_module_access,
 -- ofertare_licitatii, ofertare_documente_atribuire, ofertare_clarificari, fn_are_acces_ofertare (20260912), fn_ofertare_poate_cheltui (20261124a)).
--- NU e pentru producție. Conține EXACT ce citește / modifică 20270114a și nu există încă în schelet:
+-- NU e pentru producție. Conține EXACT ce citește / modifică 20270115a și nu există încă în schelet:
 --   * auth.users și ofertare_cerinte (minime: doar cheile referite de FK-urile tabelului de puncte);
 --   * public.ofertare_clarificari_puncte EXACT ca în 20260928l (coloane, CHECK-uri, UNIQUE, FK-uri, index, RLS, politicile clar_puncte_sel /
 --     clar_puncte_rw de azi, triggerul trg_clar_punct_semneaza + fn_clar_punct_semneaza cu corpul EXACT);

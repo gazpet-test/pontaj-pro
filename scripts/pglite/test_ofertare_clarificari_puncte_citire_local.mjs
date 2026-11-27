@@ -1,6 +1,6 @@
-// Proba LOCALĂ a migrării 20270114a (Ofertare: punctele unei clarificări doar pentru owner / responsabilii licitației) pe PGlite — NU atinge nicio bază reală.
+// Proba LOCALĂ a migrării 20270115a (Ofertare: punctele unei clarificări doar pentru owner / responsabilii licitației) pe PGlite — NU atinge nicio bază reală.
 // Baza: schema falsă supabase/tests/20270112a_ofertare_cantitati_masuratori_schelet.sql (roluri, auth.uid(), profiles, user_module_access, ofertare_licitatii,
-//   ofertare_clarificari, fn_are_acces_ofertare 20260912, fn_ofertare_poate_cheltui 20261124a — corpuri EXACTE) + supabase/tests/20270114a_…_schelet.sql
+//   ofertare_clarificari, fn_are_acces_ofertare 20260912, fn_ofertare_poate_cheltui 20261124a — corpuri EXACTE) + supabase/tests/20270115a_…_schelet.sql
 //   (ofertare_clarificari_puncte EXACT ca în 20260928l, politicile de azi, triggerul, drepturile ca pe producție). Migrarea rulează ca runnerul: plafonul
 //   5000 (sesiune) + marcajele prologului + PAȘII REALI L15 v2 (scripts/livrare_amprenta_gen.sh) + garda finală reală (lm_fin din scripts/livrare_mesaj.sh);
 //   revenirea cu plafonul 2000, fără amprenta globală.
@@ -32,7 +32,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const TMP = mkdtempSync(join(tmpdir(), 'cp_'))
 const citeste = rel => readFileSync(join(ROOT, rel), 'utf8').replace(/\r/g, '')
 const md5 = s => createHash('md5').update(s, 'utf8').digest('hex')
-const NUME = '20270114a_ofertare_clarificari_puncte_citire', NUME_REV = NUME + '_ROLLBACK'
+const NUME = '20270115a_ofertare_clarificari_puncte_citire', NUME_REV = NUME + '_ROLLBACK'
 const F_MIG = `supabase/migrations/${NUME}.sql`, F_REV = `supabase/revenire/${NUME_REV}.sql`
 const F_DRY = `supabase/tests/${NUME}_dryrun.sql`, F_OBIECTE = `supabase/tests/${NUME}.l15.obiecte.tsv`, F_SCHELET_P = `supabase/tests/${NUME}_schelet.sql`
 const F_SCHELET = 'supabase/tests/20270112a_ofertare_cantitati_masuratori_schelet.sql'
@@ -276,7 +276,7 @@ console.log('0. validatorul runnerului, forma fișierelor, inventarul instrucți
     const brut = readFileSync(join(ROOT, f), 'utf8')
     ok(!/^﻿/.test(brut) && !/\r/.test(brut), `${f}: fără BOM, LF`)
   }
-  ok(/^-- Version 20270114120000\. NEAPLICAT\./.test(MIG) && REV.includes('--versiune 20270114120001'), 'versiunile: migrarea 20270114120000, revenirea 20270114120001')
+  ok(/^-- Version 20270115120000\. NEAPLICAT\./.test(MIG) && REV.includes('--versiune 20270115120001'), 'versiunile: migrarea 20270115120000, revenirea 20270115120001')
   const L = `LOCK TABLE ${T} IN ACCESS EXCLUSIVE MODE NOWAIT;`, LP = `LOCK TABLE ${TP} IN SHARE ROW EXCLUSIVE MODE NOWAIT;`
   const faraComentarii = t => t.replace(/--[^\n]*/g, '')
   const MIGc = faraComentarii(MIG), REVc = faraComentarii(REV)
@@ -317,12 +317,12 @@ console.log('0. validatorul runnerului, forma fișierelor, inventarul instrucți
   // blocurile POLITICI / FUNCTII: identice între migrare și revenire (încrucișat / același text)
   const bloc = (t, et) => t.slice(t.indexOf(`-- >>> ${et}`), t.indexOf(`-- <<< ${et}`))
   // condițiile (IF … THEN), fără liniile RAISE EXCEPTION (mesajele diferă prin prefix)
-  const blocFn = t => bloc(t, 'FUNCTII 20270114a').split('\n').filter(l => !/RAISE EXCEPTION/.test(l)).join('\n')
-  ok(bloc(MIG, 'POLITICI PUNCTE 27.11.2026') === bloc(REV, 'POLITICI PUNCTE 27.11.2026') && bloc(MIG, 'POLITICI PUNCTE 20270114a') === bloc(REV, 'POLITICI PUNCTE 20270114a')
-    && bloc(MIG, 'POLITICI PUNCTE 27.11.2026').includes(`'clar_puncte_sel', 'r|permisiva|{authenticated}|(auth.uid() IS NOT NULL)|-'`) && bloc(MIG, 'POLITICI PUNCTE 20270114a').includes(`'clar_puncte_rw', '*|permisiva|{authenticated}|${POARTA}|${POARTA}'`)
-    && MIG.indexOf('-- >>> POLITICI PUNCTE 27.11.2026') < MIG.indexOf('-- >>> POLITICI PUNCTE 20270114a') && REV.indexOf('-- >>> POLITICI PUNCTE 20270114a') < REV.indexOf('-- >>> POLITICI PUNCTE 27.11.2026'),
-  'blocurile POLITICI (azi / 20270114a) sunt identice în migrare și revenire și apar în ordinea bună')
-  ok(blocFn(MIG).length > 1000 && blocFn(MIG) === blocFn(REV), 'blocul FUNCTII 20270114a (cele 3 funcții: md5, formă, drepturi) e identic în migrare și revenire (în afara prefixelor mesajelor)')
+  const blocFn = t => bloc(t, 'FUNCTII 20270115a').split('\n').filter(l => !/RAISE EXCEPTION/.test(l)).join('\n')
+  ok(bloc(MIG, 'POLITICI PUNCTE 27.11.2026') === bloc(REV, 'POLITICI PUNCTE 27.11.2026') && bloc(MIG, 'POLITICI PUNCTE 20270115a') === bloc(REV, 'POLITICI PUNCTE 20270115a')
+    && bloc(MIG, 'POLITICI PUNCTE 27.11.2026').includes(`'clar_puncte_sel', 'r|permisiva|{authenticated}|(auth.uid() IS NOT NULL)|-'`) && bloc(MIG, 'POLITICI PUNCTE 20270115a').includes(`'clar_puncte_rw', '*|permisiva|{authenticated}|${POARTA}|${POARTA}'`)
+    && MIG.indexOf('-- >>> POLITICI PUNCTE 27.11.2026') < MIG.indexOf('-- >>> POLITICI PUNCTE 20270115a') && REV.indexOf('-- >>> POLITICI PUNCTE 20270115a') < REV.indexOf('-- >>> POLITICI PUNCTE 27.11.2026'),
+  'blocurile POLITICI (azi / 20270115a) sunt identice în migrare și revenire și apar în ordinea bună')
+  ok(blocFn(MIG).length > 1000 && blocFn(MIG) === blocFn(REV), 'blocul FUNCTII 20270115a (cele 3 funcții: md5, formă, drepturi) e identic în migrare și revenire (în afara prefixelor mesajelor)')
 }
 
 console.log('1. comportamentul: înainte orice cont logat vede și oricine cu Ofertare scrie / mută / șterge; după, doar owner / responsabilii licitației')
@@ -341,8 +341,8 @@ console.log('1. comportamentul: înainte orice cont logat vede și oricine cu Of
   ok(!wOf.code && wOf.afectate === 1 && wStrain.code === '42501' && !mOf.code && mOf.afectate === 1 && !mOf5.code && mOf5.afectate === 1 && !dOf.code && dOf.afectate === 1,
     'ÎNAINTE: editorul Ofertare fără rol scrie puncte, mută (cu și fără puncte) și șterge clarificarea cu puncte (ușile din review-urile r1 / r2); alt modul = 42501')
   const a = await livreaza(db, MIG)
-  ok(a.ok && a.note.some(n => /^AMPRENTA_GLOBALA_CITITA inainte: [0-9a-f]{32}/.test(n)) && a.note.some(n => /^20270114a: lock la \d+ ms de la BEGIN \(1 incercari/.test(n))
-    && a.note.some(n => /^20270114a: stare verificata \(2 politici pe puncte, RLS activ, parintele fotografiat\)$/.test(n)),
+  ok(a.ok && a.note.some(n => /^AMPRENTA_GLOBALA_CITITA inainte: [0-9a-f]{32}/.test(n)) && a.note.some(n => /^20270115a: lock la \d+ ms de la BEGIN \(1 incercari/.test(n))
+    && a.note.some(n => /^20270115a: stare verificata \(2 politici pe puncte, RLS activ, parintele fotografiat\)$/.test(n)),
   'migrarea se aplică (pasul „înainte” real; lock din prima; fără numărători sub lock)' + (a.ok ? '' : ': ' + a.eroare))
   const s1 = await stare(db)
   ok(eNoua(s1) && s1.puncte === 5, 'DUPĂ: cele 2 politici pe poartă, cele 3 funcții (corp, DEFINER / INVOKER, STABLE / VOLATILE, cale, drepturi exacte), triggerul părintelui exact, restul identic: ' + s1.triggere_parinte)
@@ -370,7 +370,7 @@ async function dryRun(db, eticheta) {
   const note = []; let eroare = null
   try { await db.exec(DRY, { onNotice: n => note.push(n.message) }) } catch (e) { eroare = e.message; try { await db.exec('ROLLBACK') } catch { /* închisă */ } }
   const asteptate = ['t_politica OK', 't_fara_drept OK', 't_cu_drept OK', 't_parinte OK', 't_anon OK', 'TOTUL OK']
-  ok(!eroare && asteptate.every(t => note.some(n => n.startsWith('DRY 20270114a ' + t))) && note.some(n => /^DRY 20270114a t_cu_drept OK \(total puncte ca postgres: 11\)$/.test(n)),
+  ok(!eroare && asteptate.every(t => note.some(n => n.startsWith('DRY 20270115a ' + t))) && note.some(n => /^DRY 20270115a t_cu_drept OK \(total puncte ca postgres: 11\)$/.test(n)),
     `${eticheta}dry-run: ${asteptate.length} blocuri OK; totalul din NOTICE (5 ale scheletului + 4 fixturi + 2 scrise = 11)` + (eroare ? ': ' + eroare.slice(0, 300) : ''))
   ok(JSON.stringify(await nr()) === JSON.stringify(nr0) && JSON.stringify(await stare(db)) === JSON.stringify(s0), `${eticheta}dry-run: ROLLBACK, nimic rămas (licitații, conturi, drepturi, clarificări, puncte; starea obiectelor)`)
 }
@@ -385,7 +385,7 @@ async function dryRun(db, eticheta) {
   ok(g.ok && G && total === listaObiecte(manifest).length && JSON.stringify(await stare(b)) === JSON.stringify(s0),
     `generatorul de manifest: GLOBAL ${G}, ${total} diferențe anunțate = rândurile tipărite; ROLLBACK, starea neschimbată` + (g.ok ? '' : ': ' + g.eroare))
   if (process.argv.includes('--scrie-obiecte')) writeFileSync(join(ROOT, F_OBIECTE),
-    `# 20270114a: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase)\n` + fara18.join('\n') + '\n')
+    `# 20270115a: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase)\n` + fara18.join('\n') + '\n')
   const revizuit = existsSync(join(ROOT, F_OBIECTE)) ? listaObiecte(citeste(F_OBIECTE)) : []
   ok(JSON.stringify(fara18) === JSON.stringify(revizuit), `manifestul generat (${fara18.length} obiecte) = lista revizuită ${F_OBIECTE}: ${fara18.join(' | ')}`)
   ok(JSON.stringify(revizuit) === JSON.stringify(ASTEPTATE), 'lista revizuită = EXACT cele 3 funcții create + triggerul creat + cele 2 politici schimbate, nimic altceva (niciun drept pe tabel)')
@@ -409,7 +409,7 @@ async function dryRun(db, eticheta) {
   const fara = await bazaNoua()
   let ef = null
   try { await fara.exec(DRY) } catch (e) { ef = e.message; try { await fara.exec('ROLLBACK') } catch { /* închisă */ } }
-  ok(/t_politica FAIL: migrarea 20270114a nu e aplicata/.test(ef || ''), 'dry-run pe baza fără 20270114a = eșec (t_politica): ' + (ef || 'TRECE').slice(0, 100))
+  ok(/t_politica FAIL: migrarea 20270115a nu e aplicata/.test(ef || ''), 'dry-run pe baza fără 20270115a = eșec (t_politica): ' + (ef || 'TRECE').slice(0, 100))
   await fara.close(); await b.close()
 }
 console.log('2b. ambele ordini față de 20270113a (APLICATĂ pe producție 27.11.2026): 0113 → 0114 și 0114 → 0113')
@@ -493,7 +493,7 @@ console.log('4. revenirea: apply → revenire → re-apply; refuzurile revenirii
   ok(v.ok && eVeche(s2) && JSON.stringify(await numaraVechi(db, 'NOMOD')) === '[5,2]' && !dOf.code && dOf.afectate === 1,
     'revenirea: politicile de azi EXACT, funcțiile și triggerul șterse, nimic altceva atins; orice cont logat vede iar, editorul șterge iar clarificarea cu puncte' + (v.ok ? '' : ': ' + v.eroare))
   const v2 = await revino(db)
-  ok(!v2.ok && /starea nu e cea din 20270114a \(politicile ofertare_clarificari_puncte\): clar_puncte_rw: .*; clar_puncte_sel: r\|permisiva\|\{authenticated\}\|\(auth\.uid\(\) IS NOT NULL\)\|-/.test(v2.eroare), 'revenirea pe starea veche = refuz: ' + (v2.eroare || '').slice(0, 160))
+  ok(!v2.ok && /starea nu e cea din 20270115a \(politicile ofertare_clarificari_puncte\): clar_puncte_rw: .*; clar_puncte_sel: r\|permisiva\|\{authenticated\}\|\(auth\.uid\(\) IS NOT NULL\)\|-/.test(v2.eroare), 'revenirea pe starea veche = refuz: ' + (v2.eroare || '').slice(0, 160))
   const a2 = await livreaza(db, MIG)
   ok(a2.ok && eNoua(await stare(db)) && (await verifica(db)).length === 0, 're-aplicarea după revenire + verificările' + (a2.ok ? '' : ': ' + a2.eroare))
   await db.close()
@@ -503,20 +503,20 @@ const FN_NOU_TRUE = `CREATE OR REPLACE FUNCTION public.fn_ofertare_clar_puncte_p
 for (const [nume, pregatire, re] of [
   ['politica SELECT schimbată altfel', `ALTER POLICY clar_puncte_sel ON ${T} USING (true)`, /\(politicile ofertare_clarificari_puncte\): clar_puncte_sel: r\|permisiva\|\{authenticated\}\|true\|-/],
   ['o politică în plus (dependentă de funcție)', `CREATE POLICY zz_sel ON ${T} FOR SELECT TO anon USING (public.fn_ofertare_clar_puncte_poarta(clarificare_id))`, /\(politicile ofertare_clarificari_puncte\): \+zz_sel/],
-  ['funcția nouă cu alt corp', FN_NOU_TRUE, /fn_ofertare_clar_puncte_poarta\(bigint\) nu e cea din 20270114a/],
-  ['funcția nouă cu EXECUTE pentru anon', 'GRANT EXECUTE ON FUNCTION public.fn_ofertare_clar_puncte_poarta(bigint) TO anon', /fn_ofertare_clar_puncte_poarta\(bigint\) nu e cea din 20270114a .*drepturi exacte/],
-  ['funcția nouă fără EXECUTE pentru authenticated', 'REVOKE EXECUTE ON FUNCTION public.fn_ofertare_clar_puncte_poarta(bigint) FROM authenticated', /fn_ofertare_clar_puncte_poarta\(bigint\) nu e cea din 20270114a .*drepturi exacte/],
-  ['garda cu EXECUTE pentru authenticated', 'GRANT EXECUTE ON FUNCTION public.fn_ofertare_clar_parinte_puncte_garda() TO authenticated', /fn_ofertare_clar_parinte_puncte_garda\(\) nu e cea din 20270114a/],
-  ['garda SECURITY DEFINER', 'ALTER FUNCTION public.fn_ofertare_clar_parinte_puncte_garda() SECURITY DEFINER', /fn_ofertare_clar_parinte_puncte_garda\(\) nu e cea din 20270114a/],
-  ['triggerul dezactivat', `ALTER TABLE ${TP} DISABLE TRIGGER trg_ofertare_clar_parinte_puncte`, /triggerul trg_ofertare_clar_parinte_puncte nu e cel din 20270114a/],
-  ['triggerul lipsă', `DROP TRIGGER trg_ofertare_clar_parinte_puncte ON ${TP}`, /triggerul trg_ofertare_clar_parinte_puncte nu e cel din 20270114a/],
+  ['funcția nouă cu alt corp', FN_NOU_TRUE, /fn_ofertare_clar_puncte_poarta\(bigint\) nu e cea din 20270115a/],
+  ['funcția nouă cu EXECUTE pentru anon', 'GRANT EXECUTE ON FUNCTION public.fn_ofertare_clar_puncte_poarta(bigint) TO anon', /fn_ofertare_clar_puncte_poarta\(bigint\) nu e cea din 20270115a .*drepturi exacte/],
+  ['funcția nouă fără EXECUTE pentru authenticated', 'REVOKE EXECUTE ON FUNCTION public.fn_ofertare_clar_puncte_poarta(bigint) FROM authenticated', /fn_ofertare_clar_puncte_poarta\(bigint\) nu e cea din 20270115a .*drepturi exacte/],
+  ['garda cu EXECUTE pentru authenticated', 'GRANT EXECUTE ON FUNCTION public.fn_ofertare_clar_parinte_puncte_garda() TO authenticated', /fn_ofertare_clar_parinte_puncte_garda\(\) nu e cea din 20270115a/],
+  ['garda SECURITY DEFINER', 'ALTER FUNCTION public.fn_ofertare_clar_parinte_puncte_garda() SECURITY DEFINER', /fn_ofertare_clar_parinte_puncte_garda\(\) nu e cea din 20270115a/],
+  ['triggerul dezactivat', `ALTER TABLE ${TP} DISABLE TRIGGER trg_ofertare_clar_parinte_puncte`, /triggerul trg_ofertare_clar_parinte_puncte nu e cel din 20270115a/],
+  ['triggerul lipsă', `DROP TRIGGER trg_ofertare_clar_parinte_puncte ON ${TP}`, /triggerul trg_ofertare_clar_parinte_puncte nu e cel din 20270115a/],
   ['alt obiect construit pe funcție (politică pe alt tabel)', `CREATE POLICY zz_alt ON ${TP} FOR SELECT TO authenticated USING (public.fn_ofertare_clar_puncte_poarta(id))`, /depind si alte obiecte \(nu doar cele 2 politici si triggerul\): pg_policy:\d+/],
   ['alt trigger pe garda', `CREATE TRIGGER zz_trg BEFORE DELETE ON ${T} FOR EACH ROW EXECUTE FUNCTION public.fn_ofertare_clar_parinte_puncte_garda()`, /depind si alte obiecte .*: pg_trigger:\d+/],
-  ['un apelant cu corp text (nu e în pg_depend) care cheamă poarta', `CREATE FUNCTION public.zz_apelant(p bigint) RETURNS boolean LANGUAGE sql AS $f$ SELECT public.fn_ofertare_clar_puncte_poarta(p) $f$`, /alte functii numesc in corp functiile 20270114a .*: zz_apelant\(bigint\)/],
-  ['un apelant plpgsql care cheamă are_puncte', `CREATE FUNCTION public.zz_apelant2() RETURNS void LANGUAGE plpgsql AS $f$ BEGIN PERFORM public.fn_ofertare_clar_are_puncte(1); END $f$`, /alte functii numesc in corp functiile 20270114a .*: zz_apelant2\(\)/],
+  ['un apelant cu corp text (nu e în pg_depend) care cheamă poarta', `CREATE FUNCTION public.zz_apelant(p bigint) RETURNS boolean LANGUAGE sql AS $f$ SELECT public.fn_ofertare_clar_puncte_poarta(p) $f$`, /alte functii numesc in corp functiile 20270115a .*: zz_apelant\(bigint\)/],
+  ['un apelant plpgsql care cheamă are_puncte', `CREATE FUNCTION public.zz_apelant2() RETURNS void LANGUAGE plpgsql AS $f$ BEGIN PERFORM public.fn_ofertare_clar_are_puncte(1); END $f$`, /alte functii numesc in corp functiile 20270115a .*: zz_apelant2\(\)/],
   // r2 P2: o OMONIMĂ din altă schemă e un apelant ca oricare (excluderea e pe OID, nu pe nume); numele scrise cu majuscule sunt prinse (ILIKE)
-  ['o omonimă din altă schemă care cheamă poarta', `CREATE SCHEMA zz_alta; CREATE FUNCTION zz_alta.fn_ofertare_clar_are_puncte(p bigint) RETURNS boolean LANGUAGE sql AS $f$ SELECT public.fn_ofertare_clar_puncte_poarta(p) $f$`, /alte functii numesc in corp functiile 20270114a .*: zz_alta\.fn_ofertare_clar_are_puncte\(bigint\)/],
-  ['un apelant care scrie numele cu majuscule', `CREATE FUNCTION public.zz_apelant3(p bigint) RETURNS boolean LANGUAGE sql AS $f$ SELECT public.FN_OFERTARE_CLAR_PUNCTE_POARTA(p) $f$`, /alte functii numesc in corp functiile 20270114a .*: zz_apelant3\(bigint\)/],
+  ['o omonimă din altă schemă care cheamă poarta', `CREATE SCHEMA zz_alta; CREATE FUNCTION zz_alta.fn_ofertare_clar_are_puncte(p bigint) RETURNS boolean LANGUAGE sql AS $f$ SELECT public.fn_ofertare_clar_puncte_poarta(p) $f$`, /alte functii numesc in corp functiile 20270115a .*: zz_alta\.fn_ofertare_clar_are_puncte\(bigint\)/],
+  ['un apelant care scrie numele cu majuscule', `CREATE FUNCTION public.zz_apelant3(p bigint) RETURNS boolean LANGUAGE sql AS $f$ SELECT public.FN_OFERTARE_CLAR_PUNCTE_POARTA(p) $f$`, /alte functii numesc in corp functiile 20270115a .*: zz_apelant3\(bigint\)/],
   ['fn_are_acces_ofertare schimbată', FN_ACCES_TRUE, /fn_are_acces_ofertare\(\) nu e cea din 20260912/],
   ['fn_ofertare_poate_cheltui schimbată', FN_CHELT_TRUE, /fn_ofertare_poate_cheltui\(bigint, uuid\) nu e cea din 20261124a/],
   ['RLS oprit', `ALTER TABLE ${T} DISABLE ROW LEVEL SECURITY`, /RLS pe ofertare_clarificari_puncte nu e activ/],
@@ -623,18 +623,18 @@ const SCEN = {
   revCheltDeriva: async (db, t) => { await livreaza(db, MIG); await db.exec(FN_CHELT_TRUE); return revino(db, t) },
 }
 for (const [nume, fisier, inl, scenariu] of [
-  ['P1 migrare: fără verificarea exactă a politicilor', 'mig', [["  IF v_rau IS NOT NULL THEN RAISE EXCEPTION '20270114a: politicile ofertare_clarificari_puncte difera de cele de azi (27.11.2026): %', v_rau; END IF;\n", '']], 'selAltfel'],
-  ['P2 migrare: fără verificarea fn_are_acces_ofertare', 'mig', [["    RAISE EXCEPTION '20270114a: fn_are_acces_ofertare() nu e cea din 20260912 (corp md5 429d28e2a61fb24c8009d67050c16c85, sql STABLE DEFINER, cale, proprietar, drepturi exacte sau supraincarcari); coordonatorul da textul exact (pg_get_functiondef)';\n", '    NULL;\n']], 'accesDeriva'],
-  ['P3 migrare: fără verificarea fn_ofertare_poate_cheltui', 'mig', [["    RAISE EXCEPTION '20270114a: fn_ofertare_poate_cheltui(bigint, uuid) nu e cea din 20261124a (corp md5 07fba9e2e4249481fa9184fc48abc58d, sql STABLE DEFINER, cale, proprietar, drepturi exacte sau supraincarcari); coordonatorul da textul exact (pg_get_functiondef)';\n", '    NULL;\n']], 'cheltDeriva'],
-  ['P4 migrare: fără verificarea RLS', 'mig', [["    RAISE EXCEPTION '20270114a: RLS pe ofertare_clarificari_puncte nu e activ (sau e fortat)';\n", '    NULL;\n']], 'rlsOprit'],
-  ['P5 migrare: fără verificarea FK-ului', 'mig', [["    RAISE EXCEPTION '20270114a: lipseste FK-ul ofertare_clarificari_puncte.clarificare_id -> ofertare_clarificari(id)';\n", '    NULL;\n']], 'fkLipsa'],
-  ['R1 revenire: fără verificarea exactă a politicilor (după migrare, politica SELECT schimbată altfel)', 'rev', [["  IF v_rau IS NOT NULL THEN RAISE EXCEPTION '20270114a revenire: starea nu e cea din 20270114a (politicile ofertare_clarificari_puncte): %', v_rau; END IF;\n", '']], 'revSelAltfel'],
-  ['R2 revenire: fără verificarea porții', 'rev', [["    RAISE EXCEPTION '20270114a revenire: fn_ofertare_clar_puncte_poarta(bigint) nu e cea din 20270114a (corp md5 " + MD5_NOU + ", sql STABLE DEFINER, cale, proprietar, drepturi exacte sau supraincarcari)';\n", '    NULL;\n']], 'revFnDeriva'],
-  ['R3 revenire: fără verificarea gărzii', 'rev', [["    RAISE EXCEPTION '20270114a revenire: fn_ofertare_clar_parinte_puncte_garda() nu e cea din 20270114a (corp md5 " + MD5_GARDA + ", plpgsql VOLATILE INVOKER, cale, proprietar, doar proprietarul executa, unica)';\n", '    NULL;\n']], 'revGardaDeriva'],
-  ['R4 revenire: fără verificarea triggerului', 'rev', [["    RAISE EXCEPTION '20270114a revenire: triggerul trg_ofertare_clar_parinte_puncte nu e cel din 20270114a (BEFORE UPDATE OF licitatie_id OR DELETE, FOR EACH ROW, garda, fara WHEN / argumente, activ)';\n", '    NULL;\n']], 'revTrgDeriva'],
-  ['R5 revenire: fără scanarea apelanților din corpuri', 'rev', [["  IF v_dep IS NOT NULL THEN RAISE EXCEPTION '20270114a revenire: alte functii numesc in corp functiile 20270114a (apelanti neinregistrati in pg_depend): %', v_dep; END IF;\n", '']], 'revApelant'],
-  ['R6 revenire: fără verificarea fn_are_acces_ofertare', 'rev', [["    RAISE EXCEPTION '20270114a revenire: fn_are_acces_ofertare() nu e cea din 20260912 (corp md5 429d28e2a61fb24c8009d67050c16c85, sql STABLE DEFINER, cale, proprietar, drepturi exacte sau supraincarcari)';\n", '    NULL;\n']], 'revAccesDeriva'],
-  ['R7 revenire: fără verificarea fn_ofertare_poate_cheltui', 'rev', [["    RAISE EXCEPTION '20270114a revenire: fn_ofertare_poate_cheltui(bigint, uuid) nu e cea din 20261124a (corp md5 07fba9e2e4249481fa9184fc48abc58d, sql STABLE DEFINER, cale, proprietar, drepturi exacte sau supraincarcari)';\n", '    NULL;\n']], 'revCheltDeriva'],
+  ['P1 migrare: fără verificarea exactă a politicilor', 'mig', [["  IF v_rau IS NOT NULL THEN RAISE EXCEPTION '20270115a: politicile ofertare_clarificari_puncte difera de cele de azi (27.11.2026): %', v_rau; END IF;\n", '']], 'selAltfel'],
+  ['P2 migrare: fără verificarea fn_are_acces_ofertare', 'mig', [["    RAISE EXCEPTION '20270115a: fn_are_acces_ofertare() nu e cea din 20260912 (corp md5 429d28e2a61fb24c8009d67050c16c85, sql STABLE DEFINER, cale, proprietar, drepturi exacte sau supraincarcari); coordonatorul da textul exact (pg_get_functiondef)';\n", '    NULL;\n']], 'accesDeriva'],
+  ['P3 migrare: fără verificarea fn_ofertare_poate_cheltui', 'mig', [["    RAISE EXCEPTION '20270115a: fn_ofertare_poate_cheltui(bigint, uuid) nu e cea din 20261124a (corp md5 07fba9e2e4249481fa9184fc48abc58d, sql STABLE DEFINER, cale, proprietar, drepturi exacte sau supraincarcari); coordonatorul da textul exact (pg_get_functiondef)';\n", '    NULL;\n']], 'cheltDeriva'],
+  ['P4 migrare: fără verificarea RLS', 'mig', [["    RAISE EXCEPTION '20270115a: RLS pe ofertare_clarificari_puncte nu e activ (sau e fortat)';\n", '    NULL;\n']], 'rlsOprit'],
+  ['P5 migrare: fără verificarea FK-ului', 'mig', [["    RAISE EXCEPTION '20270115a: lipseste FK-ul ofertare_clarificari_puncte.clarificare_id -> ofertare_clarificari(id)';\n", '    NULL;\n']], 'fkLipsa'],
+  ['R1 revenire: fără verificarea exactă a politicilor (după migrare, politica SELECT schimbată altfel)', 'rev', [["  IF v_rau IS NOT NULL THEN RAISE EXCEPTION '20270115a revenire: starea nu e cea din 20270115a (politicile ofertare_clarificari_puncte): %', v_rau; END IF;\n", '']], 'revSelAltfel'],
+  ['R2 revenire: fără verificarea porții', 'rev', [["    RAISE EXCEPTION '20270115a revenire: fn_ofertare_clar_puncte_poarta(bigint) nu e cea din 20270115a (corp md5 " + MD5_NOU + ", sql STABLE DEFINER, cale, proprietar, drepturi exacte sau supraincarcari)';\n", '    NULL;\n']], 'revFnDeriva'],
+  ['R3 revenire: fără verificarea gărzii', 'rev', [["    RAISE EXCEPTION '20270115a revenire: fn_ofertare_clar_parinte_puncte_garda() nu e cea din 20270115a (corp md5 " + MD5_GARDA + ", plpgsql VOLATILE INVOKER, cale, proprietar, doar proprietarul executa, unica)';\n", '    NULL;\n']], 'revGardaDeriva'],
+  ['R4 revenire: fără verificarea triggerului', 'rev', [["    RAISE EXCEPTION '20270115a revenire: triggerul trg_ofertare_clar_parinte_puncte nu e cel din 20270115a (BEFORE UPDATE OF licitatie_id OR DELETE, FOR EACH ROW, garda, fara WHEN / argumente, activ)';\n", '    NULL;\n']], 'revTrgDeriva'],
+  ['R5 revenire: fără scanarea apelanților din corpuri', 'rev', [["  IF v_dep IS NOT NULL THEN RAISE EXCEPTION '20270115a revenire: alte functii numesc in corp functiile 20270115a (apelanti neinregistrati in pg_depend): %', v_dep; END IF;\n", '']], 'revApelant'],
+  ['R6 revenire: fără verificarea fn_are_acces_ofertare', 'rev', [["    RAISE EXCEPTION '20270115a revenire: fn_are_acces_ofertare() nu e cea din 20260912 (corp md5 429d28e2a61fb24c8009d67050c16c85, sql STABLE DEFINER, cale, proprietar, drepturi exacte sau supraincarcari)';\n", '    NULL;\n']], 'revAccesDeriva'],
+  ['R7 revenire: fără verificarea fn_ofertare_poate_cheltui', 'rev', [["    RAISE EXCEPTION '20270115a revenire: fn_ofertare_poate_cheltui(bigint, uuid) nu e cea din 20261124a (corp md5 07fba9e2e4249481fa9184fc48abc58d, sql STABLE DEFINER, cale, proprietar, drepturi exacte sau supraincarcari)';\n", '    NULL;\n']], 'revCheltDeriva'],
 ]) {
   const orig = fisier === 'mig' ? MIG : REV
   let ro, rm
