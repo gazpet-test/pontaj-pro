@@ -322,3 +322,11 @@ marcajul de subcontractor. Coordonatele: sistemul din fișierele livrate (Stereo
   5. semnalele de citire parțială / pagini necitite.
 - „Citește din nou” (alt model, la cererea MP-ului): a doua citire se compară rând cu rând cu prima (`comparaCitiri`), diferențele se aleg de om.
 - Costul pe buletin ≈ o citire Sonnet; plafonul lunar rămâne (R10).
+
+## 24. Dreptul de export (precizare la R9, 27.11.2026)
+
+- Încărcarea / confirmarea / anularea buletinelor, metodele obligatorii, sudurile eliminate și DEBLOCAREA exportului: doar owner și MP (R9).
+- Înregistrarea unui export COMPLET (fără lipsuri blocante): cine poate exporta și azi — owner, MP sau accesul existent de scriere pe pachetele
+  Execuției, cu restricția pe proiect. Exportul nu scrie nimic în arhiva de buletine; doar se înregistrează cu fotografia lui.
+- Exportul INCOMPLET: doar MP-ul (sau owner-ul), cu deblocarea lui proprie, valabilă o oră, o singură dată, pentru exact lipsurile deblocate.
+- Citirea arhivei: accesul existent de citire pe pachete, cu restricția pe proiect.
