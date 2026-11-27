@@ -54,7 +54,10 @@ export const costMaximNdt = (model: string) => costNdt(model, { input_tokens: MA
 export const rezervaNdt = (model: string) =>
   Math.ceil(Math.round(costNdt(model, { input_tokens: MAX_INPUT_NDT + 2000, output_tokens: MAX_TOKENS_NDT }) * 1e6) / 1e4) / 100
 // Termen GLOBAL pe cerere (limita funcției ~150 s), ca la E3: apelul plătit primește doar timpul rămas minus marja de decontare.
-export const TERMENE_NDT = Object.freeze({ total: 135000, marja: 10000, minApel: 30000, numarare: 20000 })
+// decontare = termenul explicit al RPC-ului de decontare (încape în marjă); informativ = bugetul citirilor de plafon de după decontare
+// (cele două citiri împreună, tăiat și la termenul global). Niciun await de după rezervare nu rămâne fără termen.
+export type TermeneNdt = Readonly<Record<'total' | 'marja' | 'minApel' | 'numarare' | 'decontare' | 'informativ', number>>
+export const TERMENE_NDT: TermeneNdt = Object.freeze({ total: 135000, marja: 10000, minApel: 30000, numarare: 20000, decontare: 8000, informativ: 3000 })
 
 // ── erori de business: răspuns JSON cu cod (nu throw în afara handlerului) ─────────────────────────────────────────────────
 export class EroareNdt extends EroareE3 {
@@ -145,12 +148,16 @@ function intregOpt(v: unknown, min: number, max: number, cale: string): number |
 }
 // Aceeași listă ca fn_sud_buletin_confirma (20270114a): lower(btrim(...)) ∈ {acceptat, accepted, admis} / {respins, rejected};
 // în plus null = ilizibil (RPC-ul refuză null, deci omul alege înainte de confirmare).
-const REZULTATE: Record<string, 'acceptat' | 'respins'> = { acceptat: 'acceptat', accepted: 'acceptat', admis: 'acceptat', respins: 'respins', rejected: 'respins' }
+// Map, nu obiect literal: o căutare pe obiect vede și proprietățile moștenite („constructor”, „__proto__”, „toString”),
+// care ar trece drept rezultat și ar dispărea la serializare (review r1 P2). Map-ul are doar cheile puse aici.
+export const REZULTATE: ReadonlyMap<string, 'acceptat' | 'respins'> = new Map([
+  ['acceptat', 'acceptat'], ['accepted', 'acceptat'], ['admis', 'acceptat'], ['respins', 'respins'], ['rejected', 'respins'],
+] as const)
 function rezultatOpt(v: unknown, cale: string): 'acceptat' | 'respins' | null {
   if (v === undefined || v === null) return null
   if (typeof v !== 'string') return refuz(`${cale}: trebuie text`)
-  const r = REZULTATE[v.trim().toLowerCase()]
-  if (!r) refuz(`${cale}: rezultat necunoscut`)
+  const r = REZULTATE.get(v.trim().toLowerCase())
+  if (r === undefined) return refuz(`${cale}: rezultat necunoscut`)
   return r
 }
 export const CHEI_ANTET = ['firma', 'metoda', 'numar', 'data', 'tronson', 'nr_randuri_tiparit', 'partial', 'pagini_necitite']
@@ -221,8 +228,47 @@ const usageValid = (u: Record<string, unknown> | undefined) => !!u &&
   ['input_tokens', 'output_tokens'].every(k => Number.isSafeInteger(u[k]) && (u[k] as number) >= 0) &&
   ['cache_read_input_tokens', 'cache_creation_input_tokens'].every(k => u[k] === undefined || u[k] === null || (Number.isSafeInteger(u[k]) && (u[k] as number) >= 0))
 
+// Validarea fără excepții, pentru faza plătită (acolo nimic previzibil nu aruncă): orice refuz = { ok: false, detaliu }.
+export type CitireNdt = ReturnType<typeof valideazaCitireNdt>
+export function citireSigura(raw: string): { ok: true; citire: CitireNdt } | { ok: false; detaliu: string } {
+  try { return { ok: true, citire: valideazaCitireNdt(raw) } } catch (e) {
+    return { ok: false, detaliu: e instanceof EroareNdt && e.detaliu ? e.detaliu : 'răspuns nevalidabil' }
+  }
+}
+
+// Termen explicit pe o operație cu baza (review r1 P2): semnalul intră în cerere (`.abortSignal(s)` pe builder-ul PostgREST, pus
+// ÎNAINTEA lui .single() / .maybeSingle()) și, în plus, o cursă cu un temporizator propriu, curățat la final — și o cerere care
+// ignoră semnalul se oprește la termen. Depășirea = DOMException TimeoutError (rezultat necunoscut, niciodată succes).
+export async function cuTermenBd<X>(ms: number, cerere: (semnal: AbortSignal) => PromiseLike<X>): Promise<X> {
+  const c = new AbortController()
+  let t: ReturnType<typeof setTimeout> | undefined
+  const expira = new Promise<never>((_, nu) => {
+    t = setTimeout(() => { const e = new DOMException('termen depășit', 'TimeoutError'); c.abort(e); nu(e) }, Math.max(1, Math.floor(ms)))
+  })
+  try {
+    return await Promise.race([Promise.resolve().then(() => cerere(c.signal)), expira])
+  } finally { clearTimeout(t) }
+}
+
+// Plafonul după decontare, DOAR informativ: un buget de timp comun pe ambele citiri; orice eroare / termen / buget epuizat = null,
+// iar citirea plătită și validă se livrează oricum (review r1 P2).
+async function plafonInformativ(ledger: SupabaseClient, rezervare: number, bugetMs: number, acum: () => number): Promise<unknown> {
+  const pana = acum() + bugetMs
+  try {
+    if (bugetMs <= 0) return null
+    const { data: rz, error: rze } = await cuTermenBd(pana - acum(), s =>
+      ledger.from('ai_plafon_rezervari').select('luna').eq('id', rezervare).abortSignal(s).single())
+    if (rze || !rz) return null
+    const rest = pana - acum()
+    if (rest <= 0) return null
+    const { data: pl, error: ple } = await cuTermenBd(rest, s => ledger.from('ai_plafon_lunar')
+      .select('cheie,luna,plafon_usd,consumat_usd,rezervat_usd').eq('cheie', CHEIE_PLAFON).eq('luna', rz.luna).abortSignal(s).maybeSingle())
+    return ple ? null : (pl ?? null)
+  } catch { return null }
+}
+
 // Dependențe injectabile DOAR pentru teste (ceas, transport, termene); producția folosește Date.now / fetch / TERMENE_NDT.
-export type DepsNdt = { acum?: () => number; transport?: typeof fetch; termene?: typeof TERMENE_NDT }
+export type DepsNdt = { acum?: () => number; transport?: typeof fetch; termene?: TermeneNdt }
 export type ConfigNdt = { apiKey: string | undefined; modele: ModeleNdt }
 
 export async function citesteBuletinNdt(req: Request, caller: SupabaseClient, ledger: SupabaseClient, cfg: ConfigNdt,
@@ -238,13 +284,25 @@ export async function citesteBuletinNdt(req: Request, caller: SupabaseClient, le
   let rezervare: number | null = null
   // 0 până imediat înaintea apelului plătit (numărarea e gratuită); null = cost necunoscut după pornirea generării.
   let cost: number | null = 0
-  let decontareIncercata = false
-  const deconteaza = async () => {
-    if (rezervare === null || decontareIncercata) return
-    decontareIncercata = true   // o singură decontare, nicio reluare automată (L22)
-    const { error } = await ledger.rpc('fn_ai_plafon_deconteaza', { p_id: rezervare, p_cost_real: cost })
-    if (error) throw new EroareNdt('decontare_indisponibila', 503)
+  // Decontarea: o singură încercare, nicio reluare automată (L22), cu termen explicit (T.decontare, încape în marjă). NU aruncă:
+  // întoarce true doar la confirmarea RPC-ului. Eroare / termen / excepție = nedecontat → rezerva rămâne consumată integral
+  // (fail-closed) și citirea nu se livrează. Rezultatul e memorat: un al doilea apel nu mai cheamă RPC-ul.
+  let decontare: Promise<boolean> | null = null
+  const deconteaza = (): Promise<boolean> => {
+    const id = rezervare
+    if (id === null) return Promise.resolve(true)
+    decontare ??= (async () => {
+      try {
+        const { error } = await cuTermenBd(T.decontare, s => ledger.rpc('fn_ai_plafon_deconteaza', { p_id: id, p_cost_real: cost }).abortSignal(s))
+        return !error
+      } catch { return false }
+    })()
+    return decontare
   }
+  // Ieșirea din faza plătită pe o eroare previzibilă (anti-bug Edge, review r1 P1): decontare EXPLICITĂ, apoi răspunsul — fără throw
+  // și fără decontare în catch. Decontarea picată acoperă codul inițial (503 decontare_indisponibila).
+  const inchide = async (status: number, cod: string, extra: Record<string, unknown> = {}) =>
+    (await deconteaza()) ? eroare(status, cod, extra) : eroare(503, 'decontare_indisponibila')
   try {
     if (req.method !== 'POST') return eroare(405, 'metoda_invalida')
     const corp = await citesteCorp(req, 4096)
@@ -283,6 +341,19 @@ export async function citesteBuletinNdt(req: Request, caller: SupabaseClient, le
     const sha = await sha256Hex(bytes)
     if (sha !== bul.fisier_sha256) return eroare(409, 'amprenta_diferita')
 
+    // Corpul cererii AI se construiește ÎNAINTEA rezervării (pur local, fără cost): după rezervare rămân doar apelurile.
+    const gandire = gandireNdt(model)
+    const payload = {
+      model, system: PROMPT_NDT, ...(gandire ? { thinking: gandire } : {}),
+      messages: [{ role: 'user', content: [
+        { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64(bytes) } },
+        { type: 'text', text: 'Transcrie buletinul NDT atașat: antetul și toate rândurile anexei, conform regulilor.' },
+      ] }],
+    }
+    const headers = { 'x-api-key': cfg.apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }
+    const corpNumarare = JSON.stringify(payload)
+    const corpApel = JSON.stringify({ ...payload, max_tokens: MAX_TOKENS_NDT })
+
     // 5. Plafonul (R10), fail-closed: plafonul implicit al lunii noi = ultimul plafon fixat pe cheie; niciun plafon fixat
     //    vreodată → 0, deci orice rezervare e refuzată („neconfigurat”). Rezervarea atomică e în fn_ai_plafon_rezerva (FOR UPDATE).
     const { data: ultim, error: ue } = await ledger.from('ai_plafon_lunar').select('luna,plafon_usd')
@@ -301,30 +372,28 @@ export async function citesteBuletinNdt(req: Request, caller: SupabaseClient, le
       }
       return eroare(503, 'rezervare_indisponibila')
     }
-    if (!Number.isSafeInteger(Number(id)) || Number(id) <= 0) throw new EroareNdt('rezervare_indisponibila', 503)
+    // Id-ul necunoscut: rezervarea (dacă s-a făcut) nu se poate deconta → rămâne consumată (fail-closed), fără apel AI.
+    if (!Number.isSafeInteger(Number(id)) || Number(id) <= 0) return eroare(503, 'rezervare_indisponibila')
     rezervare = Number(id)
 
+    // ── FAZA PLĂTITĂ (de la rezervare până la răspuns) ─────────────────────────────────────────────────────────────────────
+    // Fără throw (anti-bug Edge, review r1 P1; verificat textual de handler_test.ts): fiecare ieșire previzibilă de dinaintea
+    // decontării trece prin `return await inchide(...)`; după decontare, refuzurile sunt simple răspunsuri (nimic de eliberat).
     // 6. Numărarea gratuită a întregului corp (PDF + prompt), apoi apelul plătit — o singură dată, fără reîncercare.
-    const gandire = gandireNdt(model)
-    const payload = {
-      model, system: PROMPT_NDT, ...(gandire ? { thinking: gandire } : {}),
-      messages: [{ role: 'user', content: [
-        { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64(bytes) } },
-        { type: 'text', text: 'Transcrie buletinul NDT atașat: antetul și toate rândurile anexei, conform regulilor.' },
-      ] }],
-    }
-    const headers = { 'x-api-key': cfg.apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }
     let count: Response
     try {
-      count = await transport('https://api.anthropic.com/v1/messages/count_tokens', { method: 'POST', headers, body: JSON.stringify(payload),
+      count = await transport('https://api.anthropic.com/v1/messages/count_tokens', { method: 'POST', headers, body: corpNumarare,
         signal: AbortSignal.timeout(Math.max(1, Math.min(T.numarare, ramasApel()))) })
-    } catch { throw new EroareNdt('numarare_indisponibila', 502) }   // cost 0: nimic generat
-    if (!count.ok) throw count.status >= 400 && count.status < 500 && count.status !== 429 ? new EroareNdt('pdf_neacceptat') : new EroareNdt('numarare_indisponibila', 502)
+    } catch { return await inchide(502, 'numarare_indisponibila') }   // cost 0: nimic generat, rezerva se eliberează
+    if (!count.ok) {
+      const respins = count.status >= 400 && count.status < 500 && count.status !== 429
+      return await inchide(respins ? 422 : 502, respins ? 'pdf_neacceptat' : 'numarare_indisponibila')
+    }
     const tokens = await count.json().then(j => j?.input_tokens).catch(() => null)
-    if (!Number.isSafeInteger(tokens) || tokens <= 0) throw new EroareNdt('numarare_indisponibila', 502)
-    if (tokens > MAX_INPUT_NDT) throw new EroareNdt('pdf_prea_multi_tokeni')
+    if (!Number.isSafeInteger(tokens) || tokens <= 0) return await inchide(502, 'numarare_indisponibila')
+    if (tokens > MAX_INPUT_NDT) return await inchide(422, 'pdf_prea_multi_tokeni')
     const timpApel = ramasApel()
-    if (timpApel < T.minApel) throw new EroareNdt('termen_depasit', 504)
+    if (timpApel < T.minApel) return await inchide(504, 'termen_depasit')
     cost = null   // de aici, orice abatere = cost necunoscut: rezerva rămâne consumată integral (L05, L22)
     const semnal = AbortSignal.timeout(timpApel)
     const cuTermen = <X>(pr: Promise<X>) => Promise.race([pr, new Promise<never>((_, nu) => {
@@ -333,35 +402,37 @@ export async function citesteBuletinNdt(req: Request, caller: SupabaseClient, le
     // deno-lint-ignore no-explicit-any
     let result: any
     try {
-      const r = await cuTermen(transport('https://api.anthropic.com/v1/messages', { method: 'POST', headers,
-        body: JSON.stringify({ ...payload, max_tokens: MAX_TOKENS_NDT }), signal: semnal }))
-      if (!r.ok) throw new EroareNdt('apel_ai_esuat', 502)
+      const r = await cuTermen(transport('https://api.anthropic.com/v1/messages', { method: 'POST', headers, body: corpApel, signal: semnal }))
+      if (!r.ok) return await inchide(502, 'apel_ai_esuat')
       result = await cuTermen(r.json())
-    } catch (e) { throw expirat(e) ? new EroareNdt('termen_depasit', 504) : e }
+    } catch (e) {
+      // termen, rețea sau corp ilizibil: cost necunoscut (null) → rezerva rămâne consumată; un singur apel, fără reîncercare
+      return await inchide(expirat(e) ? 504 : 502, expirat(e) ? 'termen_depasit' : 'apel_ai_esuat')
+    }
     if (usageValid(result?.usage)) cost = costNdt(model, result.usage)
-    await deconteaza()   // inclusiv la refuz, trunchiere sau JSON invalid: apelul a costat
-    if (result?.stop_reason === 'max_tokens') throw new EroareNdt('raspuns_ai_incomplet')
+    // Decontarea explicită, inclusiv la refuz, trunchiere sau JSON invalid: apelul a costat.
+    if (!(await deconteaza())) return eroare(503, 'decontare_indisponibila')
+    if (result?.stop_reason === 'max_tokens') return eroare(422, 'raspuns_ai_incomplet')
     const refuzAi = mesajRefuz(result)
-    if (refuzAi) throw new EroareNdt('refuz_ai', 422, refuzAi)
-    if (result?.stop_reason !== 'end_turn') throw new EroareNdt('raspuns_ai_incomplet', 422, `stop_reason ${String(result?.stop_reason).slice(0, 40)}`)
-    const citire = valideazaCitireNdt(textRaspuns(result))
+    if (refuzAi) return eroare(422, 'refuz_ai', { detaliu: refuzAi })
+    if (result?.stop_reason !== 'end_turn') return eroare(422, 'raspuns_ai_incomplet', { detaliu: `stop_reason ${String(result?.stop_reason).slice(0, 40)}` })
+    const v = citireSigura(textRaspuns(result))
+    if (!v.ok) return eroare(422, 'raspuns_ai_invalid', { detaliu: v.detaliu })
+    const citire = v.citire
 
-    // Plafonul după decontare e doar informativ: o eroare aici nu aruncă o citire plătită și validă.
-    let plafon: unknown = null
-    try {
-      const { data: rz, error: rze } = await ledger.from('ai_plafon_rezervari').select('luna').eq('id', rezervare).single()
-      if (!rze && rz) {
-        const { data: pl, error: ple } = await ledger.from('ai_plafon_lunar').select('cheie,luna,plafon_usd,consumat_usd,rezervat_usd')
-          .eq('cheie', CHEIE_PLAFON).eq('luna', rz.luna).maybeSingle()
-        if (!ple) plafon = pl
-      }
-    } catch { /* informativ */ }
+    // Plafonul după decontare e doar informativ, cu termen propriu (T.informativ, tăiat la termenul global): o eroare sau o
+    // citire blocată NU oprește livrarea unei citiri plătite și valide (plafon = null).
+    const plafon = await plafonInformativ(ledger, rezervare, Math.min(T.informativ, final - acum()), acum)
     return raspuns(200, {
       success: true, buletin_id: bul.id, versiune: bul.versiune, fisier_sha256: sha, model, model_tip: b.model_tip,
       citire, nr_randuri: citire.randuri.length, cost_usd: cost ?? suma, cost_cunoscut: cost !== null, plafon,
     })
+    // ── SFÂRȘIT FAZA PLĂTITĂ ───────────────────────────────────────────────────────────────────────────────────────────────
   } catch (e) {
-    try { await deconteaza() } catch { return eroare(503, 'decontare_indisponibila') }
+    // Înaintea rezervării: refuzurile de cerere / identitate (EroareE3) ajung aici, fără cost.
+    // După rezervare nimic previzibil nu aruncă; aici ajunge doar un defect neprevăzut → plasă de siguranță: aceeași decontare
+    // explicită (cu termen, nu aruncă, memorată), apoi 5xx.
+    if (rezervare !== null) return await inchide(502, 'serviciu_indisponibil')
     if (e instanceof EroareE3) return eroare(e.status, e.cod, e instanceof EroareNdt && e.detaliu ? { detaliu: e.detaliu } : {})
     return eroare(502, 'serviciu_indisponibil')
   }
