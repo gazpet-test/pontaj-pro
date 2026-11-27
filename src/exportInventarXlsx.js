@@ -6,9 +6,10 @@
 // și la final rubrica de semnătură a antreprenorului. Structura, lățimile, stilurile și merge-urile = modelul rev.4
 // al inventarului (o foaie „Sheet1”, antet pe 2 rânduri, date de la rândul 3).
 //
-//   construiesteRanduriInventar({ pachete, coordonate, clase }) — pur: rândurile de pachet + coordonatele confirmate
-//     → { randuri, lipsuri }. Intră DOAR sudurile cu coordonate confirmate (D16). Nimic nu se inventează: elementul
-//     aval lipsă, seria / lungimea lipsă, clasa lipsă apar în `lipsuri`, cu tipul de blocaj (§8 / §16).
+//   construiesteRanduriInventar({ pachete, coordonate, clase, eliminate }) — pur: rândurile de pachet + coordonatele
+//     confirmate → { randuri, lipsuri, conflicte }. Intră DOAR sudurile cu coordonate confirmate, neeliminate (D16, R8).
+//     Ordinea fizică și dublurile: R7 (lantSuduri). Nimic nu se inventează: elementul aval lipsă, seria / lungimea lipsă,
+//     clasa lipsă apar în `lipsuri`, cu tipul de blocaj (§16, R8) sau ca avertisment.
 //   generateInventarXlsx({ lot, randuri, semnatura }) — Uint8Array (xlsx-js-style, ca exportCentralizatorXlsx.js).
 // ===========================================================================
 
@@ -23,6 +24,8 @@ const esteNr = x => typeof x === 'number' && Number.isFinite(x)
 // blocajele (§16): fără deblocare = documentul ar ieși greșit; cu deblocare = MP poate decide să exporte totuși
 export const BLOCAJ_FARA_DEBLOCARE = 'fara_deblocare'
 export const BLOCAJ_DEBLOCARE_MP = 'deblocare_mp'
+// avertisment = exportul merge, dar se arată (R8: capăt de tronson; R7: dubluri rezolvate; R4: suduri eliminate)
+export const BLOCAJ_AVERTISMENT = 'avertisment'
 
 // ---------------------------------------------------------------------------
 // ELEMENTUL (țeavă / curbă) din rândul de pachet
@@ -115,20 +118,37 @@ function indexCoordonate(coordonate, lipsuri) {
 /**
  * Rândurile inventarului din pachete + coordonatele confirmate.
  * @param {object} p
- * @param {Array<{cod_document_full:string, revizie?:number, tronson:string|number, tevi:object[]}>} p.pachete
- *   pachetele în ordinea pe tronson; `tevi` = rândurile executie_tevi (poz_in_pachet, tip_rand, serie_unica, sarja,
+ * @param {Array<{id?:number|string, cod_document_full:string, revizie?:number, km_start_m?:number, tronson:string|number, tevi:object[]}>} p.pachete
+ *   toate pachetele tronsonului, în orice ordine (se iau ultimele revizii, ordonate după km start, R7);
+ *   `tevi` = rândurile executie_tevi (poz_in_pachet, tip_rand, serie_unica, sarja,
  *   dimensiune, lungime_m, sudura_cod, unghi_curba, poz_km_m)
  * @param {Array<{cheie:string,x:number,y:number,z:number}>|Map} p.coordonate  DOAR cele confirmate (cheia = cheieSudura)
  * @param {Array<{km_de:number, km_pana:number, clasa:string}>|Object<string,Array>} [p.clase]
  *   intervalele de clasă în metri (aceeași unitate ca poz_km_m); listă comună sau obiect pe tronson { 12: [...] }
  * @param {string} [p.prefixSudura='T']  'T' = LOT 1 (ca în model), 'TR' = LOT 2
- * @returns {{randuri:object[], lipsuri:object[]}}
+ * @param {Set<string>|string[]} [p.eliminate]  cheile sudurilor eliminate prin tăiere, active (R4): nu intră în inventar
+ *   și nu cer coordonate; se listează ca avertisment
+ * @returns {{randuri:object[], lipsuri:object[], conflicte:object[]}}
+ *   conflicte = aceeași sudură în mai multe pachete (rămâne apariția din revizia cea mai nouă, R7) și pachete
+ *   cu aceeași revizie; fiecare apare și în `lipsuri`, ca avertisment
  */
-export function construiesteRanduriInventar({ pachete = [], coordonate = [], clase = [], prefixSudura = 'T' } = {}) {
+export function construiesteRanduriInventar({ pachete = [], coordonate = [], clase = [], prefixSudura = 'T', eliminate = [] } = {}) {
   const lipsuri = []
-  const { suduri, probleme } = lantSuduri(pachete, { prefixSudura })
+  const eliminateSet = new Set(eliminate || [])
+  const lant = lantSuduri(pachete, { prefixSudura, eliminate: eliminateSet })
+  const { suduri, probleme, conflicte } = lant
   for (const pr of probleme) lipsuri.push({ ...pr, blocheaza: BLOCAJ_FARA_DEBLOCARE, inInventar: false })
-  const { idx, excluse } = indexCoordonate(coordonate, lipsuri)
+  for (const e of lant.eliminate) lipsuri.push({ ...e, motiv: 'sudura_eliminata', blocheaza: BLOCAJ_AVERTISMENT, inInventar: false })
+  // coordonatele unei suduri eliminate nu contează (nici ca dublură, nici ca „fără sudură”), dar se arată
+  const coordLista = coordonate instanceof Map ? [...coordonate].map(([cheie, c]) => ({ ...c, cheie })) : (coordonate || [])
+  const coordEliminate = new Set()
+  const coordRamase = coordLista.filter(c => {
+    if (!c?.cheie || !eliminateSet.has(c.cheie)) return true
+    coordEliminate.add(c.cheie)
+    return false
+  })
+  for (const k of coordEliminate) lipsuri.push({ cheie: k, motiv: 'coordonate_sudura_eliminata', blocheaza: BLOCAJ_AVERTISMENT, inInventar: false })
+  const { idx, excluse } = indexCoordonate(coordRamase, lipsuri)
   const intervale = t => (Array.isArray(clase) ? clase : (clase?.[t] || []))
   const randuri = []
   const folosite = new Set()
@@ -142,7 +162,11 @@ export function construiesteRanduriInventar({ pachete = [], coordonate = [], cla
     folosite.add(s.cheie)
     const adauga = (motiv, blocheaza, detaliu) => lipsuri.push({ cheie: s.cheie, nrSudura: s.nrSudura, pachet: s.pachet, motiv, blocheaza, detaliu: detaliu ?? null, inInventar: true })
     if (!s.amonte) adauga('fara_element_amonte', BLOCAJ_FARA_DEBLOCARE)
-    if (!s.aval) adauga('fara_element_aval', BLOCAJ_FARA_DEBLOCARE)
+    // R8: ultima sudură a tronsonului fără aval = capăt de tronson (avertisment); altundeva lipsa avalului = document greșit
+    if (!s.aval) {
+      if (s.capatTronson) adauga('capat_de_tronson', BLOCAJ_AVERTISMENT)
+      else adauga('fara_element_aval', BLOCAJ_FARA_DEBLOCARE)
+    }
     const cl = clasaLaPoz(s.pozKm, intervale(s.tronson))
     if (cl.motiv) adauga(cl.motiv, BLOCAJ_DEBLOCARE_MP, cl.detaliu)
     randuri.push({
@@ -156,7 +180,11 @@ export function construiesteRanduriInventar({ pachete = [], coordonate = [], cla
   for (const k of idx.keys()) {
     if (!folosite.has(k)) lipsuri.push({ cheie: k, motiv: 'coordonate_fara_sudura', blocheaza: BLOCAJ_DEBLOCARE_MP, inInventar: false })
   }
-  return { randuri, lipsuri }
+  // R7: conflictul se listează (exportul merge cu apariția păstrată)
+  for (const cf of conflicte) {
+    lipsuri.push({ ...cf, blocheaza: BLOCAJ_AVERTISMENT, inInventar: cf.cheie ? folosite.has(cf.cheie) : false })
+  }
+  return { randuri, lipsuri, conflicte }
 }
 
 // ---------------------------------------------------------------------------

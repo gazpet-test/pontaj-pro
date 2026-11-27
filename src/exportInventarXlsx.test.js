@@ -3,7 +3,7 @@ import XLSX from 'xlsx-js-style'
 import JSZip from 'jszip'
 import {
   construiesteRanduriInventar, generateInventarXlsx, parseazaDimensiune, pozitieSemnatura, buildInventarFilename,
-  INVENTAR_ANTET, BLOCAJ_FARA_DEBLOCARE, BLOCAJ_DEBLOCARE_MP,
+  INVENTAR_ANTET, BLOCAJ_FARA_DEBLOCARE, BLOCAJ_DEBLOCARE_MP, BLOCAJ_AVERTISMENT,
 } from './exportInventarXlsx.js'
 
 // Date inventate: tronsonul 99, serii fictive, coordonate rotunde.
@@ -12,12 +12,12 @@ const rand = (poz, tip, sud, serie, lung, extra = {}) => ({
   sudura_cod: sud, poz_km_m: null, ...extra,
 })
 const PACHETE = [
-  { cod_document_full: 'DOC-P1', revizie: 1, tronson: 'T99', tevi: [
+  { id: 11, cod_document_full: 'DOC-P1', revizie: 1, km_start_m: 87.8, tronson: 'T99', tevi: [
     rand(1, 'teava', 'T99S1', 'FX-01', 12.2, { poz_km_m: 100 }),
     rand(2, 'curba', 'T99S2', 'FX-02', 3.5, { poz_km_m: 103.5, unghi_curba: '20°', dimensiune: '610X7.1 20°' }),
     rand(3, 'teava', 'T99S3', 'FX-03', 11.6, { poz_km_m: 115.1 }),
   ] },
-  { cod_document_full: 'DOC-P2', revizie: 0, tronson: 'T99', tevi: [
+  { id: 12, cod_document_full: 'DOC-P2', revizie: 0, km_start_m: 115.1, tronson: 'T99', tevi: [
     { poz_in_pachet: 1, tip_rand: 'separator' },
     rand(2, 'curba', 'T99S4', 'FX-04', 2.1, { poz_km_m: 117.2, unghi_curba: '22.5°', dimensiune: '610X8' }),
     rand(3, 'teava', 'T99S5', 'FX-05', 12, { poz_km_m: 129.2 }),
@@ -50,9 +50,56 @@ describe('construiesteRanduriInventar', () => {
     expect(dupa('T99S3').aval).toMatchObject({ tip: 'CURBA 22.5°', serie: 'FX-04', diametru: 610, grosime: '8mm' })
     expect(dupa('T99S4').pachet).toBe('DOC-P2')
   })
-  it('sudura fără element aval: rămâne, cu aval gol, și e blocaj fără deblocare (nu se inventează)', () => {
+  it('ultima sudură a tronsonului fără element aval: rămâne, cu aval gol, AVERTISMENT „capăt de tronson” (R8)', () => {
     expect(dupa('T99S5').aval).toBeNull()
-    expect(lipsa('T99S5', 'fara_element_aval')).toEqual([expect.objectContaining({ blocheaza: BLOCAJ_FARA_DEBLOCARE, inInventar: true })])
+    expect(lipsa('T99S5', 'capat_de_tronson')).toEqual([expect.objectContaining({ blocheaza: BLOCAJ_AVERTISMENT, inInventar: true })])
+    expect(lipsa('T99S5', 'fara_element_aval')).toEqual([])
+    // un tronson cu o singură sudură (cazul din review): avertisment, nu blocaj
+    const unu = construiesteRanduriInventar({ pachete: [{ id: 1, cod_document_full: 'D', km_start_m: 0, tronson: 99, tevi: [rand(1, 'teava', 'T99S1', 'FX-1', 12)] }],
+      coordonate: [{ cheie: '99|1|', x: 0, y: 0, z: 0 }] })
+    expect(unu.lipsuri.filter(l => l.blocheaza === BLOCAJ_FARA_DEBLOCARE)).toEqual([])
+    expect(unu.lipsuri.map(l => [l.motiv, l.blocheaza])).toContainEqual(['capat_de_tronson', BLOCAJ_AVERTISMENT])
+  })
+  it('sudura fără element aval care NU e ultima pe tronson: blocaj fără deblocare (R8)', () => {
+    // E(S1) · legare S2: S1 nu are element după ea, dar urmează S2 → documentul ar ieși greșit
+    const p = [{ id: 1, cod_document_full: 'D', km_start_m: 0, tronson: 99, tevi: [rand(1, 'teava', 'T99S1', 'FX-1', 12), { poz_in_pachet: 2, tip_rand: 'legare', sudura_cod: 'T99S2' }] }]
+    const r = construiesteRanduriInventar({ pachete: p, coordonate: [{ cheie: '99|1|', x: 0, y: 0, z: 0 }, { cheie: '99|2|', x: 0, y: 0, z: 1 }] })
+    const m = nr => r.lipsuri.filter(l => l.nrSudura === nr && /aval|capat/.test(l.motiv)).map(l => [l.motiv, l.blocheaza])
+    expect(m('T99S1')).toEqual([['fara_element_aval', BLOCAJ_FARA_DEBLOCARE]])
+    expect(m('T99S2')).toEqual([['capat_de_tronson', BLOCAJ_AVERTISMENT]])
+  })
+  it('pachetele primite în altă ordine: ordinea fizică vine din km start (R7)', () => {
+    const invers = construiesteRanduriInventar({ pachete: [PACHETE[1], PACHETE[0]], coordonate: COORD, clase: CLASE })
+    expect(invers.randuri.map(r => r.nrSudura)).toEqual(['T99S1', 'T99S3', 'T99S4', 'T99S5'])
+    const s3 = invers.randuri.find(r => r.nrSudura === 'T99S3')
+    expect(s3.aval).toMatchObject({ serie: 'FX-04' })
+    expect(invers.randuri.find(r => r.nrSudura === 'T99S5').aval).toBeNull()
+    expect(invers.lipsuri.filter(l => l.motiv === 'fara_element_aval')).toEqual([])
+  })
+  it('sudurile eliminate prin tăiere nu intră și nu cer coordonate; se listează ca avertisment (R4, R8)', () => {
+    const r = construiesteRanduriInventar({ pachete: PACHETE, coordonate: COORD, clase: CLASE, eliminate: new Set(['99|3|', '99|2|']) })
+    expect(r.randuri.map(x => x.nrSudura)).toEqual(['T99S1', 'T99S4', 'T99S5'])
+    expect(r.lipsuri.filter(l => l.motiv === 'sudura_eliminata').map(l => [l.nrSudura, l.blocheaza, l.inInventar]))
+      .toEqual([['T99S2', BLOCAJ_AVERTISMENT, false], ['T99S3', BLOCAJ_AVERTISMENT, false]])
+    // S2 nu are coordonate, dar e eliminată → nu e „fără coordonate”; coordonatele lui S3 nu sunt „fără sudură”
+    expect(r.lipsuri.filter(l => l.motiv === 'fara_coordonate')).toEqual([])
+    expect(r.lipsuri.filter(l => l.motiv === 'coordonate_fara_sudura').map(l => l.cheie)).toEqual(['99|77|'])
+    expect(r.lipsuri.filter(l => l.motiv === 'coordonate_sudura_eliminata').map(l => [l.cheie, l.blocheaza])).toEqual([['99|3|', BLOCAJ_AVERTISMENT]])
+    // elementele sudurii eliminate rămân: S1 își păstrează avalul (curba FX-02)
+    expect(r.randuri[0].aval).toMatchObject({ serie: 'FX-02' })
+    // listă simplă de chei = același efect
+    expect(construiesteRanduriInventar({ pachete: PACHETE, coordonate: COORD, clase: CLASE, eliminate: ['99|3|'] }).randuri.map(x => x.nrSudura)).not.toContain('T99S3')
+  })
+  it('sudura din mai multe pachete în cumulat: rămâne apariția din revizia cea mai nouă, conflictul se listează (R7)', () => {
+    // S3 apare și în DOC-P2 (rev.0, ca refacere „R”): aceeași cheie → rămâne cea din DOC-P1 rev.1
+    const p2 = { ...PACHETE[1], tevi: [...PACHETE[1].tevi, rand(4, 'teava', 'T99S3R', 'FX-06', 5, { poz_km_m: 134.2 })] }
+    const r = construiesteRanduriInventar({ pachete: [PACHETE[0], p2], coordonate: COORD, clase: CLASE })
+    const s3 = r.randuri.filter(x => x.cheie === '99|3|')
+    expect(s3).toHaveLength(1)
+    expect(s3[0]).toMatchObject({ pachet: 'DOC-P1 rev.1', nrSudura: 'T99S3' })
+    expect(r.conflicte).toEqual([expect.objectContaining({ motiv: 'sudura_dublata_in_pachete', cheie: '99|3|',
+      pastrata: expect.objectContaining({ pachet: 'DOC-P1 rev.1', poz: 3 }), ignorate: [expect.objectContaining({ pachet: 'DOC-P2', poz: 4, cod: 'T99S3R' })] })])
+    expect(r.lipsuri.filter(l => l.motiv === 'sudura_dublata_in_pachete').map(l => [l.blocheaza, l.inInventar])).toEqual([[BLOCAJ_AVERTISMENT, true]])
   })
   it('clasa din POZ KM; la granița a două clase diferite și fără interval → null + lipsă', () => {
     expect(dupa('T99S1').clasaLocatie).toBe('1b')

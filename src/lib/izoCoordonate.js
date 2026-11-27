@@ -41,6 +41,7 @@ function numarCoordonata(s) {
 }
 
 const aceleasiCoordonate = (a, b) => a.x === b.x && a.y === b.y && a.z === b.z
+const text = v => (v == null ? '' : String(v).trim())
 
 /**
  * Citește fișierul de coordonate al unui tronson.
@@ -219,7 +220,12 @@ export function propuneCoduri(nesigure = [], suduriFaraCoordonate = [], puncte =
 /**
  * Rezumatul unei încărcări: număr pe stări + ce are omul de rezolvat.
  * @param {object[]|{randuri:object[], distante?:object, propuneri?:object, suduriPachet?:string[]}} rezultat
- *   suduriPachet (opțional) = cheile sudurilor din pachetele tronsonului, pentru „în fișier, nu în pachete” și invers.
+ *   suduriPachet = cheile sudurilor din pachetele tronsonului, pentru „în fișier, nu în pachete” și invers;
+ *   distante = rezultatul verificaDistante. Fără ele încărcarea nu e verificată, deci nu e „curată” (L18: necunoscut ≠ 0):
+ *   ce n-a putut fi verificat apare în `neverificat`.
+ * @returns {{total, peStari, deRezolvat, neverificat:string[], curat:boolean}}
+ *   curat = există rânduri, nimic de rezolvat (inclusiv distanțe neverificate și suduri din pachete fără coordonate)
+ *   și ambele comparații (cu pachetele, distanțele) au fost făcute.
  */
 export function rezumat(rezultat) {
   const r = Array.isArray(rezultat) ? { randuri: rezultat } : (rezultat || {})
@@ -230,18 +236,23 @@ export function rezumat(rezultat) {
   const deRezolvat = {
     nesigure: lista('nesigur'), dubluri: lista('dublura'), nepotrivite: lista('nepotrivit'), ilizibile: lista('ilizibil'),
     abateri: r.distante?.avertismente || [],
+    // perechile de suduri vecine a căror distanță nu s-a putut verifica (fără coordonate / lungime / element)
+    distanteNeverificate: r.distante?.neverificate || [],
     propuneri: r.propuneri?.propuneri || [],
   }
+  const neverificat = []
   if (Array.isArray(r.suduriPachet)) {
     const dinPachete = new Set(r.suduriPachet)
     const dinFisier = new Set(randuri.filter(x => x.stare === 'ok' || x.stare === 'repetata' || x.stare === 'dublura').map(x => x.cheie))
     deRezolvat.inFisierNuInPachete = randuri.filter(x => x.stare === 'ok' && !dinPachete.has(x.cheie)).map(x => ({ linie: x.linie, codRaw: x.codRaw }))
     deRezolvat.inPacheteFaraCoordonate = [...dinPachete].filter(c => !dinFisier.has(c))
-  }
+  } else neverificat.push('pachete')
+  if (!r.distante || !Array.isArray(r.distante.avertismente) || !Array.isArray(r.distante.neverificate)) neverificat.push('distante')
   const total = randuri.length
   const deRezolvatNr = deRezolvat.nesigure.length + deRezolvat.dubluri.length + deRezolvat.nepotrivite.length +
-    deRezolvat.ilizibile.length + deRezolvat.abateri.length + (deRezolvat.inFisierNuInPachete?.length || 0)
-  return { total, peStari, deRezolvat, curat: total > 0 && deRezolvatNr === 0 }
+    deRezolvat.ilizibile.length + deRezolvat.abateri.length + deRezolvat.distanteNeverificate.length +
+    (deRezolvat.inFisierNuInPachete?.length || 0) + (deRezolvat.inPacheteFaraCoordonate?.length || 0)
+  return { total, peStari, deRezolvat, neverificat, curat: total > 0 && deRezolvatNr === 0 && neverificat.length === 0 }
 }
 
 // ── lanțul de suduri din pachete ──────────────────────────────────────────────────────────────────────────
@@ -252,17 +263,94 @@ export function rezumat(rezultat) {
 
 const TIPURI_ELEMENT = new Set(['teava', 'curba'])
 
+// ── ordinea fizică (BULETINE_NDT_SPEC §21 R7) ──
+// revizia: lipsă = 0 (revizia 0 nu se scrie în cod); orice altceva decât un întreg ≥ 0 = nevalidă (nu se ghicește)
+function revizieNr(p) {
+  const r = p?.revizie
+  if (r === null || r === undefined || r === '') return 0
+  const n = typeof r === 'number' ? r : parseNumar(r)
+  return Number.isInteger(n) && n >= 0 ? n : null
+}
+const kmStartNr = p => { const k = parseNumar(p?.km_start_m); return esteNr(k) ? k : null }
+// comparații deterministe: numerele după valoare, restul ca text; lipsa (null) la final
+function cmpId(a, b) {
+  if (a == null || b == null) return a == null ? (b == null ? 0 : 1) : -1
+  if (esteNr(a) && esteNr(b)) return a - b
+  const sa = String(a), sb = String(b)
+  return sa < sb ? -1 : sa > sb ? 1 : 0
+}
+const cmpText = (a, b) => cmpId(a == null || a === '' ? null : String(a), b == null || b === '' ? null : String(b))
+function cmpKm(a, b) { // crescător, fără km la final
+  if (a === null || b === null) return a === null ? (b === null ? 0 : 1) : -1
+  return a - b
+}
+
 /**
- * @param {Array<{cod_document_full?:string, revizie?:number, tronson:string|number, tevi:object[]}>} pachete
- *   în ordinea pe tronson; pachetele aceluiași tronson se leagă în ordinea în care vin (alt tronson = alt lanț)
- * @param {{prefixSudura?:string}} [opt]  prefixul codului afișat ('T' = LOT 1, ca în model; 'TR' = LOT 2)
- * @returns {{suduri:object[], probleme:object[]}}
- *   sudura: { cheie, nrSudura, tronson, pachet, pachetIdx, rand, pozKm, amonte, aval, intreUrmatoarea, urmatoareaCheie }
- *   probleme: rânduri care nu pot intra în lanț (cod nevalid, sudură dublată, pachet fără tronson, poziții dublate)
+ * Pachetele active ale unui tronson, în ordinea fizică (R7):
+ *   activ = ultima revizie a fiecărui număr de document (la aceeași revizie: id-ul mai mare; celălalt = conflict);
+ *   ordine = km start crescător, la egalitate numărul documentului, apoi id-ul. Nu ordinea primită.
+ * @returns {{active:object[], inactive:object[]}}  elemente { p, pachetIdx, rev, km }
+ */
+function pacheteActive(lista, probleme, conflicte) {
+  const valide = []
+  for (const it of lista) {
+    const rev = revizieNr(it.p)
+    if (rev === null) { probleme.push({ motiv: 'pachet_revizie_nevalida', pachetIdx: it.pachetIdx, pachet: codPachet(it.p), detaliu: String(it.p?.revizie) }); continue }
+    valide.push({ ...it, rev, km: kmStartNr(it.p) })
+  }
+  const peDoc = new Map()
+  for (const it of valide) {
+    const doc = text(it.p?.cod_document_full)
+    // fără număr de document: pachetul e propriul lui „document” (nu se compară cu alte pachete fără număr)
+    const k = doc ? `d:${doc}` : `i:${it.pachetIdx}`
+    if (!peDoc.has(k)) peDoc.set(k, [])
+    peDoc.get(k).push(it)
+  }
+  const active = [], inactive = []
+  for (const grup of peDoc.values()) {
+    grup.sort((a, b) => b.rev - a.rev || cmpId(b.p?.id, a.p?.id) || b.pachetIdx - a.pachetIdx)
+    active.push(grup[0])
+    for (const alt of grup.slice(1)) {
+      inactive.push(alt)
+      if (alt.rev === grup[0].rev) {
+        conflicte.push({ motiv: 'pachet_revizie_dublata', pachet: codPachet(grup[0].p), pachetIdx: grup[0].pachetIdx, ignorat: { pachetIdx: alt.pachetIdx, id: alt.p?.id ?? null } })
+      }
+    }
+  }
+  active.sort((a, b) => cmpKm(a.km, b.km) || cmpText(a.p?.cod_document_full, b.p?.cod_document_full) || cmpId(a.p?.id, b.p?.id) || a.pachetIdx - b.pachetIdx)
+  // cu mai multe pachete pe tronson, fără km start nu se știe unde stă pachetul → legăturile peste graniță ar ieși greșite
+  if (active.length > 1) {
+    for (const a of active) if (a.km === null) probleme.push({ motiv: 'pachet_fara_km_start', pachetIdx: a.pachetIdx, pachet: codPachet(a.p) })
+  }
+  return { active, inactive }
+}
+
+// Dintre aparițiile aceleiași chei de sudură rămâne una (R7): revizia cea mai nouă, apoi km start mai mare,
+// apoi id-ul pachetului mai mare, apoi poziția mai mare în pachet (complet determinist).
+function cmpKmDesc(a, b) { // descrescător, fără km la final
+  if (a === null || b === null) return a === null ? (b === null ? 0 : 1) : -1
+  return b - a
+}
+const pozNr = r => (esteNr(r?.poz_in_pachet) ? r.poz_in_pachet : -Infinity)
+const cmpAparitie = (a, b) => b.rev - a.rev || cmpKmDesc(a.km, b.km) || cmpId(b.p?.id, a.p?.id) ||
+  (pozNr(b.rand) - pozNr(a.rand) || 0) || b.ordine - a.ordine
+
+/**
+ * @param {Array<{id?:number|string, cod_document_full?:string, revizie?:number, km_start_m?:number, tronson:string|number, tevi:object[]}>} pachete
+ *   TOATE pachetele tronsonului (orice ordine, orice revizii): se iau doar cele active (ultima revizie), ordonate după
+ *   km start (R7). Alt tronson = alt lanț. Pentru inventarul unui singur pachet se dă tot tronsonul și se filtrează după.
+ * @param {{prefixSudura?:string, eliminate?:Iterable<string>}} [opt]
+ *   prefixSudura = prefixul codului afișat ('T' = LOT 1, ca în model; 'TR' = LOT 2);
+ *   eliminate = cheile sudurilor eliminate prin tăiere (R4): ies din lanț (elementele rămân), se listează în `eliminate`
+ * @returns {{suduri:object[], probleme:object[], conflicte:object[], eliminate:object[], pacheteInactive:object[]}}
+ *   sudura: { cheie, nrSudura, tronson, pachet, pachetIdx, rand, pozKm, amonte, aval, intreUrmatoarea, urmatoareaCheie, capatTronson }
+ *   probleme: ce nu poate intra în lanț (cod nevalid, pachet fără tronson / km start / revizie validă, poziții dublate)
+ *   conflicte: aceeași cheie în mai multe locuri (rămâne una, celelalte listate) și pachete cu aceeași revizie
  */
 export function lantSuduri(pachete = [], opt = {}) {
   const prefix = opt.prefixSudura ?? 'T'
-  const probleme = []
+  const eliminateSet = new Set(opt.eliminate || [])
+  const probleme = [], conflicte = [], eliminate = [], pacheteInactive = []
   const peTronson = new Map()
   pachete.forEach((p, pachetIdx) => {
     const t = tronsonNr(p?.tronson)
@@ -271,9 +359,11 @@ export function lantSuduri(pachete = [], opt = {}) {
     peTronson.get(t).push({ p, pachetIdx })
   })
   const suduri = []
-  for (const [tronson, lista] of peTronson) {
+  for (const [tronson, toate] of [...peTronson].sort((a, b) => a[0] - b[0])) {
+    const { active: lista, inactive } = pacheteActive(toate, probleme, conflicte)
+    for (const it of inactive) pacheteInactive.push({ tronson, pachetIdx: it.pachetIdx, pachet: codPachet(it.p), id: it.p?.id ?? null })
     const jetoane = []
-    for (const { p, pachetIdx } of lista) {
+    for (const { p, pachetIdx, rev, km } of lista) {
       const tevi = [...(p.tevi || [])].sort((a, b) => (a.poz_in_pachet ?? 0) - (b.poz_in_pachet ?? 0))
       const vazute = new Set()
       for (const rand of tevi) {
@@ -294,38 +384,59 @@ export function lantSuduri(pachete = [], opt = {}) {
           probleme.push({ motiv: n.altTronson ? 'cod_alt_tronson' : 'cod_sudura_nevalid', cod, pachetIdx, pachet: codPachet(p), poz: rand.poz_in_pachet })
           continue
         }
-        jetoane.push({ tip: 'W', rand, pachetIdx, p, n })
+        jetoane.push({ tip: 'W', rand, pachetIdx, p, n, cheie: cheieSudura(n), rev, km, ordine: jetoane.length })
       }
     }
+    // sudurile eliminate prin tăiere (R4): ies din lanț, elementele lor rămân (sudurile vecine își păstrează amonte / aval)
+    const scoase = new Set()
+    for (const j of jetoane) {
+      if (j.tip !== 'W' || !eliminateSet.has(j.cheie)) continue
+      scoase.add(j)
+      eliminate.push({ cheie: j.cheie, nrSudura: formatSudura(j.n, { prefix }), tronson, pachet: codPachet(j.p), pachetIdx: j.pachetIdx, poz: j.rand.poz_in_pachet })
+    }
+    // aceeași cheie (originalul și refacerea „R” sunt aceeași cheie, §22) în mai multe locuri: rămâne o apariție (R7),
+    // celelalte ies din lanț și se listează; niciodată nu dispar toate
+    const peCheie = new Map()
+    for (const j of jetoane) {
+      if (j.tip !== 'W' || scoase.has(j)) continue
+      if (!peCheie.has(j.cheie)) peCheie.set(j.cheie, [])
+      peCheie.get(j.cheie).push(j)
+    }
+    for (const grup of peCheie.values()) {
+      if (grup.length < 2) continue
+      const ordonat = [...grup].sort(cmpAparitie)
+      const [castig, ...restul] = ordonat
+      for (const j of restul) scoase.add(j)
+      const loc = j => ({ pachet: codPachet(j.p), pachetIdx: j.pachetIdx, poz: j.rand.poz_in_pachet, cod: String(j.rand.sudura_cod).trim() })
+      conflicte.push({ motiv: 'sudura_dublata_in_pachete', cheie: castig.cheie, nrSudura: formatSudura(castig.n, { prefix }), tronson,
+        pastrata: loc(castig), ignorate: restul.map(loc) })
+    }
+    const lant = jetoane.filter(j => !scoase.has(j))
     const suduriTronson = []
-    jetoane.forEach((j, i) => {
+    lant.forEach((j, i) => {
       if (j.tip !== 'W') return
       let amonte = null, aval = null
-      for (let k = i - 1; k >= 0; k--) if (jetoane[k].tip === 'E') { amonte = jetoane[k].rand; break }
-      for (let k = i + 1; k < jetoane.length; k++) if (jetoane[k].tip === 'E') { aval = jetoane[k].rand; break }
+      for (let k = i - 1; k >= 0; k--) if (lant[k].tip === 'E') { amonte = lant[k].rand; break }
+      for (let k = i + 1; k < lant.length; k++) if (lant[k].tip === 'E') { aval = lant[k].rand; break }
       const intre = []
       let urmatoarea = null
-      for (let k = i + 1; k < jetoane.length; k++) {
-        if (jetoane[k].tip === 'W') { urmatoarea = jetoane[k]; break }
-        intre.push(jetoane[k].rand)
+      for (let k = i + 1; k < lant.length; k++) {
+        if (lant[k].tip === 'W') { urmatoarea = lant[k]; break }
+        intre.push(lant[k].rand)
       }
       const poz = parseNumar(j.rand.poz_km_m)
       suduriTronson.push({
-        cheie: cheieSudura(j.n), nrSudura: formatSudura(j.n, { prefix }), tronson, refacuta: !!j.rand.sudura_refacuta,
+        cheie: j.cheie, nrSudura: formatSudura(j.n, { prefix }), tronson, refacuta: !!j.rand.sudura_refacuta || !!j.n.refacuta,
         pachet: codPachet(j.p), pachetIdx: j.pachetIdx, rand: j.rand, pozKm: esteNr(poz) ? poz : null,
         amonte, aval, intreUrmatoarea: urmatoarea ? intre : null,
-        urmatoareaCheie: urmatoarea ? cheieSudura(urmatoarea.n) : null,
+        urmatoareaCheie: urmatoarea ? urmatoarea.cheie : null,
+        // ultima sudură a tronsonului (în ordinea fizică): fără element aval = capăt de tronson (R8), nu greșeală
+        capatTronson: !urmatoarea,
       })
     })
-    // aceeași sudură pe două rânduri: nu se poate decide care e poziția ei în lanț
-    const nr = new Map()
-    for (const s of suduriTronson) nr.set(s.cheie, (nr.get(s.cheie) || 0) + 1)
-    for (const s of suduriTronson) {
-      if (nr.get(s.cheie) > 1) probleme.push({ motiv: 'sudura_dublata_in_pachete', cheie: s.cheie, nrSudura: s.nrSudura, pachet: s.pachet, poz: s.rand.poz_in_pachet })
-      else suduri.push(s)
-    }
+    for (const s of suduriTronson) suduri.push(s) // fără push(...): tronsoanele mari dau RangeError
   }
-  return { suduri, probleme }
+  return { suduri, probleme, conflicte, eliminate, pacheteInactive }
 }
 
 /** Codul pachetului cu revizia, ca în centralizator: „…-00040 rev.1” (revizia 0 nu se scrie). */

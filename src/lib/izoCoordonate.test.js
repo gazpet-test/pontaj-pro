@@ -177,7 +177,27 @@ describe('rezumat', () => {
     expect(z.deRezolvat.inPacheteFaraCoordonate).toEqual(['99|7|'])
     expect(z.curat).toBe(false)
     expect(rezumat([]).curat).toBe(false)
-    expect(rezumat(parseazaCoordonate('T99S1 0 0 0', 99)).curat).toBe(true)
+    const toateVerificate = { randuri: parseazaCoordonate('T99S1 0 0 0', 99), suduriPachet: ['99|1|'], distante: verificaDistante([{ cheie: '99|1|', x: 0, y: 0, z: 0 }], []) }
+    expect(rezumat(toateVerificate)).toMatchObject({ curat: true, neverificat: [] })
+  })
+  it('sudură din pachete fără coordonate + distanță neverificată → NU e curat, și apar în listă (cazul din review, L12/L18)', () => {
+    // S1 citită, S2 lipsă din fișier, perechea S1–S2 neverificată
+    const randuri = parseazaCoordonate('T99S1 0 0 0', 99)
+    const distante = verificaDistante([{ cheie: '99|1|', x: 0, y: 0, z: 0 }, { cheie: '99|2|', x: null, y: null, z: null }], [{ lungime_m: 12 }])
+    const z = rezumat({ randuri, suduriPachet: ['99|1|', '99|2|'], distante })
+    expect(z.curat).toBe(false)
+    expect(z.deRezolvat.inPacheteFaraCoordonate).toEqual(['99|2|'])
+    expect(z.deRezolvat.distanteNeverificate).toEqual([{ de: '99|1|', pana: '99|2|', motiv: 'fara_coordonate' }])
+    // fiecare dintre cele două, singură, strică „curat”
+    const doarDistanta = rezumat({ randuri, suduriPachet: ['99|1|'], distante })
+    expect(doarDistanta.curat).toBe(false)
+    const doarLipsa = rezumat({ randuri, suduriPachet: ['99|1|', '99|2|'], distante: verificaDistante([{ cheie: '99|1|', x: 0, y: 0, z: 0 }], []) })
+    expect(doarLipsa.curat).toBe(false)
+  })
+  it('fără comparație cu pachetele sau fără verificarea distanțelor: necunoscut, nu curat', () => {
+    const randuri = parseazaCoordonate('T99S1 0 0 0', 99)
+    expect(rezumat(randuri)).toMatchObject({ curat: false, neverificat: ['pachete', 'distante'] })
+    expect(rezumat({ randuri, suduriPachet: ['99|1|'] })).toMatchObject({ curat: false, neverificat: ['distante'] })
   })
 })
 
@@ -186,8 +206,8 @@ const teava = (poz, sud, serie, lung, extra = {}) => ({ poz_in_pachet: poz, tip_
 
 describe('lantSuduri — amonte / aval', () => {
   const pachete = [
-    { cod_document_full: 'PCH-A', revizie: 1, tronson: 'T99', tevi: [teava(1, 'T99S1', 'S-A1', 12), teava(2, 'T99S2', 'S-A2', 11)] },
-    { cod_document_full: 'PCH-B', revizie: 0, tronson: 'T99', tevi: [
+    { id: 1, cod_document_full: 'PCH-A', revizie: 1, km_start_m: 0, tronson: 'T99', tevi: [teava(1, 'T99S1', 'S-A1', 12), teava(2, 'T99S2', 'S-A2', 11)] },
+    { id: 2, cod_document_full: 'PCH-B', revizie: 0, km_start_m: 23, tronson: 'T99', tevi: [
       { poz_in_pachet: 1, tip_rand: 'separator' }, teava(2, 'T99S3', 'S-B1', 10), teava(3, null, 'S-B2', 9),
     ] },
   ]
@@ -209,10 +229,14 @@ describe('lantSuduri — amonte / aval', () => {
     ])
     expect(r.suduri[0].intreUrmatoarea).toEqual([]) // nicio piesă între S1 și S2 → verificarea o arată, nu o ghicește
   })
-  it('sudura de două ori în pachete și codul nevalid ies în probleme, nu în lanț', () => {
+  it('codul nevalid iese în probleme; sudura de două ori în ACELAȘI pachet: rămâne una (poziția mai mare), conflict listat', () => {
     const r = lantSuduri([{ tronson: 99, tevi: [teava(1, 'T99S1', 'E1', 12), teava(2, 'T99S1', 'E2', 12), teava(3, 'T99S?', 'E3', 12)] }])
-    expect(r.suduri).toEqual([])
-    expect(r.probleme.map(p => p.motiv)).toEqual(['cod_sudura_nevalid', 'sudura_dublata_in_pachete', 'sudura_dublata_in_pachete'])
+    expect(r.probleme.map(p => p.motiv)).toEqual(['cod_sudura_nevalid'])
+    expect(r.suduri.map(s => [s.nrSudura, s.rand.poz_in_pachet])).toEqual([['T99S1', 2]])
+    expect(r.conflicte.map(c => [c.motiv, c.cheie, c.pastrata.poz, c.ignorate.map(x => x.poz)])).toEqual([['sudura_dublata_in_pachete', '99|1|', 2, [1]]])
+  })
+  it('capatTronson = doar ultima sudură din ordinea fizică a tronsonului', () => {
+    expect(suduri.map(s => s.capatTronson)).toEqual([false, false, true])
   })
   it('punctePentruVerificare: elementul dintre suduri vecine + coordonatele confirmate', () => {
     const coord = new Map([['99|1|', { x: 0, y: 0, z: 0 }], ['99|2|', { x: 11, y: 0, z: 0 }]])
@@ -222,5 +246,75 @@ describe('lantSuduri — amonte / aval', () => {
     expect(r.verificate).toBe(1)
     expect(r.avertismente).toEqual([])
     expect(r.neverificate.map(x => x.motiv)).toEqual(['fara_coordonate'])
+  })
+})
+
+describe('lantSuduri — ordinea fizică și dublurile pe tronson (R7)', () => {
+  const lant = pachete => lantSuduri(pachete).suduri.map(s => [s.nrSudura, s.amonte?.serie_unica ?? null, s.aval?.serie_unica ?? null])
+  const P1 = { id: 1, cod_document_full: 'DOC-1', revizie: 0, km_start_m: 0, tronson: 99, tevi: [teava(1, 'T99S1', 'E1', 12)] }
+  const P2 = { id: 2, cod_document_full: 'DOC-2', revizie: 0, km_start_m: 12, tronson: 99, tevi: [teava(1, 'T99S2', 'E2', 12)] }
+
+  it('pachetele primite invers se ordonează după km start (cazul din review: S1 are aval E2, nu S2 aval E1)', () => {
+    expect(lant([P2, P1])).toEqual([['T99S1', 'E1', 'E2'], ['T99S2', 'E2', null]])
+    expect(lant([P1, P2])).toEqual(lant([P2, P1]))
+  })
+  it('km start ca text cu virgulă se compară numeric (2,5 < 10)', () => {
+    const a = { ...P1, km_start_m: '10' }, b = { ...P2, km_start_m: '2,5' }
+    expect(lant([a, b]).map(x => x[0])).toEqual(['T99S2', 'T99S1'])
+  })
+  it('la același km start: numărul documentului, apoi id-ul', () => {
+    const a = { ...P1, cod_document_full: 'DOC-B', km_start_m: 5 }, b = { ...P2, cod_document_full: 'DOC-A', km_start_m: 5 }
+    expect(lant([a, b]).map(x => x[0])).toEqual(['T99S2', 'T99S1'])
+    const c = { ...P1, id: 9, cod_document_full: 'DOC-X', km_start_m: 5 }, d = { ...P2, id: 3, cod_document_full: 'DOC-X', revizie: 0, km_start_m: 5 }
+    // același document, aceeași revizie: e conflict (doar unul activ), nu o ordine
+    const r = lantSuduri([c, d])
+    expect(r.suduri.map(s => s.nrSudura)).toEqual(['T99S1'])
+    expect(r.conflicte.map(x => x.motiv)).toEqual(['pachet_revizie_dublata'])
+    expect(r.pacheteInactive.map(x => x.id)).toEqual([3])
+  })
+  it('doar ultima revizie a fiecărui document e activă; reviziile vechi nu intră în lanț', () => {
+    const v0 = { ...P1, id: 1, revizie: 0, tevi: [teava(1, 'T99S1', 'VECHE', 12), teava(2, 'T99S9', 'VECHE2', 3)] }
+    const v1 = { ...P1, id: 5, revizie: 1, tevi: [teava(1, 'T99S1', 'NOUA', 12)] }
+    const r = lantSuduri([v1, P2, v0])
+    expect(r.suduri.map(s => [s.nrSudura, s.pachet, s.amonte.serie_unica])).toEqual([['T99S1', 'DOC-1 rev.1', 'NOUA'], ['T99S2', 'DOC-2', 'E2']])
+    expect(r.pacheteInactive).toEqual([expect.objectContaining({ pachet: 'DOC-1', id: 1 })])
+    expect(r.conflicte).toEqual([])
+  })
+  it('cu mai multe pachete, pachetul fără km start e problemă (ordinea nu se poate stabili)', () => {
+    const r = lantSuduri([P1, { ...P2, km_start_m: null }])
+    expect(r.probleme).toEqual([expect.objectContaining({ motiv: 'pachet_fara_km_start', pachet: 'DOC-2' })])
+    expect(lantSuduri([{ ...P1, km_start_m: null }]).probleme).toEqual([]) // un singur pachet: ordinea e cea din pachet
+  })
+  it('revizia nevalidă nu se ghicește', () => {
+    const r = lantSuduri([{ ...P1, revizie: 'a' }, P2])
+    expect(r.probleme.map(p => p.motiv)).toEqual(['pachet_revizie_nevalida'])
+    expect(r.suduri.map(s => s.nrSudura)).toEqual(['T99S2'])
+  })
+  it('aceeași sudură în două pachete active: rămâne apariția din revizia cea mai nouă, conflict listat (nu dispare)', () => {
+    const a = { ...P1, revizie: 2, tevi: [teava(1, 'T99S1', 'E1', 12), teava(2, 'T99S5', 'DIN-A', 12)] }
+    const b = { ...P2, revizie: 0, tevi: [teava(1, 'T99S5', 'DIN-B', 12), teava(2, 'T99S6', 'E6', 12)] }
+    const r = lantSuduri([a, b])
+    expect(r.suduri.map(s => [s.nrSudura, s.pachet])).toEqual([['T99S1', 'DOC-1 rev.2'], ['T99S5', 'DOC-1 rev.2'], ['T99S6', 'DOC-2']])
+    expect(r.conflicte).toEqual([expect.objectContaining({ motiv: 'sudura_dublata_in_pachete', cheie: '99|5|',
+      pastrata: expect.objectContaining({ pachet: 'DOC-1 rev.2', poz: 2 }), ignorate: [expect.objectContaining({ pachet: 'DOC-2', poz: 1 })] })])
+    // elementul rândului ignorat rămâne în lanț: S5 are aval DIN-B, S6 amonte E6
+    expect(r.suduri.find(s => s.nrSudura === 'T99S5').aval.serie_unica).toBe('DIN-B')
+    expect(r.probleme).toEqual([])
+  })
+  it('la aceeași revizie câștigă km start mai mare; originalul și „R” sunt aceeași cheie', () => {
+    const a = { ...P1, tevi: [teava(1, 'T99S5', 'DIN-A', 12)] }
+    const b = { ...P2, tevi: [teava(1, 'T99S5R', 'DIN-B', 12)] }
+    const r = lantSuduri([b, a])
+    expect(r.suduri.map(s => [s.cheie, s.pachet, s.rand.sudura_cod, s.refacuta])).toEqual([['99|5|', 'DOC-2', 'T99S5R', true]])
+    expect(r.conflicte[0].ignorate.map(x => x.cod)).toEqual(['T99S5'])
+  })
+  it('sudurile eliminate ies din lanț, cu listare; vecinii își păstrează elementele', () => {
+    const p = { ...P1, tevi: [teava(1, 'T99S1', 'E1', 12), teava(2, 'T99S2', 'E2', 12), teava(3, 'T99S3', 'E3', 12)] }
+    const r = lantSuduri([p], { eliminate: ['99|2|'] })
+    expect(r.suduri.map(s => [s.nrSudura, s.amonte.serie_unica, s.aval?.serie_unica ?? null, s.urmatoareaCheie])).toEqual([
+      ['T99S1', 'E1', 'E2', '99|3|'], ['T99S3', 'E3', null, null],
+    ])
+    expect(r.suduri[0].intreUrmatoarea.map(x => x.serie_unica)).toEqual(['E2', 'E3'])
+    expect(r.eliminate).toEqual([expect.objectContaining({ cheie: '99|2|', nrSudura: 'T99S2', pachet: 'DOC-1' })])
   })
 })
