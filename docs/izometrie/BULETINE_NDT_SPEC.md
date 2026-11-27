@@ -294,8 +294,10 @@ marcajul de subcontractor. Coordonatele: sistemul din fișierele livrate (Stereo
   se identifică prin id. Buletinele anulate nu ocupă nici cheia, nici amprenta.
 - **Ordinea rezultatelor (R3), complet deterministă**: pe cheie de sudură și metodă, rândurile din buletine confirmate se ordonează
   descrescător după data inspecției; la aceeași dată, refacerea înaintea originalului; apoi data buletinului descrescător; apoi id-ul
-  buletinului descrescător. Primul rând dă starea. „Conflict” = primele două rânduri au aceeași dată de inspecție, același atribut de
-  refacere și rezultate diferite; atunci starea e „conflict” până când MP anulează buletinul greșit. Refaceri repetate: aceeași regulă
+  buletinului descrescător. Primul rând dă starea. „Conflict” = printre rândurile cu aceeași dată de inspecție și același atribut de refacere
+  ca primul rând există rezultate diferite (oricâte buletine ar fi, nu doar primele două: un al treilea „acceptat” nu poate
+  ascunde un „respins” de la aceeași inspecție — decizia chat-ului 27.11.2026, după review-ul PR #1213); starea rămâne
+  „conflict” până când MP anulează buletinul greșit. Refaceri repetate: aceeași regulă
   (ultima după dată câștigă).
 - **Stările buletinului**: ciornă → confirmat → anulat; ciornă → anulat. Niciun drum înapoi; corectura = anulare + reîncărcare.
   Rândurile se scriu o singură dată, la confirmare, și nu se modifică.
