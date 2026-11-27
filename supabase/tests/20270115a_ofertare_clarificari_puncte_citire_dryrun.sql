@@ -5,15 +5,22 @@
 --   u_owner (dovada 2A: responsabil_setat_de = owner, responsabil_numitor_autorizat = true — pe clona le scrie si triggerul fn_ofertare_responsabil_setat_de,
 --   fiindca INSERT-ul ruleaza cu JWT-ul ownerului; aici sunt scrise si explicit, pentru o baza fara trigger); u_resp2 = modulul + responsabil 2 al L1
 --   (la fel); u_auto = modulul + responsabil 1 al L3, numit de EL INSUSI (JWT-ul lui la INSERT → dovada false); u_rfm = responsabil 1 al L2 numit de
---   owner, dar FARA modulul Ofertare; u_sub = DOAR un sub-modul ofertare_*; u_nimic = niciun modul.
+--   owner, dar FARA modulul Ofertare; u_sub = DOAR un sub-modul ofertare_*; u_nimic = niciun modul; u_adm = admin Ofertare (access_level 'admin',
+--   doar daca coloana exista pe clona), NU e responsabil: are drept de decizie (fn_ofertare_source_pack_poate_decide), dar NU poarta punctelor.
+--   Temeiuri (20261014b) sintetice: o decizie CNSC DRY (verificata, cu link si un citat) + un temei pe intrebarea C1 si unul pe punctul 1 al C1, ambele
+--   „include in adresa” si confirmate; C1 e „de_trimis” (exportabila), C2 / C3 raman „propunere”.
 --   Fiecare pas ruleaza ca rolul authenticated cu JWT-ul contului (ambele surse: request.jwt.claim.sub si request.jwt.claims), verificat la fiecare
 --   pas: auth.uid(), current_user, rol fara BYPASSRLS; anon = rolul anon fara JWT.
---   t_politica    politicile sunt cele din 20270115a, functia exista cu drepturile exacte, RLS activ (altfel migrarea nu e aplicata);
+--   t_politica    politicile sunt cele din 20270115a, functiile exista cu drepturile exacte, exportul e DEFINER, RLS activ (altfel migrarea nu e aplicata);
 --   t_fara_drept  u_of / u_sub / u_nimic / u_auto (pe L3) / u_rfm (pe L2, fara modul): 0 randuri in TOT tabelul (inclusiv punctele reale ale clonei, doar
 --                 citite) si pe fiecare clarificare de proba; INSERT = 42501; UPDATE / DELETE ating 0 randuri; RPC-ul fn_ofertare_clar_puncte_poarta = false;
 --   t_cu_drept    u_resp / u_resp2 vad EXACT punctele clarificarii C1 (2) si nimic de pe C2 / C3; u_resp scrie un punct pe C1 (si il vede), schimba
 --                 rezolutia (triggerul semneaza cu auth.uid() = u_resp), NU poate scrie pe C2 (42501); u_owner vede acelasi numar total ca postgres
 --                 (toate punctele clonei) si poate scrie pe orice clarificare; RPC-ul = true pe C1 pentru u_resp, false pe C2;
+--   t_export      exportul adresei (ofertare_clarificari_export): u_adm (decizie, fara poarta) si u_auto (responsabil autonumit al L3) = 42501 cu mesajul
+--                 exact al portii; u_of = refuz la dreptul de decizie (ca azi); u_resp pe L1 si u_owner pe L1 = obiect {clarificari: [C1], temeiuri: [2]}
+--                 cu temeiul de pe punct prezent (tinta 'punct', punct_nr 1, decizia verificata); u_resp pe L2 = refuz la decizie; anon = 42501;
+--                 raspunsul NU e tablou (UI-ul vechi refuza);
 --   t_parinte     garda pe ofertare_clarificari: u_of nu sterge C1 (are puncte; 42501) dar editeaza / sterge o clarificare fara puncte (ca azi); nimeni
 --                 din aplicatie (u_of, u_owner, u_resp) nu muta o clarificare pe alta licitatie (cu sau fara puncte; 42501); u_resp sterge C1 (cascada =
 --                 punctele licitatiei lui); C1 si punctele ei raman intacte pana atunci;
@@ -28,7 +35,8 @@ CREATE FUNCTION pg_temp.rd_u(k text) RETURNS uuid LANGUAGE sql IMMUTABLE AS $f$
   SELECT CASE k WHEN 'owner' THEN 'f0000000-0000-4000-8000-0000000115a1' WHEN 'of' THEN 'f0000000-0000-4000-8000-0000000115a2'
                 WHEN 'resp' THEN 'f0000000-0000-4000-8000-0000000115a3' WHEN 'resp2' THEN 'f0000000-0000-4000-8000-0000000115a4'
                 WHEN 'auto' THEN 'f0000000-0000-4000-8000-0000000115a5' WHEN 'rfm' THEN 'f0000000-0000-4000-8000-0000000115a6'
-                WHEN 'sub' THEN 'f0000000-0000-4000-8000-0000000115a7' ELSE 'f0000000-0000-4000-8000-0000000115a8' END::uuid $f$;
+                WHEN 'sub' THEN 'f0000000-0000-4000-8000-0000000115a7' WHEN 'adm' THEN 'f0000000-0000-4000-8000-0000000115a9'
+                ELSE 'f0000000-0000-4000-8000-0000000115a8' END::uuid $f$;
 -- JWT-ul contului k, ca postgres (pentru triggerele care citesc auth.uid() la INSERT-urile fixturilor); '' = fara JWT
 CREATE FUNCTION pg_temp.rd_jwt(k text) RETURNS void LANGUAGE plpgsql AS $f$
 BEGIN
@@ -40,7 +48,7 @@ BEGIN
   END IF;
 END $f$;
 DO $fix$
-DECLARE u uuid; m text; v_owner boolean; v_alt text; v_sub text; l1 bigint; l2 bigint; l3 bigint; c1 bigint; c2 bigint; c3 bigint;
+DECLARE u uuid; m text; v_owner boolean; v_alt text; v_sub text; l1 bigint; l2 bigint; l3 bigint; c1 bigint; c2 bigint; c3 bigint; p1 bigint; v_nivel boolean;
 BEGIN
   IF current_user <> 'postgres' THEN RAISE EXCEPTION 'DRY 20270115a PRECONDITIE: se ruleaza ca postgres (acum %)', current_user; END IF;
   IF nullif(current_setting('request.jwt.claim.sub', true), '') IS NOT NULL OR nullif(current_setting('request.jwt.claims', true), '') IS NOT NULL THEN
@@ -61,9 +69,10 @@ BEGIN
   SELECT module INTO v_sub FROM public.user_module_access WHERE module LIKE 'ofertare\_%' GROUP BY module ORDER BY count(*) DESC, module LIMIT 1;
   IF v_sub IS NULL AND to_regclass('public.app_modules') IS NOT NULL THEN EXECUTE 'SELECT key FROM public.app_modules WHERE key LIKE ''ofertare\_%'' ORDER BY key LIMIT 1' INTO v_sub; END IF;
   IF v_sub IS NULL THEN RAISE EXCEPTION 'fixturi: nu exista niciun sub-modul ofertare_*'; END IF;
+  v_nivel := EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.user_module_access'::regclass AND attname = 'access_level' AND NOT attisdropped);
   FOR u, m, v_owner IN SELECT * FROM (VALUES (pg_temp.rd_u('owner'), NULL, true), (pg_temp.rd_u('of'), 'ofertare', false), (pg_temp.rd_u('resp'), 'ofertare', false),
                                              (pg_temp.rd_u('resp2'), 'ofertare', false), (pg_temp.rd_u('auto'), 'ofertare', false), (pg_temp.rd_u('rfm'), NULL, false),
-                                             (pg_temp.rd_u('sub'), v_sub, false), (pg_temp.rd_u('nimic'), NULL, false)) v LOOP
+                                             (pg_temp.rd_u('sub'), v_sub, false), (pg_temp.rd_u('nimic'), NULL, false), (pg_temp.rd_u('adm'), 'ofertare', false)) v LOOP
     IF to_regclass('auth.users') IS NOT NULL THEN
       EXECUTE 'INSERT INTO auth.users (id) VALUES ($1) ON CONFLICT (id) DO NOTHING' USING u;
     END IF;
@@ -73,8 +82,8 @@ BEGIN
       INSERT INTO public.profiles (id, is_owner) VALUES (u, v_owner) ON CONFLICT (id) DO NOTHING;
     END IF;
     IF m IS NOT NULL THEN
-      IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.user_module_access'::regclass AND attname = 'access_level' AND NOT attisdropped) THEN
-        EXECUTE 'INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES ($1, $2, ''editor'')' USING u, m;
+      IF v_nivel THEN
+        EXECUTE 'INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES ($1, $2, $3)' USING u, m, CASE WHEN u = pg_temp.rd_u('adm') THEN 'admin' ELSE 'editor' END;
       ELSE
         INSERT INTO public.user_module_access (profile_id, module) VALUES (u, m);
       END IF;
@@ -101,14 +110,26 @@ BEGIN
     RAISE EXCEPTION 'fixturi FAIL: dovezile de numire nu au iesit cum trebuie (trigger sau coloane diferite): %',
       (SELECT string_agg(id || ':' || coalesce(responsabil_setat_de::text, '-') || '/' || coalesce(responsabil_numitor_autorizat::text, '-'), ', ') FROM public.ofertare_licitatii WHERE id IN (l1, l2, l3));
   END IF;
-  INSERT INTO public.ofertare_clarificari (licitatie_id, nr, intrebare, status, origine) VALUES (l1, 1, 'DRY intrebare L1', 'propunere', 'manual') RETURNING id INTO c1;
+  -- C1 e „de_trimis” (intra in exportul adresei); C2 / C3 raman „propunere”
+  INSERT INTO public.ofertare_clarificari (licitatie_id, nr, intrebare, status, origine) VALUES (l1, 1, 'DRY intrebare L1', 'de_trimis', 'manual') RETURNING id INTO c1;
   INSERT INTO public.ofertare_clarificari (licitatie_id, nr, intrebare, status, origine) VALUES (l2, 1, 'DRY intrebare L2', 'propunere', 'manual') RETURNING id INTO c2;
   INSERT INTO public.ofertare_clarificari (licitatie_id, nr, intrebare, status, origine) VALUES (l3, 1, 'DRY intrebare L3', 'propunere', 'manual') RETURNING id INTO c3;
-  INSERT INTO public.ofertare_clarificari_puncte (clarificare_id, nr, text) VALUES (c1, 1, 'DRY punct 1'), (c1, 2, 'DRY punct 2'), (c2, 1, 'DRY punct L2'), (c3, 1, 'DRY punct L3');
+  INSERT INTO public.ofertare_clarificari_puncte (clarificare_id, nr, text) VALUES (c1, 1, 'DRY punct 1') RETURNING id INTO p1;
+  INSERT INTO public.ofertare_clarificari_puncte (clarificare_id, nr, text) VALUES (c1, 2, 'DRY punct 2'), (c2, 1, 'DRY punct L2'), (c3, 1, 'DRY punct L3');
+  -- temeiurile (20261014b): o decizie CNSC sintetica (id-ul DRY nu trebuie sa existe pe clona), un temei pe intrebarea C1 si unul pe punctul 1 al C1,
+  -- ambele „include in adresa”; triggerul fn_temei_citat_verifica cere citatul EXACT din corpus si scrie citat_loc
+  IF EXISTS (SELECT 1 FROM public.cnsc_decizii WHERE id = 'DRY-0115-CNSC-1') THEN RAISE EXCEPTION 'DRY 20270115a PRECONDITIE: exista deja decizia sintetica DRY-0115-CNSC-1'; END IF;
+  INSERT INTO public.cnsc_decizii (id, nr_decizie, buletin_oficial, data, regula, link_sursa, citate_cheie, control_judiciar, verificat, versiune_import)
+    VALUES ('DRY-0115-CNSC-1', '1/C1/1', NULL, DATE '2026-01-15', 'DRY regula', 'https://portal.cnsc.ro/dry', '[{"loc": "p. 3", "text": "DRY citat unu"}]'::jsonb,
+            '{"rezultat": "mentinuta"}'::jsonb, true, 'DRY');
+  INSERT INTO public.ofertare_clarificari_temeiuri (clarificare_id, cnsc_decizie_id, citat_idx, citat_text, include_in_adresa, confirmat) VALUES (c1, 'DRY-0115-CNSC-1', 0, 'DRY citat unu', true, true);
+  INSERT INTO public.ofertare_clarificari_temeiuri (punct_id, cnsc_decizie_id, citat_idx, citat_text, include_in_adresa, confirmat) VALUES (p1, 'DRY-0115-CNSC-1', 0, 'DRY citat unu', true, true);
+  -- un temei NEbifat pe punctul 1 (nu trebuie sa apara in export)
+  INSERT INTO public.ofertare_clarificari_temeiuri (punct_id, cnsc_decizie_id, citat_idx, citat_text, include_in_adresa, confirmat) VALUES (p1, 'DRY-0115-CNSC-1', NULL, NULL, false, true);
   PERFORM set_config('dry.l1', l1::text, true); PERFORM set_config('dry.l2', l2::text, true); PERFORM set_config('dry.l3', l3::text, true);
   PERFORM set_config('dry.c1', c1::text, true); PERFORM set_config('dry.c2', c2::text, true); PERFORM set_config('dry.c3', c3::text, true);
-  PERFORM set_config('dry.alt', v_alt, true); PERFORM set_config('dry.sub', v_sub, true);
-  RAISE NOTICE 'DRY 20270115a fixturi: licitatiile % / % / %, clarificarile % / % / %, sub-modulul %', l1, l2, l3, c1, c2, c3, v_sub;
+  PERFORM set_config('dry.alt', v_alt, true); PERFORM set_config('dry.sub', v_sub, true); PERFORM set_config('dry.nivel', v_nivel::text, true);
+  RAISE NOTICE 'DRY 20270115a fixturi: licitatiile % / % / %, clarificarile % / % / %, sub-modulul %, admin Ofertare: %', l1, l2, l3, c1, c2, c3, v_sub, CASE WHEN v_nivel THEN 'da' ELSE 'fara access_level (sarit)' END;
 END $fix$;
 CREATE FUNCTION pg_temp.rd_c(k text) RETURNS bigint LANGUAGE sql STABLE AS $f$ SELECT current_setting('dry.' || k)::bigint $f$;
 -- devine contul k (rolul authenticated, ambele surse JWT), verificat; inapoi la postgres cu rd_postgres(); anon = rd_anon()
@@ -163,6 +184,19 @@ BEGIN
      OR EXISTS (SELECT 1 FROM pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) e WHERE p.oid = to_regprocedure('public.fn_ofertare_clar_puncte_poarta(bigint)') AND e.grantee = 0) THEN
     RAISE EXCEPTION 't_politica FAIL: drepturile functiei fn_ofertare_clar_puncte_poarta nu sunt cele asteptate';
   END IF;
+  IF (SELECT string_agg(a.d, ', ' ORDER BY a.d COLLATE "C") FROM (
+        SELECT pg_get_userbyid(e.grantee) || ':' || e.privilege_type AS d FROM pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) e
+         WHERE p.oid = to_regprocedure('public.fn_ofertare_lic_puncte_poarta(bigint)') AND e.grantee <> 0) a) IS DISTINCT FROM 'authenticated:EXECUTE, postgres:EXECUTE, service_role:EXECUTE' THEN
+    RAISE EXCEPTION 't_politica FAIL: drepturile functiei fn_ofertare_lic_puncte_poarta nu sunt cele asteptate';
+  END IF;
+  -- exportul: DEFINER (citirile nu depind de RLS-ul apelantului), drepturile de azi (authenticated + service_role + proprietar), fara PUBLIC / anon
+  IF NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = to_regprocedure('public.ofertare_clarificari_export(bigint)') AND p.prosecdef)
+     OR (SELECT string_agg(a.d, ', ' ORDER BY a.d COLLATE "C") FROM (
+        SELECT pg_get_userbyid(e.grantee) || ':' || e.privilege_type AS d FROM pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) e
+         WHERE p.oid = to_regprocedure('public.ofertare_clarificari_export(bigint)') AND e.grantee <> 0) a) IS DISTINCT FROM 'authenticated:EXECUTE, postgres:EXECUTE, service_role:EXECUTE'
+     OR EXISTS (SELECT 1 FROM pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) e WHERE p.oid = to_regprocedure('public.ofertare_clarificari_export(bigint)') AND e.grantee = 0) THEN
+    RAISE EXCEPTION 't_politica FAIL: ofertare_clarificari_export nu e DEFINER cu drepturile de azi';
+  END IF;
   RAISE NOTICE 'DRY 20270115a t_politica OK';
 END $t$;
 
@@ -170,7 +204,7 @@ END $t$;
 DO $t$
 DECLARE k text; v int; v_p boolean; n_upd int;
 BEGIN
-  FOREACH k IN ARRAY ARRAY['of', 'sub', 'nimic', 'auto', 'rfm'] LOOP
+  FOREACH k IN ARRAY ARRAY['of', 'adm', 'sub', 'nimic', 'auto', 'rfm'] LOOP
     PERFORM pg_temp.rd_ca(k);
     SELECT count(*) INTO v FROM public.ofertare_clarificari_puncte;
     IF v <> 0 THEN RAISE EXCEPTION 't_fara_drept FAIL: contul % vede % puncte in tabel', k, v; END IF;
@@ -200,7 +234,7 @@ BEGIN
   SELECT count(*) INTO v FROM public.ofertare_clarificari_puncte WHERE clarificare_id = pg_temp.rd_c('c2');
   IF v <> 0 OR public.fn_ofertare_clar_puncte_poarta(pg_temp.rd_c('c2')) IS DISTINCT FROM false THEN RAISE EXCEPTION 't_fara_drept FAIL: responsabilul fara modul vede % puncte pe C2', v; END IF;
   PERFORM pg_temp.rd_postgres();
-  RAISE NOTICE 'DRY 20270115a t_fara_drept OK (of, sub = %, nimic, auto, rfm)', current_setting('dry.sub');
+  RAISE NOTICE 'DRY 20270115a t_fara_drept OK (of, adm, sub = %, nimic, auto, rfm)', current_setting('dry.sub');
 END $t$;
 
 -- ── t_cu_drept ──
@@ -248,6 +282,71 @@ BEGIN
   END IF;
   PERFORM pg_temp.rd_postgres();
   RAISE NOTICE 'DRY 20270115a t_cu_drept OK (total puncte ca postgres: %)', v_tot_pg + 2;
+END $t$;
+
+-- ── t_export (exportul adresei: poarta punctelor pe server + temeiurile de pe puncte in acelasi raspuns) ──
+DO $t$
+DECLARE k text; r jsonb; v_msg text; v_cod text; n_clar int; n_tem int; n_punct int;
+  MSG_POARTA constant text := 'Export blocat: adresa o genereaza doar ownerul sau un responsabil al licitatiei (temeiurile de pe punctele intrebarilor sunt vizibile doar lor)';
+BEGIN
+  -- fara poarta, dar cu drept de decizie: adminul Ofertare (daca clona are access_level) si responsabilul autonumit al L3 → 42501 cu mesajul exact
+  FOREACH k IN ARRAY (CASE WHEN current_setting('dry.nivel')::boolean THEN ARRAY['adm', 'auto'] ELSE ARRAY['auto'] END) LOOP
+    PERFORM pg_temp.rd_ca(k);
+    BEGIN
+      r := public.ofertare_clarificari_export(CASE WHEN k = 'auto' THEN pg_temp.rd_c('l3') ELSE pg_temp.rd_c('l1') END);
+      RAISE EXCEPTION 't_export FAIL: contul % a exportat fara poarta punctelor: %', k, left(r::text, 200);
+    EXCEPTION WHEN insufficient_privilege THEN
+      GET STACKED DIAGNOSTICS v_msg = MESSAGE_TEXT;
+      IF v_msg <> MSG_POARTA THEN RAISE EXCEPTION 't_export FAIL: contul %: 42501 cu alt mesaj: %', k, v_msg; END IF;
+    END;
+    PERFORM pg_temp.rd_postgres();
+  END LOOP;
+  -- editorul fara rol: refuzat la dreptul de decizie, ca azi (inaintea portii)
+  PERFORM pg_temp.rd_ca('of');
+  BEGIN
+    r := public.ofertare_clarificari_export(pg_temp.rd_c('l1'));
+    RAISE EXCEPTION 't_export FAIL: u_of a exportat';
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_cod = RETURNED_SQLSTATE, v_msg = MESSAGE_TEXT;
+    IF v_cod <> 'P0001' OR v_msg NOT LIKE 'Export blocat: f%r%drept de decizie%' THEN RAISE EXCEPTION 't_export FAIL: u_of: % %', v_cod, v_msg; END IF;
+  END;
+  PERFORM pg_temp.rd_postgres();
+  -- cu poarta: responsabilul 1 si ownerul primesc OBIECTUL (nu tablou) cu C1 si cele 2 temeiuri bifate (intrebare + punct), decizia verificata
+  FOREACH k IN ARRAY ARRAY['resp', 'owner'] LOOP
+    PERFORM pg_temp.rd_ca(k);
+    r := public.ofertare_clarificari_export(pg_temp.rd_c('l1'));
+    IF jsonb_typeof(r) <> 'object' OR jsonb_typeof(r->'clarificari') <> 'array' OR jsonb_typeof(r->'temeiuri') <> 'array' THEN
+      RAISE EXCEPTION 't_export FAIL: contul %: raspunsul nu e {clarificari: [], temeiuri: []}: %', k, left(r::text, 200);
+    END IF;
+    n_clar := jsonb_array_length(r->'clarificari'); n_tem := jsonb_array_length(r->'temeiuri');
+    SELECT count(*) INTO n_punct FROM jsonb_array_elements(r->'temeiuri') t
+     WHERE t->>'tinta' = 'punct' AND (t->>'punct_nr')::int = 1 AND (t->>'nr')::int = 1 AND t->>'citat_text' = 'DRY citat unu' AND t->>'citat_loc' = 'p. 3'
+       AND (t->'decizie'->>'verificat')::boolean AND t->'decizie'->>'link_sursa' = 'https://portal.cnsc.ro/dry' AND t->'decizie'->>'id' = 'DRY-0115-CNSC-1';
+    IF n_clar <> 1 OR (r->'clarificari'->0->>'id')::bigint <> pg_temp.rd_c('c1') OR n_tem <> 2 OR n_punct <> 1
+       OR (SELECT count(*) FROM jsonb_array_elements(r->'temeiuri') t WHERE t->>'tinta' = 'intrebare' AND (t->>'nr')::int = 1) <> 1 THEN
+      RAISE EXCEPTION 't_export FAIL: contul %: astept 1 clarificare (C1) + 2 temeiuri (1 pe intrebare, 1 pe punctul 1), primit % / % (pe punct: %): %', k, n_clar, n_tem, n_punct, left(r::text, 300);
+    END IF;
+    PERFORM pg_temp.rd_postgres();
+  END LOOP;
+  -- responsabilul 1 al L1 pe L2: refuz la dreptul de decizie (nu e responsabilul ei)
+  PERFORM pg_temp.rd_ca('resp');
+  BEGIN
+    r := public.ofertare_clarificari_export(pg_temp.rd_c('l2'));
+    RAISE EXCEPTION 't_export FAIL: u_resp a exportat L2';
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_cod = RETURNED_SQLSTATE;
+    IF v_cod <> 'P0001' THEN RAISE EXCEPTION 't_export FAIL: u_resp pe L2: %', v_cod; END IF;
+  END;
+  PERFORM pg_temp.rd_postgres();
+  -- anon: nu poate chema exportul
+  PERFORM pg_temp.rd_anon();
+  BEGIN
+    r := public.ofertare_clarificari_export(pg_temp.rd_c('l1'));
+    RAISE EXCEPTION 't_export FAIL: anon a chemat exportul';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  PERFORM pg_temp.rd_postgres();
+  RAISE NOTICE 'DRY 20270115a t_export OK (fara poarta: 42501 cu mesajul exact; cu poarta: 1 clarificare + 2 temeiuri, dintre care 1 pe punct)';
 END $t$;
 
 -- ── t_parinte (garda pe ofertare_clarificari: mutarea / stergerea unei clarificari cu puncte, de catre client) ──

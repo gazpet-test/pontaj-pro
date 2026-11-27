@@ -26,6 +26,8 @@
 #                              aplicație și fără puncte — nu mai există cursa din r2); A COMMIT → punctul e pe C, C pe L1.
 #   c_sterge_vs_primul_punct_rollback  ca primul, dar A face ROLLBACK → B șterge (nu erau puncte comise).
 #   c_resp_muta_fara_puncte    secvențial: nici responsabilul nu mută o clarificare fără puncte (42501, mesajul exact); editarea textului trece.
+#   c_export                   secvențial (varianta B, 20270115a): RESP (poarta pe L1) primește OBIECTUL {clarificari, temeiuri} cu temeiul de pe
+#                              punctul lui C9; ADM (admin Ofertare, drept de decizie, fără poartă) → 42501 cu mesajul exact al porții.
 #   c_service_liber            service_role mută și șterge o clarificare cu puncte fără gardă (porțile serverului sunt în edge / RPC).
 #   Bariera verifică și că B e blocat CHIAR de A (pg_blocking_pids), cu pg_stat_clear_snapshot() la fiecare iterație.
 set -u
@@ -90,7 +92,7 @@ trap 'exit 143' TERM
 ok() { if [ "$1" = 0 ]; then echo "  OK  $2"; else echo "  NU  $2"; esec=$((esec + 1)); fi; }
 astept() { if [ "$2" = "$1" ]; then echo "      ok  $3 → $2"; else echo "      ABATERE  $3 → $2 (astepta $1)"; esec=$((esec + 1)); fi; }
 q() { psql -X -q -w -v ON_ERROR_STOP=1 -d "$BAZA" -tAc "$1"; }
-U_OWNER=00000000-0000-4000-8000-0000000000d1; U_OF=00000000-0000-4000-8000-0000000000d2; U_RESP=00000000-0000-4000-8000-0000000000d3
+U_OWNER=00000000-0000-4000-8000-0000000000d1; U_OF=00000000-0000-4000-8000-0000000000d2; U_RESP=00000000-0000-4000-8000-0000000000d3; U_ADM=00000000-0000-4000-8000-0000000000d4
 # JWT ca PostgREST: AMBELE surse (request.jwt.claim.sub și request.jwt.claims cu rolul)
 ca() { printf "SET LOCAL ROLE authenticated; SELECT set_config('request.jwt.claim.sub', '%s', true); SELECT set_config('request.jwt.claims', '{\"sub\": \"%s\", \"role\": \"authenticated\"}', true);" "$1" "$1"; }
 caService() { printf "SET LOCAL ROLE service_role;"; }
@@ -129,20 +131,25 @@ ok $? "SQL-ul extras (schelete, sectiunea 2 a migrarii)"
 [ "$esec" = 0 ] || exit 1
 psql -X -q -w -v ON_ERROR_STOP=1 -d "$BAZA" -1 -f "$D/schelet.sql" > /dev/null; ok $? "scheletele"
 psql -X -q -w -v ON_ERROR_STOP=1 -d "$BAZA" -1 -f "$D/ddl.sql" > /dev/null; ok $? "sectiunea 2 a migrarii 20270115a (o tranzactie)"
-astept '3|1|2' "$(q "SELECT (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname IN ('fn_ofertare_clar_are_puncte', 'fn_ofertare_clar_puncte_poarta', 'fn_ofertare_clar_parinte_puncte_garda')) || '|' || (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.ofertare_clarificari'::regclass AND tgname = 'trg_ofertare_clar_parinte_puncte') || '|' || (SELECT count(*) FROM pg_policy WHERE polrelid = 'public.ofertare_clarificari_puncte'::regclass AND pg_get_expr(polqual, polrelid) = 'fn_ofertare_clar_puncte_poarta(clarificare_id)')")" "obiectele: functii | trigger | politici pe poarta"
+astept '4|t|1|2' "$(q "SELECT (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname IN ('fn_ofertare_clar_are_puncte', 'fn_ofertare_lic_puncte_poarta', 'fn_ofertare_clar_puncte_poarta', 'fn_ofertare_clar_parinte_puncte_garda')) || '|' || (SELECT prosecdef FROM pg_proc WHERE oid = to_regprocedure('public.ofertare_clarificari_export(bigint)')) || '|' || (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.ofertare_clarificari'::regclass AND tgname = 'trg_ofertare_clar_parinte_puncte') || '|' || (SELECT count(*) FROM pg_policy WHERE polrelid = 'public.ofertare_clarificari_puncte'::regclass AND pg_get_expr(polqual, polrelid) = 'fn_ofertare_clar_puncte_poarta(clarificare_id)')")" "obiectele: functii noi | exportul DEFINER | trigger | politici pe poarta"
 [ "$esec" = 0 ] || exit 1
 
-# ── fixturile (ca postgres): conturi, licitațiile L1 (RESP responsabil, regula A) și L2, clarificările C1..C4 pe L1 fără puncte, C9 pe L1 cu un punct ──
+# ── fixturile (ca postgres): conturi (+ ADM = admin Ofertare, fără rol pe licitație), licitațiile L1 (RESP responsabil, regula A) și L2, clarificările
+#    C1..C4 pe L1 fără puncte, C9 pe L1 „de_trimis” cu un punct + un temei CNSC bifat „include în adresă” pe punct (20261014b) ──
 psql -X -q -w -v ON_ERROR_STOP=1 -d "$BAZA" -1 <<'SQL' > /dev/null
-INSERT INTO auth.users (id) VALUES ('00000000-0000-4000-8000-0000000000d1'), ('00000000-0000-4000-8000-0000000000d2'), ('00000000-0000-4000-8000-0000000000d3');
-INSERT INTO public.profiles (id, name, is_owner) VALUES ('00000000-0000-4000-8000-0000000000d1', 'OWNER', true), ('00000000-0000-4000-8000-0000000000d2', 'OF', false), ('00000000-0000-4000-8000-0000000000d3', 'RESP', false);
-INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES ('00000000-0000-4000-8000-0000000000d2', 'ofertare', 'editor'), ('00000000-0000-4000-8000-0000000000d3', 'ofertare', 'editor');
+INSERT INTO auth.users (id) VALUES ('00000000-0000-4000-8000-0000000000d1'), ('00000000-0000-4000-8000-0000000000d2'), ('00000000-0000-4000-8000-0000000000d3'), ('00000000-0000-4000-8000-0000000000d4');
+INSERT INTO public.profiles (id, name, is_owner) VALUES ('00000000-0000-4000-8000-0000000000d1', 'OWNER', true), ('00000000-0000-4000-8000-0000000000d2', 'OF', false), ('00000000-0000-4000-8000-0000000000d3', 'RESP', false), ('00000000-0000-4000-8000-0000000000d4', 'ADM', false);
+INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES ('00000000-0000-4000-8000-0000000000d2', 'ofertare', 'editor'), ('00000000-0000-4000-8000-0000000000d3', 'ofertare', 'editor'), ('00000000-0000-4000-8000-0000000000d4', 'ofertare', 'admin');
 INSERT INTO public.ofertare_licitatii (id, nr_anunt, autoritate, obiect, responsabil_id, stare_loturi) VALUES
   (900201, 'T-1', 'AUTORITATE PROBA', 'licitatie de proba', '00000000-0000-4000-8000-0000000000d3', 'fara_loturi'),
   (900202, 'T-2', 'AUTORITATE PROBA', 'alta licitatie', NULL, 'fara_loturi');
 INSERT INTO public.ofertare_clarificari (id, licitatie_id, nr, intrebare, status) VALUES (9101, 900201, 1, 'C1', 'propunere'), (9102, 900201, 2, 'C2', 'propunere'),
-  (9103, 900201, 3, 'C3', 'propunere'), (9109, 900201, 9, 'C9 cu puncte', 'propunere');
+  (9103, 900201, 3, 'C3', 'propunere'), (9109, 900201, 9, 'C9 cu puncte', 'de_trimis');
 INSERT INTO public.ofertare_clarificari_puncte (clarificare_id, nr, text) VALUES (9109, 1, 'punct C9');
+INSERT INTO public.cnsc_decizii (id, nr_decizie, data, regula, link_sursa, citate_cheie, verificat, versiune_import)
+  VALUES ('CP-CNSC-1', '1/C1/1', DATE '2026-01-15', 'regula de proba', 'https://portal.cnsc.ro/proba', '[{"loc": "p. 3", "text": "citat de proba"}]'::jsonb, true, 'proba');
+INSERT INTO public.ofertare_clarificari_temeiuri (punct_id, cnsc_decizie_id, citat_idx, citat_text, include_in_adresa, confirmat)
+  SELECT p.id, 'CP-CNSC-1', 0, 'citat de proba', true, true FROM public.ofertare_clarificari_puncte p WHERE p.clarificare_id = 9109 AND p.nr = 1;
 SQL
 ok $? "fixturile"
 [ "$esec" = 0 ] || exit 1
@@ -262,6 +269,24 @@ SQL
   pasA S3b "COMMIT;"; astept 00000 "$A_STARE" "A: COMMIT"
   inchideA
   astept '900201|1' "$(stare_c 9103)" "C3 ramane pe L1, cu punctul lui A"
+}
+
+# ── c_export (secvențial): poarta punctelor pe exportul adresei + temeiul de pe punct în răspuns ──
+echo "c_export (L1 = 900201, C9 de_trimis cu un punct + temei bifat): RESP → obiect {clarificari: 1, temeiuri: 1 pe punct}; ADM (decizie, fara poarta) → 42501 mesajul exact"
+{
+  R="$(psql -X -q -w -v ON_ERROR_STOP=1 -d "$BAZA" -tAc "BEGIN; $(ca $U_RESP) SELECT jsonb_typeof(r) || '|' || jsonb_array_length(r->'clarificari') || '|' || jsonb_array_length(r->'temeiuri') || '|' || (r->'temeiuri'->0->>'tinta') || '|' || (r->'temeiuri'->0->>'punct_nr') || '|' || (r->'temeiuri'->0->>'nr') || '|' || (r->'temeiuri'->0->'decizie'->>'id') FROM public.ofertare_clarificari_export(900201) r; ROLLBACK;" | head -n 1)"
+  astept 'object|1|1|punct|1|9|CP-CNSC-1' "$R" "RESP: raspunsul e OBIECT (nu tablou: UI-ul vechi refuza), C9 + temeiul de pe punctul 1 cu decizia"
+  R="$(psql -X -q -w -v ON_ERROR_STOP=0 -d "$BAZA" -f - 2>&1 <<SQL | sed -n 's/^E_//p'
+BEGIN;
+$(ca $U_ADM)
+SELECT public.ofertare_clarificari_export(900201);
+\echo E_REZ :SQLSTATE
+\echo E_MSG :LAST_ERROR_MESSAGE
+ROLLBACK;
+SQL
+)"
+  astept 42501 "$(printf '%s\n' "$R" | sed -n 's/^REZ //p')" "ADM (admin Ofertare, drept de decizie, fara poarta): export → 42501"
+  contine 'Export blocat: adresa o genereaza doar ownerul sau un responsabil al licitatiei' "$(printf '%s\n' "$R" | sed -n 's/^MSG //p')" "ADM: mesajul exact al portii"
 }
 
 # ── c_service_liber ──
