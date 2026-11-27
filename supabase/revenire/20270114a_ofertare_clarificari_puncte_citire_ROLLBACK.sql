@@ -72,14 +72,14 @@ BEGIN
   -- >>> FUNCTII 20270114a
   IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.oid = to_regprocedure('public.fn_ofertare_clar_are_puncte(bigint)')
                    AND md5(replace(p.prosrc, chr(13), '')) = '2245a58f811059df647d9d7032595637' AND l.lanname = 'sql' AND p.prokind = 'f'
-                   AND p.prosecdef AND p.provolatile = 's' AND NOT p.proretset AND pg_get_function_result(p.oid) = 'boolean'
+                   AND p.prosecdef AND p.provolatile = 'v' AND NOT p.proretset AND pg_get_function_result(p.oid) = 'boolean'
                    AND p.proconfig = ARRAY['search_path=public, pg_temp'] AND pg_get_userbyid(p.proowner) = 'postgres'
                    AND NOT EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a WHERE a.grantee = 0)
                    AND (SELECT string_agg(a.d, ', ' ORDER BY a.d COLLATE "C") FROM (
                           SELECT pg_get_userbyid(e.grantee) || ':' || e.privilege_type || CASE WHEN e.is_grantable THEN '*' ELSE '' END AS d
                             FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) e) a) = 'authenticated:EXECUTE, postgres:EXECUTE, service_role:EXECUTE')
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'fn_ofertare_clar_are_puncte') <> 1 THEN
-    RAISE EXCEPTION '20270114a revenire: fn_ofertare_clar_are_puncte(bigint) nu e cea din 20270114a (corp md5 2245a58f811059df647d9d7032595637, sql STABLE DEFINER, cale, proprietar, drepturi exacte sau supraincarcari)';
+    RAISE EXCEPTION '20270114a revenire: fn_ofertare_clar_are_puncte(bigint) nu e cea din 20270114a (corp md5 2245a58f811059df647d9d7032595637, sql VOLATILE DEFINER, cale, proprietar, drepturi exacte sau supraincarcari)';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.oid = to_regprocedure('public.fn_ofertare_clar_puncte_poarta(bigint)')
                    AND md5(replace(p.prosrc, chr(13), '')) = 'abd6b68b5b34a67f777045541aeff04a' AND l.lanname = 'sql' AND p.prokind = 'f'
@@ -93,7 +93,7 @@ BEGIN
     RAISE EXCEPTION '20270114a revenire: fn_ofertare_clar_puncte_poarta(bigint) nu e cea din 20270114a (corp md5 abd6b68b5b34a67f777045541aeff04a, sql STABLE DEFINER, cale, proprietar, drepturi exacte sau supraincarcari)';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.oid = to_regprocedure('public.fn_ofertare_clar_parinte_puncte_garda()')
-                   AND md5(replace(p.prosrc, chr(13), '')) = '3628b83f2bbd6dbc12d418d443212409' AND l.lanname = 'plpgsql' AND p.prokind = 'f'
+                   AND md5(replace(p.prosrc, chr(13), '')) = 'af05fe431f584442cea2351f4257427f' AND l.lanname = 'plpgsql' AND p.prokind = 'f'
                    AND NOT p.prosecdef AND p.provolatile = 'v' AND NOT p.proretset AND pg_get_function_result(p.oid) = 'trigger'
                    AND p.proconfig = ARRAY['search_path=public, pg_temp'] AND pg_get_userbyid(p.proowner) = 'postgres'
                    AND NOT EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a WHERE a.grantee = 0)
@@ -101,7 +101,7 @@ BEGIN
                           SELECT pg_get_userbyid(e.grantee) || ':' || e.privilege_type || CASE WHEN e.is_grantable THEN '*' ELSE '' END AS d
                             FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) e) a) = 'postgres:EXECUTE')
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'fn_ofertare_clar_parinte_puncte_garda') <> 1 THEN
-    RAISE EXCEPTION '20270114a revenire: fn_ofertare_clar_parinte_puncte_garda() nu e cea din 20270114a (corp md5 3628b83f2bbd6dbc12d418d443212409, plpgsql VOLATILE INVOKER, cale, proprietar, doar proprietarul executa, unica)';
+    RAISE EXCEPTION '20270114a revenire: fn_ofertare_clar_parinte_puncte_garda() nu e cea din 20270114a (corp md5 af05fe431f584442cea2351f4257427f, plpgsql VOLATILE INVOKER, cale, proprietar, doar proprietarul executa, unica)';
   END IF;
   -- <<< FUNCTII 20270114a
   -- triggerul: forma exacta (BEFORE ROW DELETE + UPDATE OF licitatie_id = 27, garda, fara WHEN / argumente, activ)
@@ -120,12 +120,13 @@ BEGIN
      AND NOT (d.classid = 'pg_policy'::regclass AND d.objid IN (SELECT p.oid FROM pg_policy p WHERE p.polrelid = 'public.ofertare_clarificari_puncte'::regclass AND p.polname IN ('clar_puncte_sel', 'clar_puncte_rw')))
      AND NOT (d.classid = 'pg_trigger'::regclass AND d.objid IN (SELECT t.oid FROM pg_trigger t WHERE t.tgrelid = 'public.ofertare_clarificari'::regclass AND t.tgname = 'trg_ofertare_clar_parinte_puncte'));
   IF v_dep IS NOT NULL THEN RAISE EXCEPTION '20270114a revenire: de functiile 20270114a depind si alte obiecte (nu doar cele 2 politici si triggerul): %', v_dep; END IF;
-  -- apelanti din corpuri text (nu sunt in pg_depend): niciun alt corp de functie din schemele aplicatiei nu numeste functiile migrarii
+  -- apelanti din corpuri text (nu sunt in pg_depend): niciun alt corp de functie din schemele aplicatiei nu numeste functiile migrarii; se exclud
+  -- DOAR cele 3 functii ale migrarii (dupa OID, nu dupa nume — o omonima din alta schema e un apelant ca oricare altul, review r2 P2); fara majuscule
   SELECT string_agg(p.oid::regprocedure::text, ', ' ORDER BY p.oid::regprocedure::text) INTO v_dep
     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\_%'
-     AND p.proname NOT IN ('fn_ofertare_clar_puncte_poarta', 'fn_ofertare_clar_are_puncte', 'fn_ofertare_clar_parinte_puncte_garda')
-     AND (p.prosrc LIKE '%fn_ofertare_clar_puncte_poarta%' OR p.prosrc LIKE '%fn_ofertare_clar_are_puncte%' OR p.prosrc LIKE '%fn_ofertare_clar_parinte_puncte_garda%');
+     AND p.oid NOT IN (to_regprocedure('public.fn_ofertare_clar_puncte_poarta(bigint)'), to_regprocedure('public.fn_ofertare_clar_are_puncte(bigint)'), to_regprocedure('public.fn_ofertare_clar_parinte_puncte_garda()'))
+     AND (p.prosrc ILIKE '%fn_ofertare_clar_puncte_poarta%' OR p.prosrc ILIKE '%fn_ofertare_clar_are_puncte%' OR p.prosrc ILIKE '%fn_ofertare_clar_parinte_puncte_garda%');
   IF v_dep IS NOT NULL THEN RAISE EXCEPTION '20270114a revenire: alte functii numesc in corp functiile 20270114a (apelanti neinregistrati in pg_depend): %', v_dep; END IF;
   -- dependentele pe care le chema poarta (neschimbate fata de 20260912 / 20261124a: ACELEASI campuri ca la aplicare)
   IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.oid = to_regprocedure('public.fn_are_acces_ofertare()')

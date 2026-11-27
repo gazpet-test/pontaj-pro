@@ -14,8 +14,9 @@
 --   t_cu_drept    u_resp / u_resp2 vad EXACT punctele clarificarii C1 (2) si nimic de pe C2 / C3; u_resp scrie un punct pe C1 (si il vede), schimba
 --                 rezolutia (triggerul semneaza cu auth.uid() = u_resp), NU poate scrie pe C2 (42501); u_owner vede acelasi numar total ca postgres
 --                 (toate punctele clonei) si poate scrie pe orice clarificare; RPC-ul = true pe C1 pentru u_resp, false pe C2;
---   t_parinte     garda pe ofertare_clarificari: u_of nu muta / nu sterge C1 (are puncte; 42501) dar muta / sterge o clarificare fara puncte (ca azi);
---                 u_resp nu muta C1 (nici pe licitatia lui) dar o sterge (cascada = punctele licitatiei lui); C1 si punctele ei raman intacte pana atunci;
+--   t_parinte     garda pe ofertare_clarificari: u_of nu sterge C1 (are puncte; 42501) dar editeaza / sterge o clarificare fara puncte (ca azi); nimeni
+--                 din aplicatie (u_of, u_owner, u_resp) nu muta o clarificare pe alta licitatie (cu sau fara puncte; 42501); u_resp sterge C1 (cascada =
+--                 punctele licitatiei lui); C1 si punctele ei raman intacte pana atunci;
 --   t_anon        anon: nimic (0 randuri sau 42501).
 -- Rezultatul asteptat: fiecare sectiune tipareste „DRY 20270114a <nume> OK”, ultima linie „DRY 20270114a TOTUL OK”; orice FAIL opreste (ON_ERROR_STOP).
 -- FIXTURI: pe clona, daca ofertare_licitatii / profiles / user_module_access cer alte coloane NOT NULL sau alte valori, se completeaza DOAR aici.
@@ -48,6 +49,11 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = 'public.ofertare_clarificari_puncte'::regclass AND p.polname = 'clar_puncte_sel'
                    AND pg_get_expr(p.polqual, p.polrelid) = 'fn_ofertare_clar_puncte_poarta(clarificare_id)') THEN
     RAISE EXCEPTION 't_politica FAIL: migrarea 20270114a nu e aplicata (clar_puncte_sel nu e pe poarta noua)';
+  END IF;
+  -- UUID-urile sintetice nu trebuie sa existe (garda executabila, nu doar nota: ON CONFLICT DO NOTHING ar pastra un profil strain cu alt is_owner)
+  IF EXISTS (SELECT 1 FROM public.profiles WHERE id::text LIKE 'f0000000-0000-4000-8000-0000000114a%')
+     OR (to_regclass('auth.users') IS NOT NULL AND EXISTS (SELECT 1 FROM auth.users WHERE id::text LIKE 'f0000000-0000-4000-8000-0000000114a%')) THEN
+    RAISE EXCEPTION 'DRY 20270114a PRECONDITIE: exista deja conturi cu UUID-urile sintetice f0000000-…-0000000114aN';
   END IF;
   -- alt modul decat Ofertare (doar numele) si un sub-modul ofertare_* (cheia modulului e exacta: nu trebuie sa dea acces)
   SELECT module INTO v_alt FROM public.user_module_access WHERE module <> 'ofertare' AND module NOT LIKE 'ofertare%' GROUP BY module ORDER BY count(*) DESC, module LIMIT 1;
@@ -261,9 +267,15 @@ BEGIN
   EXCEPTION WHEN insufficient_privilege THEN NULL;
   END;
   INSERT INTO public.ofertare_clarificari (licitatie_id, nr, intrebare, status, origine) VALUES (pg_temp.rd_c('l1'), 98, 'DRY fara puncte', 'propunere', 'manual') RETURNING id INTO c_fara;
-  UPDATE public.ofertare_clarificari SET licitatie_id = pg_temp.rd_c('l2') WHERE id = c_fara;
+  -- mutarea pe alta licitatie e refuzata din aplicatie si FARA puncte (r2: cursa cu primul punct inserat concurent)
+  BEGIN
+    UPDATE public.ofertare_clarificari SET licitatie_id = pg_temp.rd_c('l2') WHERE id = c_fara;
+    RAISE EXCEPTION 't_parinte FAIL: u_of a mutat o clarificare (fara puncte) pe alta licitatie';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  UPDATE public.ofertare_clarificari SET intrebare = intrebare || ' (editata)' WHERE id = c_fara;
   GET DIAGNOSTICS n_upd = ROW_COUNT;
-  IF n_upd <> 1 THEN RAISE EXCEPTION 't_parinte FAIL: u_of nu a putut muta o clarificare fara puncte (% randuri)', n_upd; END IF;
+  IF n_upd <> 1 THEN RAISE EXCEPTION 't_parinte FAIL: u_of nu a putut edita o clarificare fara puncte (% randuri)', n_upd; END IF;
   DELETE FROM public.ofertare_clarificari WHERE id = c_fara;
   GET DIAGNOSTICS n_upd = ROW_COUNT;
   IF n_upd <> 1 THEN RAISE EXCEPTION 't_parinte FAIL: u_of nu a putut sterge o clarificare fara puncte (% randuri)', n_upd; END IF;
@@ -272,7 +284,14 @@ BEGIN
      OR (SELECT count(*) FROM public.ofertare_clarificari_puncte WHERE clarificare_id = pg_temp.rd_c('c1')) <> 3 THEN
     RAISE EXCEPTION 't_parinte FAIL: C1 sau punctele ei s-au schimbat';
   END IF;
-  -- u_resp (poarta pe L1): nici el nu muta C1 (mutarea unei clarificari cu puncte nu e flux de client); poate sterge C1 (cascada = punctele lui)
+  -- u_resp (poarta pe L1): nici el nu muta C1 (mutarea nu e flux de client); poate sterge C1 (cascada = punctele lui); u_owner nu muta nici el
+  PERFORM pg_temp.rd_ca('owner');
+  BEGIN
+    UPDATE public.ofertare_clarificari SET licitatie_id = pg_temp.rd_c('l2'), nr = 97 WHERE id = pg_temp.rd_c('c1');
+    RAISE EXCEPTION 't_parinte FAIL: u_owner a mutat clarificarea C1 pe alta licitatie din aplicatie';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  PERFORM pg_temp.rd_postgres();
   PERFORM pg_temp.rd_ca('resp');
   BEGIN
     UPDATE public.ofertare_clarificari SET licitatie_id = pg_temp.rd_c('l2'), nr = 97 WHERE id = pg_temp.rd_c('c1');

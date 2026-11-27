@@ -149,8 +149,8 @@ const eVeche = s => s.politici === POLITICI_VECHI && s.functie_noua === 'LIPSA' 
 const corp = (t, sig) => { const i = t.indexOf(sig); if (i < 0) throw new Error('lipsă ' + sig); const a = t.indexOf('AS $fn$', i) + 7; return t.slice(a, t.indexOf('$fn$;', a)) }
 const SIG_ARE = 'CREATE FUNCTION public.fn_ofertare_clar_are_puncte(p_clarificare_id bigint)', SIG_POARTA = 'CREATE FUNCTION public.fn_ofertare_clar_puncte_poarta(p_clarificare_id bigint)', SIG_GARDA = 'CREATE FUNCTION public.fn_ofertare_clar_parinte_puncte_garda()'
 const MD5_NOU = md5(corp(MIG, SIG_POARTA)), MD5_ARE = md5(corp(MIG, SIG_ARE)), MD5_GARDA = md5(corp(MIG, SIG_GARDA))
-const fnDefiner = (s, m) => s.startsWith(m + '|') && /\|true\|s\|search_path=public, pg_temp$/.test(s) && /authenticated=X\/postgres/.test(s) && /service_role=X\/postgres/.test(s) && !/(^|[{,])=X/.test(s) && !/anon=/.test(s)
-const eNoua = s => s.politici === POLITICI_NOI && fnDefiner(s.functie_noua, MD5_NOU) && fnDefiner(s.functie_are, MD5_ARE)
+const fnDefiner = (s, m, vol = 's') => s.startsWith(m + '|') && new RegExp(`\\|true\\|${vol}\\|search_path=public, pg_temp$`).test(s) && /authenticated=X\/postgres/.test(s) && /service_role=X\/postgres/.test(s) && !/(^|[{,])=X/.test(s) && !/anon=/.test(s)
+const eNoua = s => s.politici === POLITICI_NOI && fnDefiner(s.functie_noua, MD5_NOU) && fnDefiner(s.functie_are, MD5_ARE, 'v')
   && s.functie_garda.startsWith(MD5_GARDA + '|{postgres=X/postgres}|false|v|search_path=public, pg_temp')
   && s.triggere_parinte.split(',').includes(TRG_NOU) && s.triggere_parinte.split(',').filter(x => x !== TRG_NOU).join(',') === STARE_VECHE.triggere_parinte && neschimbate(s)
 
@@ -232,11 +232,16 @@ async function verifica(db) {
   if (p1.code !== '42501') ab.push('OF muta C1: ' + JSON.stringify(p1))
   const p2 = await ca(db, 'OF', `DELETE FROM public.ofertare_clarificari WHERE id = ${C1}`)
   if (p2.code !== '42501') ab.push('OF sterge C1: ' + JSON.stringify(p2))
-  const p3 = await ca(db, 'OF', `UPDATE public.ofertare_clarificari SET licitatie_id = ${LIC2}, nr = 97 WHERE id = ${C5}`, [], { apoi: `SELECT licitatie_id::int AS lic FROM public.ofertare_clarificari WHERE id = ${C5}` })
-  if (p3.code || p3.afectate !== 1 || p3.apoi[0].lic !== LIC2) ab.push('OF muta C5 (fara puncte): ' + JSON.stringify(p3))
+  // mutarea pe altă licitație e refuzată din aplicație și FĂRĂ puncte (r2 P1: cursa cu primul punct inserat concurent), pentru oricine (OF, RESP, OWNER)
+  const p3 = await ca(db, 'OF', `UPDATE public.ofertare_clarificari SET licitatie_id = ${LIC2}, nr = 97 WHERE id = ${C5}`)
+  if (p3.code !== '42501') ab.push('OF muta C5 (fara puncte): ' + JSON.stringify(p3))
+  const p3b = await ca(db, 'OF', `UPDATE public.ofertare_clarificari SET intrebare = intrebare || ' (editata)' WHERE id = ${C5}`)
+  if (p3b.code || p3b.afectate !== 1) ab.push('OF editeaza C5 (fara puncte): ' + JSON.stringify(p3b))
   const p4 = await ca(db, 'OF', `DELETE FROM public.ofertare_clarificari WHERE id = ${C5}`)
   if (p4.code || p4.afectate !== 1) ab.push('OF sterge C5 (fara puncte): ' + JSON.stringify(p4))
-  // responsabilul: nu mută C1 (mutarea unei clarificări cu puncte nu e flux de client), dar o șterge (cascada = punctele licitației lui); AUTO nu șterge C3
+  const p3c = await ca(db, 'OWNER', `UPDATE public.ofertare_clarificari SET licitatie_id = ${LIC2}, nr = 97 WHERE id = ${C5}`)
+  if (p3c.code !== '42501') ab.push('OWNER muta C5: ' + JSON.stringify(p3c))
+  // responsabilul: nu mută C1, dar o șterge (cascada = punctele licitației lui); AUTO nu șterge C3
   const p5 = await ca(db, 'RESP', `UPDATE public.ofertare_clarificari SET licitatie_id = ${LIC2}, nr = 97 WHERE id = ${C1}`)
   if (p5.code !== '42501') ab.push('RESP muta C1: ' + JSON.stringify(p5))
   const p6 = await ca(db, 'RESP', `DELETE FROM public.ofertare_clarificari WHERE id = ${C1}`, [], { apoi: `SELECT count(*)::int AS n FROM public.ofertare_clarificari_puncte WHERE clarificare_id = ${C1}` })
@@ -301,9 +306,10 @@ console.log('0. validatorul runnerului, forma fișierelor, inventarul instrucți
   const CP = corp(MIG, SIG_POARTA), CG = corp(MIG, SIG_GARDA)
   ok(/auth\.uid\(\)/.test(CP) && !/p_uid/.test(CP) && /public\.fn_are_acces_ofertare\(\)/.test(CP) && /public\.fn_ofertare_poate_cheltui\(c\.licitatie_id, auth\.uid\(\)\)/.test(CP),
     'corpul porții: identitatea DOAR din auth.uid() (fără parametru de utilizator, L08), modulul + poarta pe licitația clarificării, nume calificate')
-  ok(/current_user NOT IN \('authenticated', 'anon'\)/.test(CG) && /public\.fn_ofertare_clar_are_puncte\(OLD\.id\)/.test(CG) && /public\.fn_ofertare_clar_puncte_poarta\(OLD\.id\)/.test(CG) && !/auth\.uid|request\.jwt|set_config/.test(CG)
+  ok(/current_user NOT IN \('authenticated', 'anon'\)/.test(CG) && /IF NOT public\.fn_ofertare_clar_are_puncte\(OLD\.id\) THEN RETURN OLD; END IF;/.test(CG) && /public\.fn_ofertare_clar_puncte_poarta\(OLD\.id\)/.test(CG) && !/auth\.uid|request\.jwt|set_config/.test(CG)
+    && CG.indexOf("IF TG_OP = 'UPDATE' THEN") < CG.indexOf('fn_ofertare_clar_are_puncte') && /\nVOLATILE\nSECURITY DEFINER/.test(MIG.slice(MIG.indexOf(SIG_ARE), MIG.indexOf('$fn$;', MIG.indexOf(SIG_ARE))))
     && /SECURITY INVOKER|\nSET search_path = public, pg_temp\nAS \$fn\$\nBEGIN/.test(MIG.slice(MIG.indexOf(SIG_GARDA), MIG.indexOf('$fn$;', MIG.indexOf(SIG_GARDA)))) && !/SECURITY DEFINER/.test(MIG.slice(MIG.indexOf(SIG_GARDA), MIG.indexOf('$fn$;', MIG.indexOf(SIG_GARDA)))),
-    'corpul gărzii: INVOKER (fără SECURITY DEFINER), apelantul deosebit prin current_user, existența punctelor și poarta prin funcțiile DEFINER pe OLD.id, fără identitate din GUC')
+    'corpul gărzii: INVOKER (fără SECURITY DEFINER), apelantul deosebit prin current_user, mutarea refuzată ÎNAINTEA oricărei verificări de puncte (fără puncte = tot refuz), existența punctelor (VOLATILE) și poarta prin funcțiile DEFINER pe OLD.id, fără identitate din GUC')
   // scheletul punctelor = textul 20260928l (tabel, politici, trigger) + REVOKE TRUNCATE (20260930i)
   const t0928 = citeste('supabase/migrations/20260928l_ofertare_clarificari_puncte_r05.sql')
   const corpTbl = t => t.slice(t.indexOf('CREATE TABLE public.ofertare_clarificari_puncte ('), t.indexOf('FOR EACH ROW EXECUTE FUNCTION public.fn_clar_punct_semneaza();') + 'FOR EACH ROW EXECUTE FUNCTION public.fn_clar_punct_semneaza();'.length)
@@ -330,9 +336,10 @@ console.log('1. comportamentul: înainte orice cont logat vede și oricine cu Of
   const wOf = await ca(db, 'OF', `INSERT INTO public.ofertare_clarificari_puncte (clarificare_id, nr, text) VALUES (${C1}, 7, 'scris de OF inainte')`)
   const wStrain = await ca(db, 'STRAIN', `INSERT INTO public.ofertare_clarificari_puncte (clarificare_id, nr, text) VALUES (${C1}, 7, 'scris de STRAIN inainte')`)
   const mOf = await ca(db, 'OF', `UPDATE public.ofertare_clarificari SET licitatie_id = ${LIC2}, nr = 97 WHERE id = ${C1}`)
+  const mOf5 = await ca(db, 'OF', `UPDATE public.ofertare_clarificari SET licitatie_id = ${LIC2}, nr = 97 WHERE id = ${C5}`)
   const dOf = await ca(db, 'OF', `DELETE FROM public.ofertare_clarificari WHERE id = ${C1}`)
-  ok(!wOf.code && wOf.afectate === 1 && wStrain.code === '42501' && !mOf.code && mOf.afectate === 1 && !dOf.code && dOf.afectate === 1,
-    'ÎNAINTE: editorul Ofertare fără rol scrie puncte, mută și șterge clarificarea cu puncte (ușile din review-ul r1); alt modul = 42501')
+  ok(!wOf.code && wOf.afectate === 1 && wStrain.code === '42501' && !mOf.code && mOf.afectate === 1 && !mOf5.code && mOf5.afectate === 1 && !dOf.code && dOf.afectate === 1,
+    'ÎNAINTE: editorul Ofertare fără rol scrie puncte, mută (cu și fără puncte) și șterge clarificarea cu puncte (ușile din review-urile r1 / r2); alt modul = 42501')
   const a = await livreaza(db, MIG)
   ok(a.ok && a.note.some(n => /^AMPRENTA_GLOBALA_CITITA inainte: [0-9a-f]{32}/.test(n)) && a.note.some(n => /^20270114a: lock la \d+ ms de la BEGIN \(1 incercari/.test(n))
     && a.note.some(n => /^20270114a: stare verificata \(2 politici pe puncte, RLS activ, parintele fotografiat\)$/.test(n)),
@@ -507,6 +514,9 @@ for (const [nume, pregatire, re] of [
   ['alt trigger pe garda', `CREATE TRIGGER zz_trg BEFORE DELETE ON ${T} FOR EACH ROW EXECUTE FUNCTION public.fn_ofertare_clar_parinte_puncte_garda()`, /depind si alte obiecte .*: pg_trigger:\d+/],
   ['un apelant cu corp text (nu e în pg_depend) care cheamă poarta', `CREATE FUNCTION public.zz_apelant(p bigint) RETURNS boolean LANGUAGE sql AS $f$ SELECT public.fn_ofertare_clar_puncte_poarta(p) $f$`, /alte functii numesc in corp functiile 20270114a .*: zz_apelant\(bigint\)/],
   ['un apelant plpgsql care cheamă are_puncte', `CREATE FUNCTION public.zz_apelant2() RETURNS void LANGUAGE plpgsql AS $f$ BEGIN PERFORM public.fn_ofertare_clar_are_puncte(1); END $f$`, /alte functii numesc in corp functiile 20270114a .*: zz_apelant2\(\)/],
+  // r2 P2: o OMONIMĂ din altă schemă e un apelant ca oricare (excluderea e pe OID, nu pe nume); numele scrise cu majuscule sunt prinse (ILIKE)
+  ['o omonimă din altă schemă care cheamă poarta', `CREATE SCHEMA zz_alta; CREATE FUNCTION zz_alta.fn_ofertare_clar_are_puncte(p bigint) RETURNS boolean LANGUAGE sql AS $f$ SELECT public.fn_ofertare_clar_puncte_poarta(p) $f$`, /alte functii numesc in corp functiile 20270114a .*: zz_alta\.fn_ofertare_clar_are_puncte\(bigint\)/],
+  ['un apelant care scrie numele cu majuscule', `CREATE FUNCTION public.zz_apelant3(p bigint) RETURNS boolean LANGUAGE sql AS $f$ SELECT public.FN_OFERTARE_CLAR_PUNCTE_POARTA(p) $f$`, /alte functii numesc in corp functiile 20270114a .*: zz_apelant3\(bigint\)/],
   ['fn_are_acces_ofertare schimbată', FN_ACCES_TRUE, /fn_are_acces_ofertare\(\) nu e cea din 20260912/],
   ['fn_ofertare_poate_cheltui schimbată', FN_CHELT_TRUE, /fn_ofertare_poate_cheltui\(bigint, uuid\) nu e cea din 20261124a/],
   ['RLS oprit', `ALTER TABLE ${T} DISABLE ROW LEVEL SECURITY`, /RLS pe ofertare_clarificari_puncte nu e activ/],
@@ -553,7 +563,9 @@ const MUTANTI = [
   ['M11 garda doar pe UPDATE (ștergerea rămâne liberă)', [[CREATE_TRG, CREATE_TRG.replace('BEFORE UPDATE OF licitatie_id OR DELETE', 'BEFORE UPDATE OF licitatie_id')]]],
   ['M12 garda fără poartă la ștergere (orice client cu modul șterge clarificarea cu puncte)', [[CORP_G, CORP_G.replace("  IF NOT coalesce(public.fn_ofertare_clar_puncte_poarta(OLD.id), false) THEN\n    RAISE EXCEPTION 'Clarificarea are puncte: o sterge doar ownerul sau un responsabil al licitatiei (stergerea ar sterge si punctele).' USING ERRCODE = '42501';\n  END IF;\n", '')]]],
   ['M13 garda și pentru service_role (serverul blocat)', [[CORP_G, CORP_G.replace("IF current_user NOT IN ('authenticated', 'anon') THEN", "IF current_user NOT IN ('authenticated', 'anon', 'service_role') THEN")]]],
-  ['M14 garda pe toate clarificările, nu doar pe cele cu puncte (editorul nu mai șterge clarificarea fără puncte)', [[CORP_G, CORP_G.replace('IF NOT public.fn_ofertare_clar_are_puncte(OLD.id) THEN', 'IF false THEN')]]],
+  ['M14 garda la ștergere pe toate clarificările, nu doar pe cele cu puncte (editorul nu mai șterge clarificarea fără puncte)', [[CORP_G, CORP_G.replace('  IF NOT public.fn_ofertare_clar_are_puncte(OLD.id) THEN RETURN OLD; END IF;\n', '')]]],
+  ['M15 mutarea permisă când clarificarea n-are (încă) puncte — forma r2, cu cursa (editorul mută C5)', [[CORP_G, CORP_G.replace('IF NEW.licitatie_id IS DISTINCT FROM OLD.licitatie_id THEN', 'IF NEW.licitatie_id IS DISTINCT FROM OLD.licitatie_id AND public.fn_ofertare_clar_are_puncte(OLD.id) THEN')]]],
+  ['M16 mutarea permisă pentru cine trece poarta (ownerul / responsabilul mută)', [[CORP_G, CORP_G.replace('IF NEW.licitatie_id IS DISTINCT FROM OLD.licitatie_id THEN', 'IF NEW.licitatie_id IS DISTINCT FROM OLD.licitatie_id AND NOT coalesce(public.fn_ofertare_clar_puncte_poarta(OLD.id), false) THEN')]]],
 ]
 for (const [nume, inl] of MUTANTI) {
   let ab

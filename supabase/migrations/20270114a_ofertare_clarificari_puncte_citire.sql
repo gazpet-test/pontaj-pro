@@ -9,8 +9,9 @@
 --   (SELECT) = USING (auth.uid() IS NOT NULL) — ORICE cont logat citește punctele; clar_puncte_rw (ALL, deci și SELECT, politicile permisive se
 --   combină cu OR) = fn_are_acces_ofertare() — oricine cu modulul Ofertare le scrie și le citește.
 -- Ce face (trei funcții noi + un trigger pe părinte + două politici schimbate, nimic altceva):
---   1. fn_ofertare_clar_are_puncte(p_clarificare_id) — sql STABLE SECURITY DEFINER: clarificarea are puncte (DEFINER ca să vadă punctele indiferent
---      de RLS-ul apelantului; întoarce doar un boolean). Folosită de garda părintelui.
+--   1. fn_ofertare_clar_are_puncte(p_clarificare_id) — sql VOLATILE SECURITY DEFINER: clarificarea are puncte (DEFINER ca să vadă punctele indiferent
+--      de RLS-ul apelantului; întoarce doar un boolean; VOLATILE ca să citească cu un instantaneu PROASPĂT, după ce triggerul a așteptat lock-ul
+--      rândului — vezi 3). Folosită de garda părintelui la ștergere.
 --   2. fn_ofertare_clar_puncte_poarta(p_clarificare_id) — sql STABLE SECURITY DEFINER, cale sigură: utilizatorul CURENT (auth.uid(), L08: niciodată
 --      un parametru) are acces la modulul Ofertare (fn_are_acces_ofertare(), ca azi) ȘI trece poarta pe cheltuială a licitației clarificării
 --      (fn_ofertare_poate_cheltui(c.licitatie_id, auth.uid()), 20261124a: owner; responsabil 1 / 2 numit de owner / admin Ofertare — aceeași poartă ca
@@ -19,17 +20,22 @@
 --      service_role (politicile o cheamă ca authenticated; UI-ul o întreabă prin RPC înaintea exportului adresei); nimic pentru PUBLIC / anon.
 --   3. fn_ofertare_clar_parinte_puncte_garda() — plpgsql SECURITY INVOKER (ca să deosebească apelantul prin current_user; review Jakarinos r1 P1 #1 / #2):
 --      pe PĂRINTE (ofertare_clarificari), BEFORE UPDATE OF licitatie_id OR DELETE, FOR EACH ROW. Doar pentru apelurile clientului (current_user
---      authenticated / anon) și doar dacă clarificarea ARE puncte: mutarea pe altă licitație e refuzată (punctele și-ar schimba poarta), ștergerea
---      (cascada ar șterge punctele) e permisă doar cui trece poarta punctelor. service_role / postgres / RPC-urile DEFINER trec (nu sunt persoane;
---      porțile lor sunt în edge / RPC). Clarificările FĂRĂ puncte: ca azi (clar_all_upd / clar_all_del, neatinse).
+--      authenticated / anon): (a) mutarea unei clarificări pe altă licitație e refuzată ÎNTOTDEAUNA (cu sau fără puncte — review r2 P1: „fără puncte”
+--      ar fi o cursă cu inserarea concurentă a primului punct, UPDATE-ul lui licitatie_id ia doar NO KEY UPDATE și nu așteaptă KEY SHARE-ul FK-ului;
+--      mutarea nu e flux din aplicație; serverul o poate face); (b) ștergerea unei clarificări CU puncte (cascada ar șterge punctele) e permisă doar
+--      cui trece poarta punctelor; fără puncte, ca azi. Serializarea ștergerii: PostgreSQL blochează rândul (GetTupleForTrigger) ÎNAINTE de a chema
+--      triggerul BEFORE ROW, iar inserarea unui punct ține KEY SHARE pe părinte prin FK → DELETE-ul așteaptă inserarea necomisă, apoi are_puncte
+--      (VOLATILE, instantaneu nou) vede punctul comis și refuză; invers, inserarea punctului așteaptă DELETE-ul necomis și pică pe FK (23503) — nu
+--      rămâne niciun punct orfan și niciunul șters pe la spate. Proba cu două sesiuni: supabase/tests/20270114a_…_concurenta.sh (clonă dispensabilă).
+--      service_role / postgres / RPC-urile DEFINER trec (nu sunt persoane; porțile lor sunt în edge / RPC).
 --   4. CREATE TRIGGER trg_ofertare_clar_parinte_puncte pe public.ofertare_clarificari.
 --   5. ALTER POLICY clar_puncte_sel USING (public.fn_ofertare_clar_puncte_poarta(clarificare_id));
 --   6. ALTER POLICY clar_puncte_rw USING (…aceeași…) WITH CHECK (…aceeași…) — rw e ALL și include SELECT: fără pasul 6 restrângerea de la 5 n-ar
 --      avea efect (OR între politici). Un singur predicat pentru citire și scriere (L19).
 --   Ce poate face, după migrare, un cont cu acces Ofertare care NU e owner / responsabil al licitației: NU citește punctele, NU scrie puncte
---   (INSERT = 42501, UPDATE / DELETE ating 0 rânduri), NU mută și NU șterge o clarificare care are puncte (42501); clarificările fără puncte le
---   editează / șterge ca azi. Owner-ul vede și scrie tot (poarta e adevărată pentru orice licitație). Un responsabil nu poate muta o clarificare cu
---   puncte nici pe licitația lui (mutarea nu e flux din UI; decizie conservatoare).
+--   (INSERT = 42501, UPDATE / DELETE ating 0 rânduri), NU șterge o clarificare care are puncte (42501); clarificările fără puncte le editează / șterge
+--   ca azi. NIMENI din aplicație (nici owner-ul, nici responsabilul) nu mai mută o clarificare pe altă licitație (42501; nu există flux UI pentru asta;
+--   serverul poate). Owner-ul vede și scrie tot restul (poarta e adevărată pentru orice licitație).
 -- Ce NU face: nu creează / nu șterge tabele, politici sau drepturi pe tabele, nu atinge triggerele existente, funcțiile existente (fn_are_acces_ofertare,
 --   fn_ofertare_poate_cheltui, fn_clar_punct_semneaza), politicile părintelui (20270113a), nicio dată; nu dă acces la Ofertare nimănui. Temeiurile de
 --   pe puncte (ofertare_clarificari_temeiuri, politici neatinse) rămân citibile cu modulul; UI-ul le citește prin join cu punctele, deci exportul
@@ -44,9 +50,11 @@
 --   ÎNAINTEA verificărilor de stare (L14). CREATE FUNCTION nu blochează tabele. Nimic altceva blocat.
 -- GĂRZILE DE TIMP: plafonul tranzacției = 5000 ms pus de runner înainte de BEGIN (verificat în $pre$), bugetul de lock 1 s, lock_timeout 100 ms
 --   (lock-urile implicite), garda finală a runnerului (PLAFON_TIMP + LOCK_TINUT). Sub lock nu se numără rânduri (nimic de scanat).
--- Ordinea livrării: migrarea ÎNTÂI, apoi merge-ul UI (exportul adresei cheamă RPC-ul nou: fără migrare refuză fail-closed — „verificare indisponibilă”;
---   UI-ul vechi nu se rupe: primește doar rândurile permise). Independentă de 20270112a (NEAPLICATĂ) și compatibilă cu 20270113a (APLICATĂ 27.11.2026 —
---   proba PGlite rulează cu 20270113a aplicată și fără ea).
+-- Ordinea livrării (review r2 P1 #3): UI-ul ÎNTÂI (merge + Vercel; exportul adresei cheamă RPC-ul nou și, cât migrarea nu e aplicată, refuză
+--   fail-closed — „poarta punctelor nu s-a putut verifica pe server”; punctele rămân vizibile tuturor până la migrare, deci nimic nu lipsește din
+--   nicio adresă exportată de UI-ul vechi), APOI migrarea, cât mai aproape de deploy. Rest declarat: filele deschise cu UI-ul vechi peste momentul
+--   migrării ar exporta fără temeiurile de pe puncte până la reîncărcare (Ctrl+Shift+R după deploy, regula casei); serverul nu poate deosebi acel UI.
+--   Independentă de 20270112a (NEAPLICATĂ) și compatibilă cu 20270113a (APLICATĂ 27.11.2026 — proba PGlite rulează cu 20270113a aplicată și fără ea).
 -- Revenire: supabase/revenire/20270114a_ofertare_clarificari_puncte_citire_ROLLBACK.sql (readuce cele 2 politici EXACT, apoi șterge triggerul și cele
 --   3 funcții; refuză dacă starea nu e cea pusă aici sau dacă altceva depinde de funcții). Revenirea REDESCHIDE citirea punctelor pentru orice cont
 --   logat: doar la cererea explicită a owner-ului.
@@ -238,7 +246,7 @@ END $stare$;
 CREATE FUNCTION public.fn_ofertare_clar_are_puncte(p_clarificare_id bigint)
 RETURNS boolean
 LANGUAGE sql
-STABLE
+VOLATILE
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $fn$
@@ -276,15 +284,13 @@ BEGIN
   IF current_user NOT IN ('authenticated', 'anon') THEN
     IF TG_OP = 'DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
   END IF;
-  IF NOT public.fn_ofertare_clar_are_puncte(OLD.id) THEN
-    IF TG_OP = 'DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
-  END IF;
   IF TG_OP = 'UPDATE' THEN
     IF NEW.licitatie_id IS DISTINCT FROM OLD.licitatie_id THEN
-      RAISE EXCEPTION 'O clarificare cu puncte nu se muta pe alta licitatie (punctele ei si-ar schimba poarta).' USING ERRCODE = '42501';
+      RAISE EXCEPTION 'O clarificare nu se muta pe alta licitatie din aplicatie (punctele ei si-ar schimba poarta).' USING ERRCODE = '42501';
     END IF;
     RETURN NEW;
   END IF;
+  IF NOT public.fn_ofertare_clar_are_puncte(OLD.id) THEN RETURN OLD; END IF;
   IF NOT coalesce(public.fn_ofertare_clar_puncte_poarta(OLD.id), false) THEN
     RAISE EXCEPTION 'Clarificarea are puncte: o sterge doar ownerul sau un responsabil al licitatiei (stergerea ar sterge si punctele).' USING ERRCODE = '42501';
   END IF;
@@ -322,14 +328,14 @@ BEGIN
   -- >>> FUNCTII 20270114a
   IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.oid = to_regprocedure('public.fn_ofertare_clar_are_puncte(bigint)')
                    AND md5(replace(p.prosrc, chr(13), '')) = '2245a58f811059df647d9d7032595637' AND l.lanname = 'sql' AND p.prokind = 'f'
-                   AND p.prosecdef AND p.provolatile = 's' AND NOT p.proretset AND pg_get_function_result(p.oid) = 'boolean'
+                   AND p.prosecdef AND p.provolatile = 'v' AND NOT p.proretset AND pg_get_function_result(p.oid) = 'boolean'
                    AND p.proconfig = ARRAY['search_path=public, pg_temp'] AND pg_get_userbyid(p.proowner) = 'postgres'
                    AND NOT EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a WHERE a.grantee = 0)
                    AND (SELECT string_agg(a.d, ', ' ORDER BY a.d COLLATE "C") FROM (
                           SELECT pg_get_userbyid(e.grantee) || ':' || e.privilege_type || CASE WHEN e.is_grantable THEN '*' ELSE '' END AS d
                             FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) e) a) = 'authenticated:EXECUTE, postgres:EXECUTE, service_role:EXECUTE')
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'fn_ofertare_clar_are_puncte') <> 1 THEN
-    RAISE EXCEPTION '20270114a: postconditie: fn_ofertare_clar_are_puncte(bigint) nu are forma asteptata (corp md5 2245a58f811059df647d9d7032595637, sql STABLE DEFINER, cale, proprietar, drepturi exacte, unica)';
+    RAISE EXCEPTION '20270114a: postconditie: fn_ofertare_clar_are_puncte(bigint) nu are forma asteptata (corp md5 2245a58f811059df647d9d7032595637, sql VOLATILE DEFINER, cale, proprietar, drepturi exacte, unica)';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.oid = to_regprocedure('public.fn_ofertare_clar_puncte_poarta(bigint)')
                    AND md5(replace(p.prosrc, chr(13), '')) = 'abd6b68b5b34a67f777045541aeff04a' AND l.lanname = 'sql' AND p.prokind = 'f'
@@ -343,7 +349,7 @@ BEGIN
     RAISE EXCEPTION '20270114a: postconditie: fn_ofertare_clar_puncte_poarta(bigint) nu are forma asteptata (corp md5 abd6b68b5b34a67f777045541aeff04a, sql STABLE DEFINER, cale, proprietar, drepturi exacte, unica)';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.oid = to_regprocedure('public.fn_ofertare_clar_parinte_puncte_garda()')
-                   AND md5(replace(p.prosrc, chr(13), '')) = '3628b83f2bbd6dbc12d418d443212409' AND l.lanname = 'plpgsql' AND p.prokind = 'f'
+                   AND md5(replace(p.prosrc, chr(13), '')) = 'af05fe431f584442cea2351f4257427f' AND l.lanname = 'plpgsql' AND p.prokind = 'f'
                    AND NOT p.prosecdef AND p.provolatile = 'v' AND NOT p.proretset AND pg_get_function_result(p.oid) = 'trigger'
                    AND p.proconfig = ARRAY['search_path=public, pg_temp'] AND pg_get_userbyid(p.proowner) = 'postgres'
                    AND NOT EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a WHERE a.grantee = 0)
@@ -351,7 +357,7 @@ BEGIN
                           SELECT pg_get_userbyid(e.grantee) || ':' || e.privilege_type || CASE WHEN e.is_grantable THEN '*' ELSE '' END AS d
                             FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) e) a) = 'postgres:EXECUTE')
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'fn_ofertare_clar_parinte_puncte_garda') <> 1 THEN
-    RAISE EXCEPTION '20270114a: postconditie: fn_ofertare_clar_parinte_puncte_garda() nu are forma asteptata (corp md5 3628b83f2bbd6dbc12d418d443212409, plpgsql VOLATILE INVOKER, cale, proprietar, doar proprietarul executa, unica)';
+    RAISE EXCEPTION '20270114a: postconditie: fn_ofertare_clar_parinte_puncte_garda() nu are forma asteptata (corp md5 af05fe431f584442cea2351f4257427f, plpgsql VOLATILE INVOKER, cale, proprietar, doar proprietarul executa, unica)';
   END IF;
   -- <<< FUNCTII 20270114a
   -- triggerul: BEFORE (2) + ROW (1) + DELETE (8) + UPDATE (16) = 27, pe coloana licitatie_id, functia garda, fara conditie WHEN, fara argumente, activ (O)
