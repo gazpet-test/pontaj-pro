@@ -22,7 +22,10 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState, useCallback } fro
 import { useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import ImportExcelModal from './ImportExcelIzometrie.jsx'
-import { generateCentralizatorXlsx, buildCentralizatorFilename } from './exportCentralizatorXlsx.js'
+import { generateCentralizatorXlsx } from './exportCentralizatorXlsx.js'
+import { citesteArhivaNdt, executaExportIzo, descarcaExportIstoric, stergeExportIstoric, esteLivrareSeparata } from './izoExportIzoBd.js'
+import { evalueazaExportIzo, grupeazaLipsuri, cereMetode, stareButonExport, coloaneAfisate, METODA_CAMP, diferenteFotografie, numeExportIzo, codDocumentAfisat, MOTIV_DEBLOCARE_MIN } from './lib/izoExportIzo.js'
+import { normalizeazaRandBuletin, stareMetoda } from './lib/izoNdt.js'
 import IzoStocTeava from './IzoStocTeava.jsx'
 import { patchDinRegistru, indexFolosite, sugestiiRegistru, citesteTot, paznicCereri, reimprospateaza, salveazaAlegereRegistru, dezleagaDinRegistru } from './lib/izoRegistru.js'
 import { planMutare, ordineDinRanduri, lipsaRpcMutare, stareMutareDinSonda, mesajEroareMutare } from './izoMutaPozitie.js'
@@ -247,6 +250,7 @@ export default function IzometriePage({ initialProiectId } = {}) {
           onSuccess={(msg) => show(msg, 'success')}
           onWarn={(msg) => show(msg, 'warn')}
           onPachetChanged={() => loadPachete()}
+          onDeschideBuletine={() => { closePachet(); setVedere('ndt') }}
         />
       </div>
     )
@@ -609,7 +613,7 @@ const TIP_RAND_COLORS = {
 // Câmpuri care pot avea cap-la-cap navigation (pentru Tab/Enter)
 const NAV_FIELDS = ['lot','serie_unica','tip','dimensiune','sarja','lungime_m','sudura_cod','pm_cod','pa_ut_cod','ut_cod','observatii']
 
-function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSuccess, onWarn, onPachetChanged }) {
+function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSuccess, onWarn, onPachetChanged, onDeschideBuletine }) {
   const [pachet, setPachet] = useState(null)
   const [tevi, setTevi] = useState([])
   const [tronson, setTronson] = useState(null)
@@ -661,6 +665,24 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
 
   useEffect(() => { loadAll() }, [pachetId]) // eslint-disable-line
   useEffect(() => { loadRegistru() }, [pachet?.id, pachet?.tronson_id, proiectPachet, fluxMontaj]) // eslint-disable-line
+
+  // ───────── PR3 „Export IZO înainte de lansare”: arhiva de buletine NDT a tronsonului ─────────
+  // Pentru coloanele PM / PA-UT / UT din editor și badge-ul „export depășit” (R6). Fereastra de export își citește
+  // propria fotografie la deschidere (verificarea și generarea folosesc aceeași citire).
+  const [arhivaNdt, setArhivaNdt] = useState(null)   // null = se citește; { ok:false, eroare } = eroare (nu „gol”)
+  const [reloadNdt, setReloadNdt] = useState(0)
+  const cerereNdt = useRef(0)
+  const [evidentiat, setEvidentiat] = useState(null)  // rândul la care s-a sărit din lista lipsurilor
+  const [arataDepasit, setArataDepasit] = useState(false)
+  useEffect(() => {
+    const cheie = ++cerereNdt.current
+    setArhivaNdt(null)
+    const id = pachet?.id
+    if (!id || !pachet?.tronson_id || !proiectPachet) return
+    citesteArhivaNdt(supabase, { proiectId: proiectPachet, tronsonId: pachet.tronson_id, pachetId: id, kmStart: pachet.km_start_m })
+      .then(a => { if (cheie === cerereNdt.current && pachetIdRef.current === id) setArhivaNdt(a) },
+        e => { if (cheie === cerereNdt.current && pachetIdRef.current === id) setArhivaNdt({ ok: false, eroare: e?.message || String(e) }) })
+  }, [pachet?.id, pachet?.tronson_id, pachet?.km_start_m, proiectPachet, reloadNdt]) // eslint-disable-line
 
   async function loadRegistru() {
     const cheie = ++cerereRegistru.current
@@ -814,6 +836,51 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
     })
   }, [tevi, pachet])
 
+  // ───────── Arhiva NDT → evaluarea curentă, coloanele pe rând, „export depășit” ─────────
+  const evaluareNdt = useMemo(() => (arhivaNdt && pachet ? evalueazaExportIzo({ pachet, tronson, tevi, arhiva: arhivaNdt }) : null),
+    [arhivaNdt, pachet, tronson, tevi])
+  // pe rând: valorile PM / PA-UT / UT (din arhivă sau textul vechi) + starea fiecărei metode, pentru culoare și link la PDF
+  const ndtPeRand = useMemo(() => {
+    const stare = evaluareNdt?.stare
+    if (!stare) return {}
+    const oblig = Array.isArray(arhivaNdt?.metode) ? new Set(arhivaNdt.metode) : null
+    const elim = new Set((arhivaNdt?.eliminate || []).map(e => normalizeazaRandBuletin(e.cheie, tronson?.cod)).filter(n => n.stare === 'ok').map(n => n.cheie))
+    const out = {}
+    for (const r of tevi) {
+      if (r.tip_rand === 'separator') continue
+      const n = r.sudura_cod ? normalizeazaRandBuletin(r.sudura_cod, tronson?.cod) : null
+      const stari = {}
+      for (const [camp, metoda] of Object.entries(METODA_CAMP)) {
+        const s = n?.stare === 'ok' ? stareMetoda(stare, n.cheie, metoda) : null
+        stari[camp] = s ? { stare: s.stare, pdf: s.valabil?.cale_pdf || null } : null
+      }
+      out[r.id] = { val: coloaneAfisate(r, stare, tronson?.cod), stari, oblig, eliminata: !!(n?.stare === 'ok' && elim.has(n.cheie)) }
+    }
+    return out
+  }, [evaluareNdt, arhivaNdt, tevi, tronson])
+  const depasit = useMemo(() => {
+    if (!arhivaNdt?.ok) return null
+    if (arhivaNdt.eroareUltimExport) return { la: null, dif: ['Ultimul export nu s-a putut citi: nu se poate spune dacă e la zi.'] }
+    if (!arhivaNdt.ultimExport) return null
+    return { la: arhivaNdt.ultimExport.creat_la, dif: diferenteFotografie(arhivaNdt.ultimExport.fotografie, evaluareNdt?.fotografie) }
+  }, [arhivaNdt, evaluareNdt])
+
+  async function deschidePdfBuletin(cale) {
+    const { data, error } = await supabase.storage.from('izo-ndt').createSignedUrl(cale, 60)
+    if (error || !data?.signedUrl) { onError('PDF-ul buletinului nu s-a putut deschide: ' + (error?.message || 'fără link')); return }
+    window.open(data.signedUrl, '_blank', 'noopener')
+  }
+
+  // salt la rândul unei lipse (rand = poz_in_pachet)
+  function saltLaRand(poz) {
+    const r = tevi.find(t => t.poz_in_pachet === poz)
+    if (!r) return
+    setShowExport(false)
+    setEvidentiat(r.id)
+    setTimeout(() => document.querySelector(`[data-izo-rand="${r.id}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 60)
+    setTimeout(() => setEvidentiat(x => (x === r.id ? null : x)), 8000)
+  }
+
   // ───────── Refetch pachet (după save țeavă, trigger recalculează totaluri) ─────────
   async function refetchPachet() {
     await reimprospateaza(pachetIdRef, paznicPachet,
@@ -940,6 +1007,8 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
     if (fluxMontaj === null) return
     if (fluxMontaj && (field !== 'serie_unica' || !['teava', 'curba'].includes(row.tip_rand))) return
     if (!EDITABLE_FIELDS[row.tip_rand]?.has(field)) return
+    // PM / PA-UT / UT luate din arhiva de buletine nu se editează aici (corectura = anularea buletinului, R5)
+    if (METODA_CAMP[field] && ndtPeRand[rowId]?.val?.sursa?.[field] === 'arhiva') return
     setEditingCell({ rowId, field })
     setDraft(row[field] != null ? String(row[field]) : '')
   }
@@ -1207,66 +1276,44 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
     onSuccess('Rândul a fost mutat la început')
   }
 
-  // ───────── Export Centralizator Transgaz (Sub-faza E) ─────────
-  // Genereaza XLSX cu xlsx-js-style → upload Storage + INSERT log + download local
-  async function handleExportCentralizator() {
-    if (!pachet || !tevi.length) return
-    if (exporting) return
-
+  // ───────── „Export IZO înainte de lansare” (PR3, BULETINE_NDT_SPEC §7–§8, R6) ─────────
+  // Primește fotografia citită de fereastră la deschidere (aceeași citire pentru verificare și generare) + copia pachetului
+  // din acel moment. ZIP (Excel + PDF-urile buletinelor) → Storage → fn_sud_export_inregistreaza → istoric → descărcare.
+  // Nimic nu se descarcă local fără înregistrare (exportul incomplet consumă deblocarea MP-ului doar la înregistrare).
+  async function handleExportIzo({ evaluare, arhiva, pachet: p, tronson: tr, tevi: tv, incomplet, motiv }) {
+    if (exporting) return { ok: false, eroare: 'Un export e deja în curs.' }
+    const idLaStart = p.id
     setExporting(true)
     try {
-      // 1. Load proiect (avem pachet+tronson+tevi deja in scope)
       const { data: proiect, error: errProiect } = await supabase
-        .from('executie_proiecte').select('*').eq('id', pachet.proiect_id).single()
-      if (errProiect) { onError('Eroare load proiect: ' + errProiect.message); return }
-
-      // 2. Generez bytes XLSX
-      const bytes = await generateCentralizatorXlsx({ pachet, tronson, proiect, tevi })
-      const filename = buildCentralizatorFilename(pachet)
-      const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
-
-      // 3. Upload in Storage bucket executie-pachete-pdf
-      const ts = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
-      const uniq = Math.random().toString(36).slice(2, 10)
-      const storagePath = `${pachet.id}/${ts}_${uniq}_${filename}`
-      const { error: errUp } = await supabase.storage
-        .from('executie-pachete-pdf')
-        .upload(storagePath, blob, { contentType: blob.type, upsert: false })
-
-      if (errUp) {
-        // Daca upload esueaza, totusi descarcam local (utilizatorul vede output)
-        onWarn('Storage upload esuat (' + errUp.message + '). Descarc local.')
-      } else {
-        // 4. INSERT log in executie_pachete_documente
-        const { data: { user } } = await supabase.auth.getUser()
-        const { error: errInsDoc } = await supabase.from('executie_pachete_documente').insert({
-          pachet_id: pachet.id,
-          tip_document: 'centralizator',
-          fisier_path: storagePath,
-          fisier_nume: filename,
-          fisier_size_bytes: bytes.length,
-          mime_type: blob.type,
-          observatii: `Export V2 (sheet 1 pixel-perfect + sheet 2 schema vizuala)`,
-          uploadat_de: user?.id || null,
-        })
-        if (errInsDoc) onWarn('Log audit esuat (' + errInsDoc.message + ')')
-        await loadExportHistory()
+        .from('executie_proiecte').select('*').eq('id', p.proiect_id).single()
+      if (errProiect) return { ok: false, eroare: 'Eroare load proiect: ' + errProiect.message }
+      const rez = await executaExportIzo(supabase, { pachet: p, tronson: tr, proiect, tevi: tv, evaluare, arhiva, incomplet, motiv, genereazaXlsx: generateCentralizatorXlsx })
+      if (!rez.ok) {
+        // pachetul s-a schimbat în BD: editorul se reîncarcă ÎNAINTE ca „Redeschide verificarea” să-i copieze starea
+        if (rez.surseSchimbate && pachetIdRef.current === idLaStart) await Promise.all([refetchPachet(), refetchTevi()])
+        return rez
       }
-
-      // 5. Download local (descarcare directa)
-      const url = URL.createObjectURL(blob)
+      // descărcare locală (exportul e deja înregistrat)
+      const url = URL.createObjectURL(new Blob([rez.bytes], { type: 'application/zip' }))
       const a = document.createElement('a')
       a.href = url
-      a.download = filename
+      a.download = rez.nume
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
-
-      onSuccess(`✓ ${filename} (${(bytes.length / 1024).toFixed(1)} KB)`)
-      setShowExport(false)
+      if (rez.avertisment) onWarn(rez.avertisment)
+      if (rez.separat) onWarn(`Arhiva are ${(rez.bytes.length / 1024 / 1024).toFixed(1)} MB, peste limita de 50 MB a serverului: pe server s-au salvat separat Excel-ul și cele ${rez.plan.length} PDF-uri; arhiva completă s-a descărcat pe calculator.`)
+      onSuccess(`✓ ${rez.nume} (${(rez.bytes.length / 1024).toFixed(1)} KB · ${rez.plan.length} buletine)`)
+      if (pachetIdRef.current === idLaStart) {   // L24: alt pachet deschis între timp → nu-i ating starea
+        setShowExport(false)
+        setReloadNdt(x => x + 1)
+        loadExportHistory()
+      }
+      return rez
     } catch (e) {
-      onError('Eroare generare XLSX: ' + (e.message || String(e)))
+      return { ok: false, eroare: 'Eroare export: ' + (e.message || String(e)) }
     } finally {
       setExporting(false)
     }
@@ -1298,28 +1345,28 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
 
   useEffect(() => { loadExportHistory(); loadAprobariHistory() }, [loadExportHistory, loadAprobariHistory])
 
-  // Download fisier istoric (signed URL) - reutilizat pentru ambele tipuri
+  // Download fisier istoric - reutilizat pentru ambele tipuri. Un fișier → signed URL; exportul livrat separat
+  // (> 50 MB) → toate fișierele lui (lista din sud_exporturi), puse în ZIP pe calculator.
   async function downloadHistory(doc) {
-    const { data, error } = await supabase.storage
-      .from('executie-pachete-pdf')
-      .createSignedUrl(doc.fisier_path, 60)
-    if (error) { onError('Eroare signed URL: ' + error.message); return }
-    window.open(data.signedUrl, '_blank')
+    const r = await descarcaExportIstoric(supabase, doc)
+    if (!r.ok) { onError(r.eroare); return }
+    if (r.url) { window.open(r.url, '_blank'); return }
+    const url = URL.createObjectURL(new Blob([r.bytes], { type: 'application/zip' }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = r.nume
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    onSuccess(`✓ ${r.nume} (${r.numar} fișiere de pe server, puse într-o arhivă)`)
   }
 
+  // Ștergere din istoric: TOATE fișierele exportului din Storage, verificat, apoi rândul; ce rămâne = mesaj, rândul stă.
   async function deleteHistory(doc) {
-    // 1. Șterg fișierul din Storage (best-effort, nu blochez dacă lipsește)
-    const { error: errStorage } = await supabase.storage
-      .from('executie-pachete-pdf')
-      .remove([doc.fisier_path])
-    if (errStorage) console.warn('Storage delete:', errStorage.message)
-    // 2. Șterg înregistrarea din BD
-    const { error: errDb } = await supabase
-      .from('executie_pachete_documente')
-      .delete()
-      .eq('id', doc.id)
-    if (errDb) { onError('Eroare ștergere: ' + errDb.message); return }
-    onSuccess(`Șters: ${doc.fisier_nume}`)
+    const r = await stergeExportIstoric(supabase, doc)
+    if (!r.ok) onError('Ștergere: ' + r.eroare)
+    else onSuccess(`Șters: ${doc.fisier_nume}${r.numar > 1 ? ` (+ ${r.numar - 1} PDF-uri din același export)` : ''}`)
     await loadExportHistory()
   }
 
@@ -1511,7 +1558,26 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
               {pachet.respins_la && (
                 <span style={{...S.badge, background: G.red+'22', color: G.red}}>Respins</span>
               )}
+              {/* R6: ultimul export IZO față de starea curentă a surselor */}
+              {depasit && depasit.dif.length > 0 && (
+                <span onClick={() => setArataDepasit(v => !v)} title="Click pentru lista diferențelor"
+                  style={{...S.badge, background: G.orange+'22', color: G.orange, fontSize: 12, padding: '3px 10px', cursor:'pointer'}}>
+                  ⚠ export depășit — sursele s-au schimbat{depasit.la ? ` după ${fmtDate(depasit.la.slice(0, 10))}` : ''} ({depasit.dif.length})
+                </span>
+              )}
+              {depasit && depasit.dif.length === 0 && (
+                <span style={{...S.badge, background: G.green+'14', color: G.green, fontSize: 11}}>
+                  export IZO la zi · {fmtDate(depasit.la?.slice(0, 10))}
+                </span>
+              )}
             </div>
+            {arataDepasit && depasit && depasit.dif.length > 0 && (
+              <div style={{ fontSize: 12, color: G.orange, margin: '4px 0 8px', padding: '8px 12px', background: G.orange+'11', border: `1px solid ${G.orange}44`, borderRadius: 6, maxHeight: 160, overflowY: 'auto' }}>
+                {depasit.dif.slice(0, 40).map((d, i) => <div key={i}>• {d}</div>)}
+                {depasit.dif.length > 40 && <div>… încă {depasit.dif.length - 40}</div>}
+                <div style={{ color: G.muted, marginTop: 4 }}>Exportul vechi rămâne în istoric; un export nou face versiunea curentă.</div>
+              </div>
+            )}
             <div style={{ fontSize: 12, color: G.muted }}>
               Tronson <span style={{ color: G.purple, fontWeight: 600 }}>{tronson?.cod || '?'}</span>
               {' · '}KM start: <span style={{ fontFamily:'monospace' }}>{fmtKm(pachet.km_start_m)}</span>
@@ -1523,6 +1589,11 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
             {pachet.observatii && (
               <div style={{ fontSize: 12, color: G.muted, marginTop: 8, fontStyle:'italic' }}>
                 ℹ {pachet.observatii}
+              </div>
+            )}
+            {arhivaNdt && arhivaNdt.ok === false && (
+              <div style={{ fontSize: 12, color: G.red, marginTop: 6 }}>
+                Buletine NDT: {arhivaNdt.eroare}. Coloanele PM / PA-UT / UT arată textul din rânduri.
               </div>
             )}
           </div>
@@ -1588,9 +1659,9 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
             opacity: exporting ? 0.6 : (tevi.length ? 1 : 0.5),
             cursor: (!tevi.length || exporting) ? 'not-allowed' : 'pointer',
           }}
-          title={tevi.length ? 'Generează Centralizator XLSX pentru Transgaz' : 'Adaugă țevi în pachet întâi'}
+          title={tevi.length ? 'Verifică pachetul și generează arhiva pentru Transgaz (Excel + buletinele NDT)' : 'Adaugă țevi în pachet întâi'}
         >
-          {exporting ? '⏳ Generez...' : '📤 Export Transgaz'}
+          {exporting ? '⏳ Generez...' : '📤 Export IZO înainte de lansare'}
         </button>
         <button
           onClick={() => setShowAprobat(true)}
@@ -1686,6 +1757,9 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
                     folosite={folosite}
                     tronsonCod={tronson?.cod}
                     onPick={(b) => alegeDinRegistru(row.id, b)}
+                    ndt={ndtPeRand[row.id] || null}
+                    onDeschidePdf={deschidePdfBuletin}
+                    evidentiat={evidentiat === row.id}
                   />
                 ))}
               </tbody>
@@ -1726,18 +1800,20 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
         />
       )}
 
-      {/* MODAL: Export Centralizator Transgaz */}
+      {/* MODAL: Export IZO înainte de lansare (verificare + deblocare + ZIP) */}
       {showExport && (
-        <ExportCentralizatorModal
+        <ExportIzoModal
           pachet={pachet}
           tronson={tronson}
           tevi={tevi}
           exporting={exporting}
           history={exportHistory}
-          onConfirm={handleExportCentralizator}
+          onConfirm={handleExportIzo}
           onClose={() => setShowExport(false)}
           onDownloadHistory={downloadHistory}
           onDeleteHistory={deleteHistory}
+          onSalt={saltLaRand}
+          onDeschideBuletine={onDeschideBuletine}
         />
       )}
 
@@ -1762,11 +1838,58 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
 // EXPORT CENTRALIZATOR MODAL — confirmare + istoric versiuni
 // ===========================================================================
 
-function ExportCentralizatorModal({ pachet, tronson, tevi, exporting, history, onConfirm, onClose, onDownloadHistory, onDeleteHistory }) {
-  const teviCount = tevi.length
-  const totalLungime = tevi.reduce((s, t) => s + Number(t.lungime_m || 0), 0)
-  const pendingSant = tevi.filter(t => t.sudura_sant_pending).length
-  const filename = `${pachet.cod_document_full}${pachet.revizie > 0 ? `_rev${pachet.revizie}` : '_rev0'}_Centralizator.xlsx`
+// Etichetele codurilor de lipsă (doar afișare; regulile sunt în src/lib/izoNdt.js verificaExport)
+const ETICHETE_LIPSURI = {
+  randuri_lipsa: 'Rândurile pachetului necitite', setare_metode_lipsa: 'Metodele obligatorii nesetate pe proiect',
+  stare_buletine_lipsa: 'Arhiva de buletine necitită', tronson_lipsa: 'Tronson necunoscut', eliminate_lipsa: 'Sudurile eliminate necitite',
+  eliminata_invalida: 'Sudură eliminată cu cod invalid', km_start_lipsa: 'Km start lipsă', serie_dublata: 'Serie dublată',
+  sudura_dublata: 'Sudură dublată', element_incomplet: 'Țeavă / curbă incompletă', sudura_cod_nerecunoscut: 'Cod de sudură nerecunoscut',
+  buletin_lipsa: 'Sudură fără buletin la o metodă obligatorie', respins_fara_refacere: 'Respinsă, fără refacere acceptată',
+  buletin_conflict: 'Buletine în conflict', buletin_fara_pdf: 'Buletin fără PDF', sudura_in_sant: 'Sudură „în șanț”',
+  metoda_neobligatorie_lipsa: 'Metodă neobligatorie lipsă', sudura_eliminata: 'Sudură eliminată prin tăiere', gol_km: 'Gol de km față de pachetul anterior',
+  km_anterior_necunoscut: 'Pachetul anterior fără km / lungime', km_anterior_necitit: 'Pachetul anterior necitit',
+  pachet_fara_suduri: 'Pachet fără suduri', randuri_buletin_nepotrivite: 'Rânduri de buletin nepotrivite', buletin_fara_randuri: 'Buletin confirmat fără rânduri',
+}
+const CULOARE_GRUPA = { blocaj: G.red, deblocabil: G.orange, avertisment: G.yellow }
+
+function ExportIzoModal({ pachet, tronson, tevi, exporting, history, onConfirm, onClose, onDownloadHistory, onDeleteHistory, onSalt, onDeschideBuletine }) {
+  // R6: verificarea și generarea folosesc ACEEAȘI citire — copia pachetului și fotografia surselor din momentul deschiderii
+  const copie = () => ({ pachet: { ...pachet }, tronson: tronson ? { ...tronson } : tronson, tevi: tevi.map(t => ({ ...t })) })
+  const [inghetat, setInghetat] = useState(copie)
+  const [arhiva, setArhiva] = useState(null)       // null = se citește
+  const [citire, setCitire] = useState(0)
+  const [bifa, setBifa] = useState(false)
+  const [motiv, setMotiv] = useState('')
+  const [eroare, setEroare] = useState(null)       // { text, surseSchimbate }
+  const cerere = useRef(0)
+  useEffect(() => {
+    const cheie = ++cerere.current
+    let viu = true
+    setArhiva(null)
+    const p = inghetat.pachet
+    citesteArhivaNdt(supabase, { proiectId: p.proiect_id ?? inghetat.tronson?.proiect_id, tronsonId: p.tronson_id, pachetId: p.id, kmStart: p.km_start_m })
+      .then(a => { if (viu && cheie === cerere.current) setArhiva(a) },
+        e => { if (viu && cheie === cerere.current) setArhiva({ ok: false, eroare: e?.message || String(e), drept: {} }) })
+    return () => { viu = false }
+  }, [citire]) // eslint-disable-line
+  function reincarca() { setEroare(null); setBifa(false); setInghetat(copie()); setCitire(x => x + 1) }
+
+  const evaluare = useMemo(() => (arhiva ? evalueazaExportIzo({ pachet: inghetat.pachet, tronson: inghetat.tronson, tevi: inghetat.tevi, arhiva }) : null), [arhiva, inghetat])
+  const grupe = useMemo(() => grupeazaLipsuri(evaluare?.verificare), [evaluare])
+  const buton = stareButonExport({ evaluare, drept: arhiva?.drept || {}, bifa, motiv })
+  const v = evaluare?.verificare
+  const deblocabile = v && !v.blocaje.length && v.blocajeDeblocabile.length > 0
+  const tv = inghetat.tevi
+  const teviCount = tv.length
+  const totalLungime = tv.reduce((s, t) => s + Number(t.lungime_m || 0), 0)
+  const pendingSant = tv.filter(t => t.sudura_sant_pending).length
+  const filename = numeExportIzo(inghetat.pachet, { incomplet: buton.incomplet })
+
+  async function confirma() {
+    setEroare(null)
+    const r = await onConfirm({ evaluare, arhiva, ...inghetat, incomplet: buton.incomplet, motiv })
+    if (r && !r.ok) setEroare({ text: r.eroare, surseSchimbate: !!r.surseSchimbate })
+  }
 
   return (
     <div style={{
@@ -1775,24 +1898,24 @@ function ExportCentralizatorModal({ pachet, tronson, tevi, exporting, history, o
     }}>
       <div style={{
         background: G.surface, borderRadius:12, border:`1px solid ${G.border}`,
-        width:'100%', maxWidth:640, maxHeight:'90vh', overflowY:'auto',
+        width:'100%', maxWidth:760, maxHeight:'90vh', overflowY:'auto',
       }}>
         {/* HEADER */}
         <div style={{ padding:'18px 24px', borderBottom:`1px solid ${G.border}`, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
           <div>
-            <div style={{ fontSize:17, fontWeight:700, color:G.green }}>📤 Export Centralizator Transgaz</div>
+            <div style={{ fontSize:17, fontWeight:700, color:G.green }}>📤 Export IZO înainte de lansare</div>
             <div style={{ fontSize:12, color:G.muted, marginTop:4, fontFamily:'monospace' }}>
-              {pachet.cod_document_full}{pachet.revizie > 0 ? ` rev.${pachet.revizie}` : ''} · Tronson {tronson?.cod}
+              {codDocumentAfisat(inghetat.pachet)} · Tronson {inghetat.tronson?.cod}
             </div>
           </div>
-          <button onClick={onClose} style={{ ...S.btnS, padding:'6px 10px' }}>✕</button>
+          <button onClick={onClose} disabled={exporting} style={{ ...S.btnS, padding:'6px 10px' }}>✕</button>
         </div>
 
         {/* CONFIRM ZONE */}
         <div style={{ padding:'18px 24px' }}>
           <div style={{ background:G.bg, border:`1px solid ${G.border}`, borderRadius:8, padding:14, marginBottom:14 }}>
             <div style={{ fontSize:13, fontWeight:600, marginBottom:8 }}>Conținut export:</div>
-            <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:10, fontSize:12 }}>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:10, fontSize:12 }}>
               <div>
                 <div style={{ color:G.muted }}>Rânduri totale</div>
                 <div style={{ fontWeight:700, fontSize:16 }}>{teviCount}</div>
@@ -1805,14 +1928,100 @@ function ExportCentralizatorModal({ pachet, tronson, tevi, exporting, history, o
                 <div style={{ color:G.muted }}>Pending șanț</div>
                 <div style={{ fontWeight:700, fontSize:16, color: pendingSant > 0 ? G.orange : G.text }}>{pendingSant}</div>
               </div>
+              <div>
+                <div style={{ color:G.muted }}>Buletine confirmate (tronson)</div>
+                <div style={{ fontWeight:700, fontSize:16 }}>{evaluare?.info ? evaluare.info.nrBuletine : '—'}</div>
+              </div>
             </div>
             <div style={{ marginTop:10, paddingTop:10, borderTop:`1px solid ${G.border2}`, fontSize:12 }}>
-              <div><span style={{ color:G.muted }}>Fișier:</span> <span style={{ fontFamily:'monospace', color:G.green }}>{filename}</span></div>
+              <div><span style={{ color:G.muted }}>Fișier:</span> <span style={{ fontFamily:'monospace', color: buton.incomplet ? G.orange : G.green }}>{filename}</span></div>
               <div style={{ marginTop:4 }}>
-                <span style={{ color:G.muted }}>Conține:</span> Sheet 1 CENTRALIZATOR pixel-perfect + Sheet 2 IZOMETRIE cu schema vizuală (blocuri 6-col/țeavă) + lookup table.
+                <span style={{ color:G.muted }}>Conține:</span> Excel (CENTRALIZATOR, IZOMETRIE cu țevi și curbe, BULETINE) + PDF-ul fiecărui buletin folosit de sudurile pachetului.
               </div>
             </div>
           </div>
+
+          {/* VERIFICAREA ÎNAINTE DE EXPORT (§8) */}
+          {!arhiva && <div style={{ fontSize:13, color:G.muted, marginBottom:14 }}>⏳ Citesc buletinele, sudurile eliminate și metodele obligatorii…</div>}
+          {arhiva && arhiva.ok === false && (
+            <div style={{ background:G.red+'14', border:`1px solid ${G.red}55`, borderRadius:8, padding:12, marginBottom:14, fontSize:12, color:G.red }}>
+              Arhiva de buletine nu s-a putut citi: {arhiva.eroare}. Exportul e blocat.
+              <button onClick={reincarca} style={{ ...S.btnS, marginLeft:10, padding:'3px 10px', fontSize:11 }}>↻ Reîncearcă</button>
+            </div>
+          )}
+          {v && cereMetode(v) && (
+            <div style={{ background:G.orange+'14', border:`1px solid ${G.orange}55`, borderRadius:8, padding:12, marginBottom:14, fontSize:13, color:G.orange }}>
+              Setează metodele obligatorii ale proiectului (Buletine NDT) înainte de export. Fără ele verificarea nu are sens, iar ERP-ul nu presupune nicio valoare.
+              {onDeschideBuletine && (
+                <button onClick={onDeschideBuletine} disabled={exporting} style={{ ...S.btnS, marginLeft:10, padding:'4px 12px', fontSize:12, borderColor:G.orange, color:G.orange }}>
+                  🧪 Deschide Buletine NDT
+                </button>
+              )}
+            </div>
+          )}
+          {v && grupe.every(g => !g.total) && (
+            <div style={{ fontSize:13, color:G.green, marginBottom:14 }}>✓ Nicio lipsă: exportul e complet.</div>
+          )}
+          {v && grupe.filter(g => g.total).map(g => (
+            <div key={g.tip} style={{ border:`1px solid ${CULOARE_GRUPA[g.tip]}55`, borderRadius:8, marginBottom:10, overflow:'hidden' }}>
+              <div style={{ padding:'8px 12px', background: CULOARE_GRUPA[g.tip] + '18', color: CULOARE_GRUPA[g.tip], fontSize:13, fontWeight:700 }}>
+                {g.titlu} — {g.total}
+              </div>
+              <div style={{ padding:'6px 12px', maxHeight:220, overflowY:'auto', fontSize:12 }}>
+                {g.coduri.map(c => (
+                  <details key={c.cod} open={g.tip !== 'avertisment' && c.elemente.length <= 12} style={{ marginBottom:4 }}>
+                    <summary style={{ cursor:'pointer', color:G.text }}>{ETICHETE_LIPSURI[c.cod] || c.cod} ({c.elemente.length})</summary>
+                    <div style={{ padding:'4px 0 4px 14px' }}>
+                      {c.elemente.slice(0, 300).map((x, i) => (
+                        <div key={i} style={{ color:G.muted, padding:'1px 0' }}>
+                          {x.rand != null && (
+                            <button onClick={() => onSalt(x.rand)} title="Salt la rândul din tabel"
+                              style={{ ...S.btnS, padding:'0 6px', fontSize:11, marginRight:6, fontFamily:'monospace' }}>#{x.rand}</button>
+                          )}
+                          {x.mesaj}
+                        </div>
+                      ))}
+                      {c.elemente.length > 300 && <div style={{ color:G.dim }}>… încă {c.elemente.length - 300}</div>}
+                    </div>
+                  </details>
+                ))}
+              </div>
+            </div>
+          ))}
+
+          {/* DEBLOCAREA (D11, §8, §24): doar MP / owner, bifă explicită + motiv */}
+          {deblocabile && (
+            arhiva?.drept?.scriere === true ? (
+              <div style={{ background:G.orange+'11', border:`1px solid ${G.orange}55`, borderRadius:8, padding:12, marginBottom:14, fontSize:12 }}>
+                <label style={{ display:'flex', alignItems:'center', gap:8, fontWeight:700, color:G.orange, cursor:'pointer' }}>
+                  <input type="checkbox" checked={bifa} onChange={e => setBifa(e.target.checked)} disabled={exporting} />
+                  Export cu documente lipsă
+                </label>
+                <div style={{ color:G.muted, margin:'6px 0' }}>
+                  Arhiva va purta „INCOMPLET” în nume, iar foaia BULETINE va lista cele {v.blocajeDeblocabile.length} lipsuri.
+                  Se înregistrează cine a deblocat, când, motivul și lista lipsurilor; deblocarea e valabilă o oră, pentru un singur export.
+                </div>
+                {bifa && (
+                  <textarea value={motiv} onChange={e => setMotiv(e.target.value)} disabled={exporting} rows={2}
+                    placeholder={`Motivul deblocării (minim ${MOTIV_DEBLOCARE_MIN} caractere)`}
+                    style={{ ...S.input, width:'100%', fontSize:12, resize:'vertical' }} />
+                )}
+              </div>
+            ) : (
+              <div style={{ fontSize:12, color:G.orange, marginBottom:14 }}>
+                Lipsesc documente. Doar managerul de proiect (sau owner-ul) poate debloca exportul{arhiva?.drept?.scriere == null ? ' (dreptul nu s-a putut verifica)' : ''}.
+              </div>
+            )
+          )}
+
+          {eroare && (
+            <div style={{ background:G.red+'14', border:`1px solid ${G.red}55`, borderRadius:8, padding:12, marginBottom:14, fontSize:12, color:G.red }}>
+              {eroare.text}
+              {eroare.surseSchimbate && (
+                <button onClick={reincarca} disabled={exporting} style={{ ...S.btnS, marginLeft:10, padding:'3px 10px', fontSize:11 }}>↻ Redeschide verificarea</button>
+              )}
+            </div>
+          )}
 
           {/* ISTORIC EXPORTURI */}
           {history && history.length > 0 && (
@@ -1832,6 +2041,7 @@ function ExportCentralizatorModal({ pachet, tronson, tevi, exporting, history, o
                       </div>
                       <div style={{ fontSize:10, color:G.muted, marginTop:2 }}>
                         {doc.tip_document} · {fmtDate(doc.uploadat_la?.slice(0, 10))} · {(doc.fisier_size_bytes / 1024).toFixed(1)} KB
+                        {esteLivrareSeparata(doc) && ' · + PDF-urile în fișiere separate (Descarcă le pune într-o arhivă)'}
                       </div>
                     </div>
                     <div style={{ display:'flex', gap:6, alignItems:'center' }}>
@@ -1843,7 +2053,10 @@ function ExportCentralizatorModal({ pachet, tronson, tevi, exporting, history, o
                       </button>
                       <button
                         onClick={() => {
-                          if (window.confirm(`Șterge definitiv "${doc.fisier_nume}"?\n\nFișierul va fi eliminat din Storage și din istoric.`)) {
+                          const ce = esteLivrareSeparata(doc)
+                            ? 'Excel-ul și toate PDF-urile acestui export (livrat în fișiere separate) vor fi eliminate din Storage, apoi rândul din istoric.'
+                            : 'Fișierul va fi eliminat din Storage și din istoric.'
+                          if (window.confirm(`Șterge definitiv "${doc.fisier_nume}"?\n\n${ce}`)) {
                             onDeleteHistory(doc)
                           }
                         }}
@@ -1863,27 +2076,29 @@ function ExportCentralizatorModal({ pachet, tronson, tevi, exporting, history, o
           <div style={{ background:G.purple+'11', border:`1px solid ${G.purple}33`, borderRadius:8, padding:12, fontSize:11, color:G.muted, lineHeight:1.6 }}>
             La generare:
             <ul style={{ margin:'6px 0 0 16px', padding:0 }}>
-              <li>Fișierul XLSX se descarcă automat în browser</li>
-              <li>O copie e salvată în Storage (bucket <code style={{ color:G.purple }}>executie-pachete-pdf</code>)</li>
-              <li>Audit log în <code style={{ color:G.purple }}>executie_pachete_documente</code></li>
+              <li>Se descarcă PDF-urile buletinelor (cu verificarea amprentei) și se face arhiva ZIP</li>
+              <li>Arhiva e salvată în Storage (bucket <code style={{ color:G.purple }}>executie-pachete-pdf</code>) și înregistrată cu fotografia surselor</li>
+              <li>Dacă buletinele s-au schimbat între timp, exportul se oprește și cere redeschiderea verificării</li>
+              <li>Istoric în <code style={{ color:G.purple }}>executie_pachete_documente</code>; arhiva se descarcă la final</li>
             </ul>
           </div>
         </div>
 
         {/* FOOTER */}
-        <div style={{ padding:'14px 24px', borderTop:`1px solid ${G.border}`, display:'flex', justifyContent:'flex-end', gap:8 }}>
-          <button onClick={onClose} style={{...S.btnS, padding:'9px 18px'}}>Anulează</button>
+        <div style={{ padding:'14px 24px', borderTop:`1px solid ${G.border}`, display:'flex', justifyContent:'flex-end', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+          {!buton.activ && buton.motiv && arhiva && <span style={{ fontSize:12, color:G.muted, marginRight:'auto' }}>{buton.motiv}</span>}
+          <button onClick={onClose} disabled={exporting} style={{...S.btnS, padding:'9px 18px'}}>Anulează</button>
           <button
-            onClick={onConfirm}
-            disabled={exporting || !teviCount}
+            onClick={confirma}
+            disabled={exporting || !teviCount || !buton.activ}
             style={{
               ...S.btnP, padding:'9px 20px',
-              background: G.green, color:'#fff',
-              opacity: exporting || !teviCount ? 0.5 : 1,
-              cursor: exporting || !teviCount ? 'not-allowed' : 'pointer',
+              background: buton.incomplet ? G.orange : G.green, color:'#fff',
+              opacity: exporting || !teviCount || !buton.activ ? 0.5 : 1,
+              cursor: exporting || !teviCount || !buton.activ ? 'not-allowed' : 'pointer',
             }}
           >
-            {exporting ? '⏳ Generez...' : '📤 Generează & Descarcă'}
+            {exporting ? '⏳ Generez...' : buton.incomplet ? '📤 Generează INCOMPLET & Descarcă' : '📤 Generează & Descarcă'}
           </button>
         </div>
       </div>
@@ -2123,15 +2338,17 @@ function ButonMutaInceput({ onClick, isFirst, swapping, mutaStare, mare }) {
   )
 }
 
-function EditorRow({ row, isEditing, draft, setDraft, onStartEdit, onCommit, onCancel, onKeyDown, onPaste, validation, onValidate, selected, onToggleSelect, onDelete, onTogglePending, onSwapUp, onSwapDown, onMutaInceput, mutaStare, isFirst, isLast, swapping, dirty, registru, folosite, tronsonCod, onPick }) {
+function EditorRow({ row, isEditing, draft, setDraft, onStartEdit, onCommit, onCancel, onKeyDown, onPaste, validation, onValidate, selected, onToggleSelect, onDelete, onTogglePending, onSwapUp, onSwapDown, onMutaInceput, mutaStare, isFirst, isLast, swapping, dirty, registru, folosite, tronsonCod, onPick, ndt, onDeschidePdf, evidentiat }) {
   const rowBg = row.sudura_sant_pending ? G.yellowDim+'44' :
                 row.pachet_sudura_sant_id ? G.purpleDim+'44' :
                 dirty ? G.yellowDim+'22' : 'transparent'
+  // salt din lista lipsurilor (fereastra de export): rândul rămâne conturat
+  const contur = evidentiat ? { outline: `2px solid ${G.orange}`, outlineOffset: -2 } : null
 
   // Separator → 1 colspan large
   if (row.tip_rand === 'separator') {
     return (
-      <tr style={{ background: G.surface+'66', borderBottom: `1px solid ${G.border2}` }}>
+      <tr data-izo-rand={row.id} style={{ background: G.surface+'66', borderBottom: `1px solid ${G.border2}`, ...contur }}>
         <td style={{...tdStyle, padding:'6px 8px', textAlign:'center'}}>
           <input type="checkbox" checked={selected} onChange={onToggleSelect} />
         </td>
@@ -2196,12 +2413,14 @@ function EditorRow({ row, isEditing, draft, setDraft, onStartEdit, onCommit, onC
   }
 
   return (
-    <tr style={{ background: rowBg, borderBottom: `1px solid ${G.border2}` }}>
+    <tr data-izo-rand={row.id} style={{ background: rowBg, borderBottom: `1px solid ${G.border2}`, ...contur }}>
       {COL_DEFS.map(col => (
         <Cell
           key={col.key}
           row={row}
           col={col}
+          ndt={ndt}
+          onDeschidePdf={onDeschidePdf}
           isEditing={isEditing === col.key}
           draft={draft}
           setDraft={setDraft}
@@ -2237,7 +2456,7 @@ function EditorRow({ row, isEditing, draft, setDraft, onStartEdit, onCommit, onC
 // CELL — celula individuală cu render condițional editare
 // ===========================================================================
 
-function Cell({ row, col, isEditing, draft, setDraft, onStartEdit, onCommit, onCancel, onKeyDown, onPaste, validation, onValidate, selected, onToggleSelect, onDelete, onTogglePending, onSwapUp, onSwapDown, onMutaInceput, mutaStare, isFirst, isLast, swapping, registru, folosite, tronsonCod, onPick }) {
+function Cell({ row, col, isEditing, draft, setDraft, onStartEdit, onCommit, onCancel, onKeyDown, onPaste, validation, onValidate, selected, onToggleSelect, onDelete, onTogglePending, onSwapUp, onSwapDown, onMutaInceput, mutaStare, isFirst, isLast, swapping, registru, folosite, tronsonCod, onPick, ndt, onDeschidePdf }) {
   const vKey = `${row.id}:${col.key}`
   const vState = validation[vKey]
   const allowed = EDITABLE_FIELDS[row.tip_rand]
@@ -2363,8 +2582,30 @@ function Cell({ row, col, isEditing, draft, setDraft, onStartEdit, onCommit, onC
   // Render specific pentru sudură cu R + PM warning
   const isSuduraCell = col.key === 'sudura_cod'
   const showR = isSuduraCell && row.sudura_refacuta
-  const isPMWarning = (col.key === 'pm_cod' || col.key === 'pa_ut_cod') && row.sudura_cod && !row[col.key] && !row.sudura_sant_pending
+  // PM / PA-UT / UT: cu arhiva de buletine citită și metodele setate, culoarea = metodă obligatorie fără buletin acceptat
+  // (textul vechi nu mai ține loc de buletin); altfel regula de până acum (text gol lângă o sudură)
+  const metodaNdt = METODA_CAMP[col.key]
+  const stareNdt = metodaNdt ? ndt?.stari?.[col.key] : null
+  const isPMWarning = metodaNdt && ndt?.oblig
+    ? !!row.sudura_cod && !row.sudura_sant_pending && !ndt.eliminata && ndt.oblig.has(metodaNdt) && stareNdt?.stare !== 'acceptat'
+    : (col.key === 'pm_cod' || col.key === 'pa_ut_cod') && row.sudura_cod && !row[col.key] && !row.sudura_sant_pending
   const isPendingPM = (col.key === 'pm_cod' || col.key === 'pa_ut_cod' || col.key === 'sudura_cod') && row.sudura_sant_pending
+
+  // valoarea din arhivă (buletin confirmat): afișată, cu legătură la PDF, needitabilă aici
+  if (metodaNdt && ndt?.val?.sursa?.[col.key] === 'arhiva') {
+    const rau = stareNdt && stareNdt.stare !== 'acceptat'
+    return (
+      <td style={{ padding:'6px 8px', width: col.width, fontFamily:'monospace', fontSize: 11, whiteSpace:'nowrap',
+        color: rau ? G.red : G.green, background: rau ? G.redDim+'44' : (isPMWarning ? G.yellowDim+'66' : 'transparent') }}
+        title={rau ? `Din arhivă: ultimul rezultat ${metodaNdt} nu e „acceptat” (${stareNdt.stare})` : `Din arhiva de buletine (${metodaNdt}, confirmat)`}>
+        {ndt.val[col.key]}
+        {stareNdt?.pdf && onDeschidePdf && (
+          <button onClick={() => onDeschidePdf(stareNdt.pdf)} title="Deschide PDF-ul buletinului"
+            style={{ background:'transparent', border:'none', cursor:'pointer', padding:'0 0 0 4px', fontSize: 11 }}>📄</button>
+        )}
+      </td>
+    )
+  }
 
   if (isEditing) {
     const borderColor = vState && vState.ok === false ? G.red : G.purple
@@ -2419,7 +2660,7 @@ function Cell({ row, col, isEditing, draft, setDraft, onStartEdit, onCommit, onC
         textAlign: col.align || 'left',
         position:'relative',
       }}
-      title={vState && vState.ok === false ? `⚠ ${vState.msg}` : (isPMWarning ? `${col.label} lipsește deși SUDURA e populat` : '')}
+      title={vState && vState.ok === false ? `⚠ ${vState.msg}` : (isPMWarning ? (metodaNdt && ndt?.oblig ? `Lipsește buletinul ${metodaNdt} acceptat în arhivă (metodă obligatorie)` : `${col.label} lipsește deși SUDURA e populat`) : '')}
     >
       {isPendingPM && !displayValue ? (
         <span style={{ color: G.orange, fontStyle:'italic' }}>pending</span>
