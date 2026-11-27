@@ -23,8 +23,8 @@ nu există arhivă de buletine, iar pe tronsoanele noi sunt goale. Exportul Tran
 | D1 | Codul sudurii | ERP-ul rămâne pe `T12S127`. Codul din buletin se normalizează la citire. |
 | D2 | Suduri refăcute | Se păstrează ambele rânduri: cel respins și refacerea „R” acceptată. |
 | D3 | Unde apar buletinele | În tabel (editor + foaia CENTRALIZATOR), nu în partea desenată a schemei. |
-| D4 | Citirea | AI citește anexa, un al doilea model verifică independent, omul confirmă. |
-| D5 | Modele | Citire: Haiku. Verificare: Sonnet. Schimbabile din setare. |
+| D4 | Citirea | AI citește anexa O SINGURĂ dată, verificările automate (§23) marchează ce e suspect, omul confirmă. A doua citire doar la cerere. |
+| D5 | Modele | Citire: Sonnet (decizia lui Răzvan, 27.11.2026). „Citește din nou” cu alt model doar la cererea MP-ului, pentru scanuri slabe. Schimbabile din setare. |
 | D6 | Tronsonul | Se ia din locul încărcării, nu se alege. |
 | D7 | Firma | Nu se alege și nu se afișează; se păstrează doar ca text citit, informativ (nu intră în cheia de unicitate, R1). |
 | D8 | Export | ZIP cu Excel + PDF-uri, plus foaia „BULETINE” în Excel. |
@@ -279,7 +279,7 @@ funcții care verifică dreptul în corp; tabelele au doar SELECT pentru clienț
 amprenta fișierului le pune serverul, nu clientul.
 
 **R10. Costul AI.** Toate citirile acestui modul (buletine, clasă de locație, pachete de subcontractor) folosesc același plafon
-lunar din `ai_plafon_lunar` (cheie proprie), cu rezervare atomică înainte de apel și decontare după. O citire = Haiku + Sonnet.
+lunar din `ai_plafon_lunar` (cheie proprie), cu rezervare atomică înainte de apel și decontare după. O citire = Sonnet, o dată; a doua citire doar la cererea MP-ului.
 Plafonul se fixează de Răzvan; peste plafon citirea se refuză clar, iar încărcarea manuală (fără AI) rămâne posibilă.
 
 **R11. Împărțirea PR1.** PR1a: buletine, rânduri, metode obligatorii, sudurile eliminate, deblocările și fotografia exporturilor
@@ -309,3 +309,16 @@ marcajul de subcontractor. Coordonatele: sistemul din fișierele livrate (Stereo
   (serverul nu citește conținutul din Storage) și servește doar la prinderea dublurilor; fișierul trebuie să fie în arhiva tronsonului,
   încărcat de același utilizator.
 - Contractul exact (tabele, constrângeri, funcții): migrarea PR1a, `supabase/migrations/20270114a_izometrie_buletine_ndt.sql`.
+
+## 23. Citirea cu AI — o singură citire + verificări automate (decizia lui Răzvan, 27.11.2026)
+
+Înlocuiește pasul 4 din §6 („verificare independentă Sonnet”):
+- Sonnet citește o dată antetul și toate rândurile anexei.
+- Verificări automate, fără cost, afișate pe ecranul de confirmare:
+  1. numărul de rânduri citite față de ultimul nr. crt. / totalul tipărit (unde există);
+  2. sudurile respinse fără pereche „R” acceptată;
+  3. setul de suduri față de buletinul celeilalte metode pe același tronson (PA-UT ↔ PM): diferențele listate;
+  4. coduri care nu există în pachetele tronsonului sau nu se pot normaliza;
+  5. semnalele de citire parțială / pagini necitite.
+- „Citește din nou” (alt model, la cererea MP-ului): a doua citire se compară rând cu rând cu prima (`comparaCitiri`), diferențele se aleg de om.
+- Costul pe buletin ≈ o citire Sonnet; plafonul lunar rămâne (R10).
