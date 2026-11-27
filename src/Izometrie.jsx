@@ -23,7 +23,7 @@ import { useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import ImportExcelModal from './ImportExcelIzometrie.jsx'
 import { generateCentralizatorXlsx } from './exportCentralizatorXlsx.js'
-import { citesteArhivaNdt, executaExportIzo } from './izoExportIzoBd.js'
+import { citesteArhivaNdt, executaExportIzo, descarcaExportIstoric, stergeExportIstoric, esteLivrareSeparata } from './izoExportIzoBd.js'
 import { evalueazaExportIzo, grupeazaLipsuri, cereMetode, stareButonExport, coloaneAfisate, METODA_CAMP, diferenteFotografie, numeExportIzo, codDocumentAfisat, MOTIV_DEBLOCARE_MIN } from './lib/izoExportIzo.js'
 import { normalizeazaRandBuletin, stareMetoda } from './lib/izoNdt.js'
 import IzoStocTeava from './IzoStocTeava.jsx'
@@ -1345,28 +1345,28 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
 
   useEffect(() => { loadExportHistory(); loadAprobariHistory() }, [loadExportHistory, loadAprobariHistory])
 
-  // Download fisier istoric (signed URL) - reutilizat pentru ambele tipuri
+  // Download fisier istoric - reutilizat pentru ambele tipuri. Un fișier → signed URL; exportul livrat separat
+  // (> 50 MB) → toate fișierele lui (lista din sud_exporturi), puse în ZIP pe calculator.
   async function downloadHistory(doc) {
-    const { data, error } = await supabase.storage
-      .from('executie-pachete-pdf')
-      .createSignedUrl(doc.fisier_path, 60)
-    if (error) { onError('Eroare signed URL: ' + error.message); return }
-    window.open(data.signedUrl, '_blank')
+    const r = await descarcaExportIstoric(supabase, doc)
+    if (!r.ok) { onError(r.eroare); return }
+    if (r.url) { window.open(r.url, '_blank'); return }
+    const url = URL.createObjectURL(new Blob([r.bytes], { type: 'application/zip' }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = r.nume
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    onSuccess(`✓ ${r.nume} (${r.numar} fișiere de pe server, puse într-o arhivă)`)
   }
 
+  // Ștergere din istoric: TOATE fișierele exportului din Storage, verificat, apoi rândul; ce rămâne = mesaj, rândul stă.
   async function deleteHistory(doc) {
-    // 1. Șterg fișierul din Storage (best-effort, nu blochez dacă lipsește)
-    const { error: errStorage } = await supabase.storage
-      .from('executie-pachete-pdf')
-      .remove([doc.fisier_path])
-    if (errStorage) console.warn('Storage delete:', errStorage.message)
-    // 2. Șterg înregistrarea din BD
-    const { error: errDb } = await supabase
-      .from('executie_pachete_documente')
-      .delete()
-      .eq('id', doc.id)
-    if (errDb) { onError('Eroare ștergere: ' + errDb.message); return }
-    onSuccess(`Șters: ${doc.fisier_nume}`)
+    const r = await stergeExportIstoric(supabase, doc)
+    if (!r.ok) onError('Ștergere: ' + r.eroare)
+    else onSuccess(`Șters: ${doc.fisier_nume}${r.numar > 1 ? ` (+ ${r.numar - 1} PDF-uri din același export)` : ''}`)
     await loadExportHistory()
   }
 
@@ -2041,6 +2041,7 @@ function ExportIzoModal({ pachet, tronson, tevi, exporting, history, onConfirm, 
                       </div>
                       <div style={{ fontSize:10, color:G.muted, marginTop:2 }}>
                         {doc.tip_document} · {fmtDate(doc.uploadat_la?.slice(0, 10))} · {(doc.fisier_size_bytes / 1024).toFixed(1)} KB
+                        {esteLivrareSeparata(doc) && ' · + PDF-urile în fișiere separate (Descarcă le pune într-o arhivă)'}
                       </div>
                     </div>
                     <div style={{ display:'flex', gap:6, alignItems:'center' }}>
@@ -2052,7 +2053,10 @@ function ExportIzoModal({ pachet, tronson, tevi, exporting, history, onConfirm, 
                       </button>
                       <button
                         onClick={() => {
-                          if (window.confirm(`Șterge definitiv "${doc.fisier_nume}"?\n\nFișierul va fi eliminat din Storage și din istoric.`)) {
+                          const ce = esteLivrareSeparata(doc)
+                            ? 'Excel-ul și toate PDF-urile acestui export (livrat în fișiere separate) vor fi eliminate din Storage, apoi rândul din istoric.'
+                            : 'Fișierul va fi eliminat din Storage și din istoric.'
+                          if (window.confirm(`Șterge definitiv "${doc.fisier_nume}"?\n\n${ce}`)) {
                             onDeleteHistory(doc)
                           }
                         }}

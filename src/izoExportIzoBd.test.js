@@ -2,8 +2,10 @@
 // Date inventate (proiect 1, tronson 5 = T7, pachet 9).
 import { describe, it, expect } from 'vitest'
 import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import JSZip from 'jszip'
-import { citesteArhivaNdt, executaExportIzo, construiesteZip, verificaPachetNeschimbat, LIMITA_FISIER_STORAGE } from './izoExportIzoBd.js'
+import { citesteArhivaNdt, executaExportIzo, construiesteZip, verificaPachetNeschimbat, LIMITA_FISIER_STORAGE,
+  fisiereExportIstoric, descarcaExportIstoric, stergeExportIstoric, esteLivrareSeparata } from './izoExportIzoBd.js'
 import { evalueazaExportIzo } from './lib/izoExportIzo.js'
 
 const PDF = n => new TextEncoder().encode(`%PDF-1.4 buletin ${n}`)
@@ -21,9 +23,10 @@ function clientFals({ tabele = {}, rpc = {}, maxRows = 1000, storage = {}, drept
     return true
   }))
   const from = (t) => {
-    const st = { f: [], ord: [], lim: null, single: null }
+    const st = { f: [], ord: [], lim: null, single: null, del: false }
     const q = {
-      select() { return q }, eq(c, v) { st.f.push(['eq', c, v]); return q }, neq(c, v) { st.f.push(['neq', c, v]); return q },
+      select() { return q }, delete() { st.del = true; return q },
+      eq(c, v) { st.f.push(['eq', c, v]); return q }, neq(c, v) { st.f.push(['neq', c, v]); return q },
       gt(c, v) { st.f.push(['gt', c, v]); return q }, lt(c, v) { st.f.push(['lt', c, v]); return q }, in(c, v) { st.f.push(['in', c, v]); return q },
       order(c, o = {}) { st.ord.push([c, o.ascending !== false]); return q }, limit(n) { st.lim = n; return q },
       maybeSingle() { st.single = 'maybe'; return q },
@@ -31,6 +34,12 @@ function clientFals({ tabele = {}, rpc = {}, maxRows = 1000, storage = {}, drept
       then(res, rej) {
         jurnal.select.push({ t, f: st.f })
         if (tabele[`${t}:eroare`]) return Promise.resolve({ data: null, error: tabele[`${t}:eroare`] }).then(res, rej)
+        if (st.del) {   // DELETE … RETURNING
+          jurnal.delete = [...(jurnal.delete || []), { t, f: st.f }]
+          const sterse = filtru(tabele[t] || [], st.f)
+          tabele[t] = (tabele[t] || []).filter(r => !sterse.includes(r))
+          return Promise.resolve({ data: sterse, error: null }).then(res, rej)
+        }
         let rows = filtru(tabele[t] || [], st.f)
         for (const [c, asc] of [...st.ord].reverse()) rows = [...rows].sort((a, b) => (a[c] === b[c] ? 0 : (a[c] > b[c]) === asc ? 1 : -1))
         rows = rows.slice(0, Math.min(st.lim ?? Infinity, maxRows))
@@ -56,9 +65,25 @@ function clientFals({ tabele = {}, rpc = {}, maxRows = 1000, storage = {}, drept
           jurnal.upload.push({ b, p, o, marime: blob.size, tip: blob.type })
           if (storage.laUpload) storage.laUpload(p, jurnal.upload.length)
           const err = typeof storage.uploadEroare === 'function' ? storage.uploadEroare(p, jurnal.upload.length) : storage.uploadEroare
+          if (!err && storage.obiecte) storage.obiecte.set(`${b}/${p}`, new Uint8Array(await blob.arrayBuffer()))
           return err ? { error: { message: 'plin' } } : { data: { path: p }, error: null }
         },
-        remove: async (l) => { jurnal.remove.push({ b, l }); return { data: null, error: null } },
+        // Storage real: remove întoarce DOAR obiectele șterse; un obiect fără drept / lipsă lipsește din listă, fără eroare
+        remove: async (l) => {
+          jurnal.remove.push({ b, l })
+          if (!storage.obiecte) return { data: null, error: null }
+          const sterse = l.filter(p => storage.obiecte.has(`${b}/${p}`) && !(storage.nuSterge || []).includes(p))
+          for (const p of sterse) storage.obiecte.delete(`${b}/${p}`)
+          return { data: sterse.map(p => ({ name: p })), error: null }
+        },
+        list: async (dir, o = {}) => {
+          jurnal.list = [...(jurnal.list || []), { b, dir, o }]
+          if (storage.listEroare) return { data: null, error: { message: 'list' } }
+          const pref = `${b}/${dir ? dir + '/' : ''}`
+          const nume = [...(storage.obiecte || new Map()).keys()].filter(k => k.startsWith(pref)).map(k => k.slice(pref.length))
+            .filter(n => !n.includes('/') && n.startsWith(o.search || ''))
+          return { data: nume.slice(0, o.limit ?? 100).map(name => ({ name })), error: null }
+        },
       }),
     },
     auth: { getUser: async () => ({ data: { user: { id: 'u-1' } } }) },
@@ -358,6 +383,135 @@ describe('executaExportIzo — arhiva peste limita bucket-ului', () => {
     expect(r.ok).toBe(false)
     expect(sb.jurnal.remove).toEqual([{ b: 'executie-pachete-pdf', l: [sb.jurnal.upload[0].p] }])
     expect(sb.jurnal.rpc.some(x => x[0] === 'fn_sud_export_inregistreaza')).toBe(false)
+  })
+})
+
+// Jakarinos #1219 r2 P2: la livrarea separată istoricul trebuie să știe de TOATE fișierele exportului (sud_exporturi.fotografie.fisiere)
+describe('istoricul exporturilor — livrare separată: descărcare și ștergere complete', () => {
+  // un export real prin executaExportIzo (limita 100 → separat), într-un Storage în memorie; serverul fals păstrează fotografia
+  async function exportSeparat(o = {}) {
+    const t = tabeleBaza()
+    const obiecte = new Map()
+    const rpc = { fn_sud_export_inregistreaza: async (a) => { t.sud_exporturi.push({ id: 900, pachet_id: a.p_pachet, tip: a.p_tip, fotografie: a.p_fotografie, fisier_path: a.p_fisier_path, creat_la: '2026-11-27T10:00:00Z' }); return { data: 900, error: null } } }
+    const storage = { obiecte, ...(o.storage || {}) }
+    const sb = clientFals({ tabele: t, rpc, storage })
+    const arhiva = await citesteArhivaNdt(sb, { proiectId: 1, tronsonId: 5, pachetId: 9, kmStart: 1000 })
+    const evaluare = evalueazaExportIzo({ pachet, tronson, tevi, arhiva })
+    const r = await executaExportIzo(sb, { pachet, tronson, proiect: {}, tevi, evaluare, arhiva, incomplet: false, genereazaXlsx: genereazaXlsxFals, fetchImpl: fetchFals(pdfuri), uniq: 'u7', acum: new Date('2026-11-27T10:00:00Z'), limita: 100 })
+    expect(r.ok && r.separat).toBe(true)
+    // rândul din istoric, cum îl citește loadExportHistory
+    const doc = { id: 61, ...sb.jurnal.insert.find(x => x.t === 'executie_pachete_documente').row }
+    t.executie_pachete_documente = [doc, { id: 62, pachet_id: 9, tip_document: 'centralizator', fisier_path: '9/alt.zip' }]
+    // fetch pentru link-urile semnate din executie-pachete-pdf → conținutul din Storage-ul fals
+    const fetchStorage = async (url) => {
+      const k = url.replace('https://fals/', '')
+      if (!obiecte.has(k)) return { ok: false, status: 404 }
+      const b = obiecte.get(k)
+      return { ok: true, status: 200, arrayBuffer: async () => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) }
+    }
+    return { sb, t, obiecte, doc, r, fetchStorage }
+  }
+  const D = '9/2026-11-27_u7_99_GAZ_X_DWG_00001_rev0_Centralizator'
+  const TOATE = [`${D}/99_GAZ_X_DWG_00001_rev0_Centralizator.xlsx`, `${D}/buletine/PM_5_21.10.2026.pdf`, `${D}/buletine/PA-UT_77_28.10.2026.pdf`]
+
+  it('lista fișierelor = cea înregistrată de server (Excel-ul rândului primul, toate în dosarul exportului)', async () => {
+    const { sb, doc } = await exportSeparat()
+    expect(esteLivrareSeparata(doc)).toBe(true)
+    expect(await fisiereExportIstoric(sb, doc)).toEqual({ ok: true, separat: true, dosar: D, fisiere: TOATE })
+  })
+  it('„Descarcă” aduce TOATE fișierele, într-un ZIP cu structura arhivei originale', async () => {
+    const { sb, doc, r, fetchStorage } = await exportSeparat()
+    const d = await descarcaExportIstoric(sb, doc, fetchStorage)
+    expect(d).toMatchObject({ ok: true, nume: '99_GAZ_X_DWG_00001_rev0_Centralizator.zip', numar: 3 })
+    const zip = await JSZip.loadAsync(d.bytes), orig = await JSZip.loadAsync(r.bytes)
+    const fis = z => Object.keys(z.files).filter(n => !n.endsWith('/')).sort()
+    expect(fis(zip)).toEqual(fis(orig))   // aceleași fișiere ca arhiva descărcată la export
+    for (const n of fis(orig)) expect(await zip.file(n).async('uint8array')).toEqual(await orig.file(n).async('uint8array'))
+  })
+  it('un PDF lipsă din Storage → eroare cu numele lui, fără ZIP parțial', async () => {
+    const { sb, doc, obiecte, fetchStorage } = await exportSeparat()
+    obiecte.delete(`executie-pachete-pdf/${TOATE[2]}`)
+    const d = await descarcaExportIstoric(sb, doc, fetchStorage)
+    expect(d.ok).toBe(false)
+    expect(d.eroare).toMatch(/buletine\/PA-UT_77_28\.10\.2026\.pdf: descărcare eșuată \(404\)/)
+    expect(d.bytes).toBeUndefined()
+  })
+  it('„Șterge” scoate din Storage TOATE fișierele exportului (doar pe ele), apoi rândul din istoric', async () => {
+    const { sb, t, obiecte, doc } = await exportSeparat()
+    obiecte.set('executie-pachete-pdf/9/alt.zip', new Uint8Array([1]))   // alt export al pachetului: rămâne
+    const s = await stergeExportIstoric(sb, doc)
+    expect(s).toEqual({ ok: true, numar: 3 })
+    expect(sb.jurnal.remove.at(-1)).toEqual({ b: 'executie-pachete-pdf', l: TOATE })
+    expect([...obiecte.keys()]).toEqual(['executie-pachete-pdf/9/alt.zip'])
+    expect(t.executie_pachete_documente.map(x => x.id)).toEqual([62])
+  })
+  it('un fișier nu se poate șterge (Storage îl omite fără eroare) → mesaj cu numele lui, rândul RĂMÂNE; reluarea termină', async () => {
+    const nuSterge = [TOATE[1]]
+    const { sb, t, obiecte, doc } = await exportSeparat({ storage: { nuSterge } })
+    const s = await stergeExportIstoric(sb, doc)
+    expect(s.ok).toBe(false)
+    expect(s.eroare).toMatch(/1 din 3 fișiere nu s-au putut șterge din Storage: buletine\/PM_5_21\.10\.2026\.pdf.*Rândul rămâne în istoric/)
+    expect(s.ramase).toEqual([TOATE[1]])
+    expect(t.executie_pachete_documente.map(x => x.id)).toEqual([61, 62])
+    expect(sb.jurnal.delete).toBeUndefined()
+    nuSterge.length = 0   // dreptul revine → a doua încercare: fișierele deja scoase nu mai contează, restul se șterge
+    expect(await stergeExportIstoric(sb, doc)).toEqual({ ok: true, numar: 3 })
+    expect(obiecte.size).toBe(0)
+    expect(t.executie_pachete_documente.map(x => x.id)).toEqual([62])
+  })
+  it('ștergerea nu se poate verifica (list eșuat) → mesaj, rândul rămâne (necunoscut ≠ șters)', async () => {
+    const { sb, t, doc } = await exportSeparat({ storage: { listEroare: true } })
+    const s = await stergeExportIstoric(sb, doc)
+    expect(s.ok).toBe(false)
+    expect(s.eroare).toMatch(/pentru 3 fișiere ștergerea nu s-a putut verifica/)
+    expect(t.executie_pachete_documente.map(x => x.id)).toEqual([61, 62])
+  })
+  it('lista invizibilă / necitită / cu altă formă → refuz, nimic descărcat sau șters (nu „doar Excel-ul”)', async () => {
+    const cazuri = [
+      [t => { t.sud_exporturi.length = 0 }, /lista lor nu e vizibilă/],
+      [t => { t['sud_exporturi:eroare'] = { message: 'timeout' } }, /nu s-a putut citi \(timeout\)/],
+      [t => { t.sud_exporturi[0].fotografie = { ...t.sud_exporturi[0].fotografie, fisiere: [...TOATE, '9/alt.zip'] } }, /altă formă/],
+      [t => { t.sud_exporturi[0].fotografie = { ...t.sud_exporturi[0].fotografie, fisiere: [TOATE[0], `${D}/../8/x.pdf`] } }, /altă formă/],
+      [t => { t.sud_exporturi[0].fotografie = { ...t.sud_exporturi[0].fotografie, fisiere: [TOATE[1], TOATE[0]] } }, /altă formă/],
+      [t => { t.sud_exporturi[0].fotografie = { ...t.sud_exporturi[0].fotografie, livrare: 'zip' } }, /altă formă/],
+      [t => { t.sud_exporturi.push({ ...t.sud_exporturi[0], id: 901 }) }, /aceeași cale/],
+    ]
+    for (const [strica, re] of cazuri) {
+      const { sb, t, obiecte, doc, fetchStorage } = await exportSeparat()
+      strica(t)
+      const d = await descarcaExportIstoric(sb, doc, fetchStorage)
+      expect(d.ok).toBe(false)
+      expect(d.eroare).toMatch(re)
+      const s = await stergeExportIstoric(sb, doc)
+      expect(s.ok).toBe(false)
+      expect(sb.jurnal.remove).toEqual([])
+      expect(obiecte.size).toBe(3)
+      expect(t.executie_pachete_documente.map(x => x.id)).toEqual([61, 62])
+    }
+  })
+  it('rândul unui alt pachet care arată spre dosarul pachetului 9 → refuz', async () => {
+    const { sb, doc } = await exportSeparat()
+    expect((await fisiereExportIstoric(sb, { ...doc, pachet_id: 8 })).eroare).toMatch(/nu e al pachetului/)
+  })
+  it('un singur fișier (ZIP, Excel vechi, PDF aprobat): link semnat ca până acum; ștergerea îl verifică și scoate rândul', async () => {
+    const t = { executie_pachete_documente: [{ id: 5, pachet_id: 9, tip_document: 'centralizator', fisier_path: '9/2026-05-01_ab_x.zip', fisier_nume: 'x.zip' }] }
+    const obiecte = new Map([['executie-pachete-pdf/9/2026-05-01_ab_x.zip', new Uint8Array([1])]])
+    const sb = clientFals({ tabele: t, storage: { obiecte } })
+    const doc = t.executie_pachete_documente[0]
+    expect(esteLivrareSeparata(doc)).toBe(false)
+    expect(await descarcaExportIstoric(sb, doc)).toEqual({ ok: true, url: 'https://fals/executie-pachete-pdf/9/2026-05-01_ab_x.zip' })
+    expect(sb.jurnal.select.some(x => x.t === 'sud_exporturi')).toBe(false)   // nu depinde de arhiva NDT
+    expect(await stergeExportIstoric(sb, doc)).toEqual({ ok: true, numar: 1 })
+    expect(obiecte.size).toBe(0)
+    expect(t.executie_pachete_documente).toEqual([])
+  })
+  it('Izometrie.jsx: „Descarcă” / „Șterge” din istoric trec prin lista completă (nu mai lucrează doar pe fisier_path)', () => {
+    const src = readFileSync(new URL('./Izometrie.jsx', import.meta.url), 'utf8')
+    const corp = n => { const i = src.indexOf(`async function ${n}(doc)`); expect(i).toBeGreaterThan(-1); return src.slice(i, src.indexOf('\n  }', i)) }
+    expect(corp('downloadHistory')).toMatch(/descarcaExportIstoric\(supabase, doc\)/)
+    expect(corp('deleteHistory')).toMatch(/stergeExportIstoric\(supabase, doc\)/)
+    expect(corp('deleteHistory')).not.toMatch(/\.remove\(/)
+    expect(corp('downloadHistory')).not.toMatch(/createSignedUrl\(doc\.fisier_path/)
   })
 })
 

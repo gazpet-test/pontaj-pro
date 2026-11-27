@@ -289,3 +289,115 @@ export async function executaExportIzo(sb, { pachet, tronson, proiect, tevi, eva
   if (ins.error) avertisment = 'Exportul e înregistrat, dar rândul din istoric n-a fost scris (' + mesaj(ins.error) + ')'
   return { ok: true, bytes, nume, storagePath, fisiere: fisiere.map(f => f.cale), separat, exportId, plan, avertisment }
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// Istoricul exporturilor: descărcarea / ștergerea TUTUROR fișierelor unui export (Jakarinos #1219 r2 P2)
+// ════════════════════════════════════════════════════════════════════════
+// La livrarea separată (> 50 MB) rândul din istoric e Excel-ul, iar PDF-urile stau în ACELAȘI dosar al exportului.
+// Lista completă e cea înregistrată de server în sud_exporturi.fotografie.fisiere (nu se ghicește din Storage).
+
+const segmentOk = s => s !== '' && s !== '.' && s !== '..' && !s.includes('\\')
+const caleValida = p => typeof p === 'string' && p.length > 0 && p.length <= 500 && !p.startsWith('/') && p.split('/').every(segmentOk)
+
+/** Rândul din istoric e Excel-ul unei livrări separate (calea e în dosarul exportului: pachet/dosar/fișier). */
+export const esteLivrareSeparata = doc => caleValida(doc?.fisier_path) && doc.fisier_path.split('/').length > 2
+
+/**
+ * Fișierele din Storage ale unui rând din istoric.
+ * Cale cu 2 niveluri (pachet/fișier: ZIP-ul, Excel-ul vechi, PDF-ul aprobat) = un singur fișier, ca până acum.
+ * Cale în dosarul exportului = livrare separată → lista din sud_exporturi.fotografie.fisiere, validată: toate în dosarul
+ * exportului (sub pachetul rândului), fără dubluri, Excel-ul rândului primul. Citire eșuată / listă invizibilă / altă formă
+ * = refuz (necunoscut ≠ „un singur fișier”, L18): nu se descarcă și nu se șterge doar o parte.
+ * @returns {Promise<{ok:true, separat:boolean, dosar?:string, fisiere:string[]} | {ok:false, eroare:string}>}
+ */
+export async function fisiereExportIstoric(sb, doc) {
+  const cale = doc?.fisier_path
+  if (!caleValida(cale)) return { ok: false, eroare: 'Rândul din istoric nu are o cale de fișier validă.' }
+  if (!esteLivrareSeparata(doc)) return { ok: true, separat: false, fisiere: [cale] }
+  const dosar = cale.slice(0, cale.lastIndexOf('/'))
+  const nimic = 'nu s-a descărcat și nu s-a șters nimic.'
+  if (!dosar.startsWith(`${doc.pachet_id}/`)) return { ok: false, eroare: `Dosarul exportului nu e al pachetului: ${nimic}` }
+  const { data, error } = await sb.from('sud_exporturi').select('id, fotografie')
+    .eq('pachet_id', doc.pachet_id).eq('fisier_path', cale).order('id').limit(2)
+  if (error) return { ok: false, eroare: `Lista fișierelor exportului nu s-a putut citi (${mesaj(error)}): ${nimic}` }
+  if (!data?.length) return { ok: false, eroare: `Exportul are mai multe fișiere, dar lista lor nu e vizibilă (e nevoie de dreptul de citire pe arhiva de buletine NDT): ${nimic}` }
+  if (data.length > 1) return { ok: false, eroare: `Două exporturi au aceeași cale în istoric: ${nimic}` }
+  const f = data[0].fotografie
+  const lista = f?.fisiere
+  if (f?.livrare !== 'separat' || !Array.isArray(lista) || !lista.length || lista[0] !== cale
+    || new Set(lista).size !== lista.length || !lista.every(p => caleValida(p) && p.startsWith(`${dosar}/`))) {
+    return { ok: false, eroare: `Lista fișierelor exportului are altă formă decât cea așteptată: ${nimic}` }
+  }
+  return { ok: true, separat: true, dosar, fisiere: lista }
+}
+
+/**
+ * „Descarcă” din istoric. Un fișier → link semnat (ca până acum). Livrare separată → TOATE fișierele exportului, puse
+ * în ZIP local cu structura arhivei originale (Excel-ul la rădăcină + buletine/…). Un fișier lipsă = eroare, nu ZIP parțial.
+ * @returns {Promise<{ok:true, url:string} | {ok:true, bytes:Uint8Array, nume:string, numar:number} | {ok:false, eroare:string}>}
+ */
+export async function descarcaExportIstoric(sb, doc, fetchImpl = globalThis.fetch) {
+  const l = await fisiereExportIstoric(sb, doc)
+  if (!l.ok) return l
+  const st = sb.storage.from(BUCKET_PACHETE)
+  if (!l.separat) {
+    const { data, error } = await st.createSignedUrl(l.fisiere[0], 60)
+    if (error || !data?.signedUrl) return { ok: false, eroare: 'Eroare signed URL: ' + (error ? mesaj(error) : 'fără link') }
+    return { ok: true, url: data.signedUrl }
+  }
+  const zip = new JSZip()
+  for (const p of l.fisiere) {
+    const rel = p.slice(l.dosar.length + 1)
+    const { data, error } = await st.createSignedUrl(p, 120)
+    if (error || !data?.signedUrl) return { ok: false, eroare: `${rel}: ${error ? mesaj(error) : 'fără link'} — nu s-a descărcat nimic.` }
+    let r
+    try { r = await fetchImpl(data.signedUrl) } catch (e) { return { ok: false, eroare: `${rel}: ${mesaj(e)} — nu s-a descărcat nimic.` } }
+    if (!r.ok) return { ok: false, eroare: `${rel}: descărcare eșuată (${r.status}) — nu s-a descărcat nimic.` }
+    zip.file(rel, new Uint8Array(await r.arrayBuffer()))
+  }
+  const nume = String(doc.fisier_nume || l.fisiere[0].slice(l.dosar.length + 1)).replace(/\.xlsx$/i, '') + '.zip'
+  return { ok: true, bytes: await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }), nume, numar: l.fisiere.length }
+}
+
+/** Fișierul există încă în Storage? Căutare exactă pe nume în dosarul lui. true / false; eroare → null (necunoscut). */
+async function existaInStorage(st, p) {
+  const i = p.lastIndexOf('/')
+  const dir = i < 0 ? '' : p.slice(0, i), baza = p.slice(i + 1)
+  try {
+    const { data, error } = await st.list(dir, { search: baza, limit: 100 })
+    if (error || !Array.isArray(data)) return null
+    return data.some(o => o?.name === baza)
+  } catch { return null }
+}
+
+/**
+ * „Șterge” din istoric: scoate din Storage EXACT fișierele exportului (lista validată mai sus), verifică după ștergere
+ * că nu mai există niciunul, și abia apoi șterge rândul din istoric (confirmat prin RETURNING). Ce nu s-a putut șterge /
+ * verifica = mesaj cu numele fișierelor, iar rândul RĂMÂNE (ștergerea se poate relua; fișierele deja scoase nu mai apar).
+ * @returns {Promise<{ok:true, numar:number} | {ok:false, eroare:string, ramase?:string[]}>}
+ */
+export async function stergeExportIstoric(sb, doc) {
+  const l = await fisiereExportIstoric(sb, doc)
+  if (!l.ok) return l
+  const st = sb.storage.from(BUCKET_PACHETE)
+  const nume = p => (l.separat ? p.slice(l.dosar.length + 1) : p.slice(p.lastIndexOf('/') + 1))
+  let errRemove = null
+  try { const r = await st.remove(l.fisiere); errRemove = r?.error || null } catch (e) { errRemove = e }
+  const ramase = [], neverificate = []
+  for (const p of l.fisiere) {
+    const e = await existaInStorage(st, p)
+    if (e === true) ramase.push(p)
+    else if (e !== false) neverificate.push(p)
+  }
+  if (ramase.length || neverificate.length) {
+    const parti = []
+    if (ramase.length) parti.push(`${ramase.length} din ${l.fisiere.length} fișiere nu s-au putut șterge din Storage: ${ramase.map(nume).join(', ')}`)
+    if (neverificate.length) parti.push(`pentru ${neverificate.length} fișiere ștergerea nu s-a putut verifica: ${neverificate.map(nume).join(', ')}`)
+    return { ok: false, ramase: [...ramase, ...neverificate],
+      eroare: `${parti.join('; ')}${errRemove ? ` (${mesaj(errRemove)})` : ''}. Rândul rămâne în istoric — reîncearcă ștergerea.` }
+  }
+  const d = await sb.from('executie_pachete_documente').delete().eq('id', doc.id).select('id')
+  if (d.error) return { ok: false, eroare: `Fișierele s-au șters din Storage, dar rândul din istoric nu (${mesaj(d.error)}) — reîncearcă ștergerea.` }
+  if (!d.data?.length) return { ok: false, eroare: 'Fișierele s-au șters din Storage, dar rândul din istoric nu s-a șters (nu mai există sau nu ai drept).' }
+  return { ok: true, numar: l.fisiere.length }
+}
