@@ -135,7 +135,7 @@ ok $? "SQL-ul extras (schelete, sectiunea 2 a migrarii)"
 psql -X -q -w -v ON_ERROR_STOP=1 -d "$BAZA" -1 -f "$D/schelet.sql" > /dev/null; ok $? "scheletele"
 psql -X -q -w -v ON_ERROR_STOP=1 -d "$BAZA" -1 -f "$D/ddl.sql" > /dev/null; ok $? "sectiunea 2 a migrarii 20270115a (o tranzactie)"
 # boolean || text = textul castului boolean→text („true”, nu „t”; r5, proba chat-ului pe PG17)
-astept '4|true|1|2' "$(q"SELECT (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname IN ('fn_ofertare_clar_are_puncte', 'fn_ofertare_lic_puncte_poarta', 'fn_ofertare_clar_puncte_poarta', 'fn_ofertare_clar_parinte_puncte_garda')) || '|' || (SELECT prosecdef FROM pg_proc WHERE oid = to_regprocedure('public.ofertare_clarificari_export(bigint)')) || '|' || (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.ofertare_clarificari'::regclass AND tgname = 'trg_ofertare_clar_parinte_puncte') || '|' || (SELECT count(*) FROM pg_policy WHERE polrelid = 'public.ofertare_clarificari_puncte'::regclass AND pg_get_expr(polqual, polrelid) = 'fn_ofertare_clar_puncte_poarta(clarificare_id)')")" "obiectele: functii noi | exportul DEFINER | trigger | politici pe poarta"
+astept '4|true|1|2' "$(q "SELECT (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname IN ('fn_ofertare_clar_are_puncte', 'fn_ofertare_lic_puncte_poarta', 'fn_ofertare_clar_puncte_poarta', 'fn_ofertare_clar_parinte_puncte_garda')) || '|' || (SELECT prosecdef FROM pg_proc WHERE oid = to_regprocedure('public.ofertare_clarificari_export(bigint)')) || '|' || (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.ofertare_clarificari'::regclass AND tgname = 'trg_ofertare_clar_parinte_puncte') || '|' || (SELECT count(*) FROM pg_policy WHERE polrelid = 'public.ofertare_clarificari_puncte'::regclass AND pg_get_expr(polqual, polrelid) = 'fn_ofertare_clar_puncte_poarta(clarificare_id)')")" "obiectele: functii noi | exportul DEFINER | trigger | politici pe poarta"
 [ "$esec" = 0 ] || exit 1
 
 # ── fixturile (ca postgres): conturi (+ ADM = admin Ofertare, fără rol pe licitație), licitațiile L1 (RESP responsabil, regula A) și L2, clarificările
@@ -169,7 +169,7 @@ asteaptaA() {
 pasA() { local marcaj="$1"; shift; printf '%s\n' "$@" "\\warn $marcaj :SQLSTATE" >&"$A_IN"; asteaptaA "$marcaj"; }
 inchideA() { local linie; { printf '%s\n' '\q' >&"$A_IN"; } 2>/dev/null || true; while IFS= read -r -t 60 -u "$A_FD_OUT" linie 2>/dev/null; do printf '%s\n' "$linie" >> "$A_ERR"; done; wait "$A_PID_C" 2>/dev/null; A_DESCHIS=0; }
 pornesteB() {   # <prolog rol> <instructiune>
-  printf '%s\n' "SET lock_timeout = '20s';" "BEGIN;" "$1" "$2" "\\echo B_REZ :SQLSTATE" "\\echo B_MSG :LAST_ERROR_MESSAGE" "COMMIT;" "\\echo B_COMMIT :SQLSTATE" > "$D/B.sql"
+  printf '%s\n' "SET lock_timeout = '20s';" "SET default_transaction_isolation = 'read committed';" "BEGIN;" "$1" "$2" "\\echo B_REZ :SQLSTATE" "\\echo B_MSG :LAST_ERROR_MESSAGE" "COMMIT;" "\\echo B_COMMIT :SQLSTATE" > "$D/B.sql"
   PGAPPNAME=cp_B psql -X -q -w -v ON_ERROR_STOP=0 -d "$BAZA" -f "$D/B.sql" > "$B_LOG" 2>&1 &
   B_PID=$!
 }
