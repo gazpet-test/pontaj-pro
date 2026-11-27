@@ -22,8 +22,11 @@
 #                              A COMMIT → B: 42501 (garda vede punctul comis: are_puncte VOLATILE, instantaneu nou); C și punctul rămân.
 #   c_primul_punct_vs_sterge   A (OF): DELETE C (fără puncte), NECOMIS — garda a trecut (nu erau puncte), rândul e blocat.
 #                              B (RESP): INSERT primul punct → FK așteaptă DELETE-ul necomis. A COMMIT → B: 23503 (părintele nu mai există); niciun orfan.
-#   c_muta_vs_primul_punct     A (RESP): inserează primul punct în C, NECOMIS. B (OF): UPDATE licitatie_id → 42501 IMEDIAT (mutarea e refuzată din
-#                              aplicație și fără puncte — nu mai există cursa din r2); A COMMIT → punctul e pe C, C pe L1.
+#   c_muta_vs_primul_punct     A (RESP): inserează primul punct în C, NECOMIS — ține KEY SHARE pe C prin FK. B (OF): UPDATE licitatie_id → AȘTEAPTĂ
+#                              (licitatie_id e în UNIQUE (licitatie_id, nr) / (licitatie_id, cheie) → UPDATE-ul cere FOR UPDATE pe rând, în conflict
+#                              cu KEY SHARE-ul lui A; BEFORE ROW se cheamă după lock). Bariera: B blocat CHIAR de A. A COMMIT → B: 42501 (mesajul
+#                              exact al gărzii); C și punctul rămân pe L1. (r5, proba chat-ului pe PG17: aici scria „42501 IMEDIAT”, greșit.)
+#   c_muta_vs_primul_punct_rollback  ca mai sus pe C5 nouă, dar A face ROLLBACK → B tot 42501 (mutarea e refuzată din aplicație și fără puncte).
 #   c_sterge_vs_primul_punct_rollback  ca primul, dar A face ROLLBACK → B șterge (nu erau puncte comise).
 #   c_resp_muta_fara_puncte    secvențial: nici responsabilul nu mută o clarificare fără puncte (42501, mesajul exact); editarea textului trece.
 #   c_export                   secvențial (varianta B, 20270115a): RESP (poarta pe L1) primește OBIECTUL {clarificari, temeiuri} cu temeiul de pe
@@ -131,7 +134,8 @@ ok $? "SQL-ul extras (schelete, sectiunea 2 a migrarii)"
 [ "$esec" = 0 ] || exit 1
 psql -X -q -w -v ON_ERROR_STOP=1 -d "$BAZA" -1 -f "$D/schelet.sql" > /dev/null; ok $? "scheletele"
 psql -X -q -w -v ON_ERROR_STOP=1 -d "$BAZA" -1 -f "$D/ddl.sql" > /dev/null; ok $? "sectiunea 2 a migrarii 20270115a (o tranzactie)"
-astept '4|t|1|2' "$(q "SELECT (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname IN ('fn_ofertare_clar_are_puncte', 'fn_ofertare_lic_puncte_poarta', 'fn_ofertare_clar_puncte_poarta', 'fn_ofertare_clar_parinte_puncte_garda')) || '|' || (SELECT prosecdef FROM pg_proc WHERE oid = to_regprocedure('public.ofertare_clarificari_export(bigint)')) || '|' || (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.ofertare_clarificari'::regclass AND tgname = 'trg_ofertare_clar_parinte_puncte') || '|' || (SELECT count(*) FROM pg_policy WHERE polrelid = 'public.ofertare_clarificari_puncte'::regclass AND pg_get_expr(polqual, polrelid) = 'fn_ofertare_clar_puncte_poarta(clarificare_id)')")" "obiectele: functii noi | exportul DEFINER | trigger | politici pe poarta"
+# boolean || text = textul castului boolean→text („true”, nu „t”; r5, proba chat-ului pe PG17)
+astept '4|true|1|2' "$(q"SELECT (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname IN ('fn_ofertare_clar_are_puncte', 'fn_ofertare_lic_puncte_poarta', 'fn_ofertare_clar_puncte_poarta', 'fn_ofertare_clar_parinte_puncte_garda')) || '|' || (SELECT prosecdef FROM pg_proc WHERE oid = to_regprocedure('public.ofertare_clarificari_export(bigint)')) || '|' || (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.ofertare_clarificari'::regclass AND tgname = 'trg_ofertare_clar_parinte_puncte') || '|' || (SELECT count(*) FROM pg_policy WHERE polrelid = 'public.ofertare_clarificari_puncte'::regclass AND pg_get_expr(polqual, polrelid) = 'fn_ofertare_clar_puncte_poarta(clarificare_id)')")" "obiectele: functii noi | exportul DEFINER | trigger | politici pe poarta"
 [ "$esec" = 0 ] || exit 1
 
 # ── fixturile (ca postgres): conturi (+ ADM = admin Ofertare, fără rol pe licitație), licitațiile L1 (RESP responsabil, regula A) și L2, clarificările
@@ -250,31 +254,42 @@ SQL
 }
 
 # ── c_muta_vs_primul_punct ──
-echo "c_muta_vs_primul_punct (C3 = 9103): A (RESP) insereaza primul punct NECOMIS; B (OF) muta C3 pe L2 → 42501 imediat (mutarea e refuzata si fara puncte)"
+# UPDATE-ul lui licitatie_id (coloană din UNIQUE (licitatie_id, nr) / (licitatie_id, cheie)) cere FOR UPDATE pe rând → așteaptă KEY SHARE-ul FK-ului
+# ținut de inserarea necomisă a lui A; garda (BEFORE ROW) se cheamă după lock. Deci B AȘTEAPTĂ, nu primește 42501 imediat (r5, proba chat-ului pe PG17:
+# 55P03 după lock_timeout) → barieră ca la c_sterge_vs_primul_punct; după COMMIT sau ROLLBACK în A, B primește 42501 (mutarea refuzată oricum).
+echo "c_muta_vs_primul_punct (C3 = 9103): A (RESP) insereaza primul punct NECOMIS; B (OF) muta C3 pe L2 → asteapta lock-ul randului; A COMMIT → B 42501"
 {
   deschideA
-  pasA S3a "BEGIN;" "$(ca $U_RESP)" "INSERT INTO public.ofertare_clarificari_puncte (clarificare_id, nr, text) VALUES (9103, 1, 'primul punct');"; astept 00000 "$A_STARE" "A: INSERT primul punct, NECOMIS"
-  B_MUTA="$(psql -X -q -w -v ON_ERROR_STOP=0 -d "$BAZA" -f - 2>&1 <<SQL | sed -n 's/^B_//p'
-SET lock_timeout = '20s';
-BEGIN;
-$(ca $U_OF)
-UPDATE public.ofertare_clarificari SET licitatie_id = 900202 WHERE id = 9103;
-\echo B_REZ :SQLSTATE
-\echo B_MSG :LAST_ERROR_MESSAGE
-ROLLBACK;
-SQL
-)"
-  astept 42501 "$(printf '%s\n' "$B_MUTA" | sed -n 's/^REZ //p')" "B: UPDATE licitatie_id cat A e necomis → 42501 fara asteptare (nu exista cursa)"
-  contine 'O clarificare nu se muta pe alta licitatie din aplicatie' "$(printf '%s\n' "$B_MUTA" | sed -n 's/^MSG //p')" "B: mesajul exact al garzii"
+  pasA S3a "BEGIN;" "$(ca $U_RESP)" "INSERT INTO public.ofertare_clarificari_puncte (clarificare_id, nr, text) VALUES (9103, 1, 'primul punct');"; astept 00000 "$A_STARE" "A: INSERT primul punct, NECOMIS (KEY SHARE pe C3 prin FK)"
+  pornesteB "$(ca $U_OF)" "UPDATE public.ofertare_clarificari SET licitatie_id = 900202 WHERE id = 9103;"
+  bariera
   pasA S3b "COMMIT;"; astept 00000 "$A_STARE" "A: COMMIT"
+  asteaptaB; astept 42501 "$B_STARE" "B: UPDATE licitatie_id dupa commit-ul lui A → 42501"
+  contine 'O clarificare nu se muta pe alta licitatie din aplicatie' "$B_MSG" "B: mesajul exact al garzii"
   inchideA
   astept '900201|1' "$(stare_c 9103)" "C3 ramane pe L1, cu punctul lui A"
+}
+
+# ── c_muta_vs_primul_punct_rollback (varianta cu ROLLBACK în A, pe C5 nouă, fără puncte) ──
+echo "c_muta_vs_primul_punct_rollback (C5 = 9105 noua): A insereaza primul punct NECOMIS; B muta C5 pe L2 → asteapta; A ROLLBACK → B tot 42501 (mutarea e refuzata si fara puncte)"
+{
+  q "INSERT INTO public.ofertare_clarificari (id, licitatie_id, nr, intrebare, status) VALUES (9105, 900201, 5, 'C5', 'propunere')" > /dev/null
+  deschideA
+  pasA S3Ra "BEGIN;" "$(ca $U_RESP)" "INSERT INTO public.ofertare_clarificari_puncte (clarificare_id, nr, text) VALUES (9105, 1, 'primul punct');"; astept 00000 "$A_STARE" "A: INSERT primul punct, NECOMIS"
+  pornesteB "$(ca $U_OF)" "UPDATE public.ofertare_clarificari SET licitatie_id = 900202 WHERE id = 9105;"
+  bariera
+  pasA S3Rb "ROLLBACK;"; astept 00000 "$A_STARE" "A: ROLLBACK"
+  asteaptaB; astept 42501 "$B_STARE" "B: UPDATE licitatie_id dupa ROLLBACK-ul lui A → 42501 (si fara puncte)"
+  contine 'O clarificare nu se muta pe alta licitatie din aplicatie' "$B_MSG" "B: mesajul exact al garzii"
+  inchideA
+  astept '900201|0' "$(stare_c 9105)" "C5 ramane pe L1, fara puncte"
 }
 
 # ── c_export (secvențial): poarta punctelor pe exportul adresei + temeiul de pe punct în răspuns ──
 echo "c_export (L1 = 900201, C9 de_trimis cu un punct + temei bifat): RESP → obiect {clarificari: 1, temeiuri: 1 pe punct}; ADM (decizie, fara poarta) → 42501 mesajul exact"
 {
-  R="$(psql -X -q -w -v ON_ERROR_STOP=1 -d "$BAZA" -tAc "BEGIN; $(ca $U_RESP) SELECT jsonb_typeof(r) || '|' || jsonb_array_length(r->'clarificari') || '|' || jsonb_array_length(r->'temeiuri') || '|' || (r->'temeiuri'->0->>'tinta') || '|' || (r->'temeiuri'->0->>'punct_nr') || '|' || (r->'temeiuri'->0->>'nr') || '|' || (r->'temeiuri'->0->'decizie'->>'id') FROM public.ofertare_clarificari_export(900201) r; ROLLBACK;" | head -n 1)"
+  R="$(psql -X -q -w -v ON_ERROR_STOP=1 -d "$BAZA" -tAc "BEGIN; $(ca $U_RESP) SELECT jsonb_typeof(r) || '|' || jsonb_array_length(r->'clarificari') || '|' || jsonb_array_length(r->'temeiuri') || '|' || (r->'temeiuri'->0->>'tinta') || '|' || (r->'temeiuri'->0->>'punct_nr') || '|' || (r->'temeiuri'->0->>'nr') || '|' || (r->'temeiuri'->0->'decizie'->>'id') FROM public.ofertare_clarificari_export(900201) r; ROLLBACK;" | tail -n 1)"
+  # tail, nu head: psql -tAc cu mai multe instrucțiuni afișează rezultatul FIECĂREIA (cele două set_config din ca() vin înainte; r5, proba pe PG17)
   astept 'object|1|1|punct|1|9|CP-CNSC-1' "$R" "RESP: raspunsul e OBIECT (nu tablou: UI-ul vechi refuza), C9 + temeiul de pe punctul 1 cu decizia"
   R="$(psql -X -q -w -v ON_ERROR_STOP=0 -d "$BAZA" -f - 2>&1 <<SQL | sed -n 's/^E_//p'
 BEGIN;
