@@ -441,6 +441,9 @@ REVOKE ALL ON public.sud_metode_proiect, public.sud_buletine, public.sud_buletin
               public.sud_export_deblocari, public.sud_exporturi FROM PUBLIC, anon, authenticated, service_role;
 GRANT SELECT ON public.sud_metode_proiect, public.sud_buletine, public.sud_buletin_randuri, public.sud_suduri_eliminate,
               public.sud_export_deblocari, public.sud_exporturi TO authenticated, service_role;
+-- secvențele de identitate primesc ALL din privilegiile implicite: clienții nu le folosesc (scrierile sunt ale funcțiilor DEFINER)
+REVOKE ALL ON SEQUENCE public.sud_buletine_id_seq, public.sud_buletin_randuri_id_seq, public.sud_suduri_eliminate_id_seq,
+              public.sud_export_deblocari_id_seq, public.sud_exporturi_id_seq FROM PUBLIC, anon, authenticated, service_role;
 CREATE POLICY sud_metode_proiect_citire ON public.sud_metode_proiect FOR SELECT TO authenticated
   USING ((SELECT public.fn_sud_drept(proiect_id, false)));
 CREATE POLICY sud_buletine_citire ON public.sud_buletine FOR SELECT TO authenticated
@@ -486,13 +489,22 @@ BEGIN
   -- tabelele: RLS activ, doar SELECT pentru authenticated / service_role, nimic pentru anon / PUBLIC
   SELECT string_agg(c.relname || ':' || coalesce(a.d, '-'), '; ') INTO v_rau
     FROM pg_class c LEFT JOIN LATERAL (
-      SELECT string_agg(CASE e.grantee WHEN 0 THEN 'PUBLIC' ELSE pg_get_userbyid(e.grantee) END || '=' || e.privilege_type, ',' ORDER BY 1) d
-        FROM aclexplode(coalesce(c.relacl, acldefault('r', c.relowner))) e WHERE e.grantee <> c.relowner) a ON true
+      SELECT string_agg(x.d, ',' ORDER BY x.d) d FROM (
+        SELECT CASE e.grantee WHEN 0 THEN 'PUBLIC' ELSE pg_get_userbyid(e.grantee) END || '=' || e.privilege_type AS d
+          FROM aclexplode(coalesce(c.relacl, acldefault('r', c.relowner))) e WHERE e.grantee <> c.relowner) x) a ON true
    WHERE c.relnamespace = 'public'::regnamespace AND c.relkind = 'r' AND c.relname LIKE 'sud\_%'
-     AND (NOT c.relrowsecurity OR a.d IS DISTINCT FROM 'authenticated=SELECT,service_role=SELECT');
+     AND (NOT c.relrowsecurity OR c.relforcerowsecurity OR a.d IS DISTINCT FROM 'authenticated=SELECT,service_role=SELECT');
   IF v_rau IS NOT NULL THEN RAISE EXCEPTION '20270114a post: drepturile tabelelor sud_: %', v_rau; END IF;
   IF (SELECT count(*) FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relkind = 'r' AND c.relname LIKE 'sud\_%') <> 6 THEN
     RAISE EXCEPTION '20270114a post: numarul tabelelor sud_';
+  END IF;
+  -- secvențele sud_: exact cele 5 de identitate, fără niciun drept în afara proprietarului
+  SELECT string_agg(c.relname, ', ' ORDER BY c.relname) INTO v_rau FROM pg_class c
+   WHERE c.relnamespace = 'public'::regnamespace AND c.relkind = 'S' AND c.relname LIKE 'sud\_%'
+     AND EXISTS (SELECT 1 FROM aclexplode(coalesce(c.relacl, acldefault('s', c.relowner))) e WHERE e.grantee <> c.relowner);
+  IF v_rau IS NOT NULL
+     OR (SELECT count(*) FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relkind = 'S' AND c.relname LIKE 'sud\_%') <> 5 THEN
+    RAISE EXCEPTION '20270114a post: secventele sud_ (numar sau drepturi): %', coalesce(v_rau, 'numar');
   END IF;
   -- funcțiile: DEFINER doar cele de drept și scriere, cale sigură, fără EXECUTE pentru anon / PUBLIC
   SELECT string_agg(p.proname, ', ') INTO v_rau FROM pg_proc p
