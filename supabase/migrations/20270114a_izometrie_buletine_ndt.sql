@@ -290,8 +290,11 @@ BEGIN
   -- fișierul: în bucket-ul izo-ndt, sub calea proiectului și a tronsonului, încărcat de același utilizator (owner_id = coloana pe care
   -- politicile de încărcare o impun = auth.uid(); aceeași în politica de ștergere a orfanului)
   IF p_fisier_path IS NULL OR p_fisier_path !~ ('^' || v_proiect || '/' || p_tronson || '/[^/]+$')
-     OR NOT EXISTS (SELECT 1 FROM storage.objects o WHERE o.bucket_id = 'izo-ndt' AND o.name = p_fisier_path AND o.owner_id = auth.uid()::text) THEN
-    RAISE EXCEPTION 'sud: fisierul nu e in arhiva tronsonului sau nu e incarcat de tine' USING ERRCODE = '22023';
+     OR NOT EXISTS (SELECT 1 FROM storage.objects o WHERE o.bucket_id = 'izo-ndt' AND o.name = p_fisier_path AND o.owner_id = auth.uid()::text
+                      AND o.created_at > now() - interval '1 hour') THEN
+    -- fereastra de timp (Jak r2 P1, cursa înregistrare ↔ ștergerea orfanului): un fișier se înregistrează doar în prima oră de la încărcare,
+    -- iar ca orfan se poate șterge doar după 2 ore (politicile sud_ndt_sterge_orfan / sud_ndt_r_del) — cele două nu se pot suprapune
+    RAISE EXCEPTION 'sud: fisierul nu e in arhiva tronsonului, nu e incarcat de tine sau e mai vechi de o ora (reincarca-l)' USING ERRCODE = '22023';
   END IF;
   -- valorile: refuz explicit (22023), nu CHECK-ul tabelului și nicio tăiere
   IF p_metoda IS NULL OR p_metoda NOT IN ('PM', 'PA-UT', 'UT', 'PT', 'RT', 'VT', 'ALTA') THEN RAISE EXCEPTION 'sud: metoda invalida' USING ERRCODE = '22023'; END IF;
@@ -548,6 +551,7 @@ CREATE POLICY sud_ndt_incarcare ON storage.objects FOR INSERT TO authenticated
 -- proiectului doar cu citire; fără ea, un buletin nevăzut ar lăsa fișierul înregistrat să pară orfan.
 CREATE POLICY sud_ndt_sterge_orfan ON storage.objects FOR DELETE TO authenticated
   USING (bucket_id = 'izo-ndt' AND name ~ '^[0-9]{1,18}/[0-9]{1,18}/[^/]+$' AND owner_id = (SELECT auth.uid())::text
+         AND created_at < now() - interval '2 hours'
          AND (SELECT public.fn_sud_drept(split_part(name, '/', 1)::bigint, 'citire'))
          AND NOT EXISTS (SELECT 1 FROM public.sud_buletine b WHERE b.fisier_path = objects.name));
 -- RESTRICTIVE (tiparul izo_aviz_pdf_r_*, 20261120a): pe bucket-ul izo-ndt rămân valabile oricât de largă ar fi altă politică permisivă.
@@ -564,7 +568,8 @@ CREATE POLICY sud_ndt_r_upd ON storage.objects AS RESTRICTIVE FOR UPDATE TO PUBL
   USING (bucket_id IS DISTINCT FROM 'izo-ndt') WITH CHECK (bucket_id IS DISTINCT FROM 'izo-ndt');
 CREATE POLICY sud_ndt_r_del ON storage.objects AS RESTRICTIVE FOR DELETE TO authenticated
   USING (bucket_id IS DISTINCT FROM 'izo-ndt' OR (auth.uid() IS NOT NULL AND name ~ '^[0-9]{1,18}/[0-9]{1,18}/[^/]+$'
-         AND owner_id = auth.uid()::text AND public.fn_sud_drept(split_part(name, '/', 1)::bigint, 'citire')
+         AND owner_id = auth.uid()::text AND created_at < now() - interval '2 hours'
+         AND public.fn_sud_drept(split_part(name, '/', 1)::bigint, 'citire')
          AND NOT EXISTS (SELECT 1 FROM public.sud_buletine b WHERE b.fisier_path = objects.name)));
 CREATE POLICY sud_ndt_r_anon ON storage.objects AS RESTRICTIVE FOR ALL TO anon
   USING (bucket_id IS DISTINCT FROM 'izo-ndt') WITH CHECK (bucket_id IS DISTINCT FROM 'izo-ndt');

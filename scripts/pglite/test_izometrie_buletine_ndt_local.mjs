@@ -362,13 +362,18 @@ async function verificaPasi(db, ab) {
   r = await q(db, `SELECT string_agg(cheie || ':' || refacuta, ',' ORDER BY ordine) AS k FROM public.sud_buletin_randuri WHERE buletin_id = $1`, [id17])
   asteapta(r[0]?.k === 'T17S50A:false,T17S50H:false,T17S50A:true', 'T17S50A / T17S50H suduri distincte; „tr 17 s 50 ar” = T17S50A refăcută', r)
   // orfanul: proprietarul (cu citire) își șterge fișierul NEÎNREGISTRAT; cel înregistrat rămâne; fișierul altuia rămâne
+  // fereastra de timp (Jak r2 P1): orfanul PROASPĂT (< 2 h) nu se șterge; apoi toate obiectele sunt îmbătrânite (3 h), ca verificările de mai jos
+  // să testeze regula „neînregistrat” / „al altuia”, nu fereastra
+  r = await sterge(db, 'OWNER', `bucket_id = 'izo-ndt' AND name = '${PA}/${TA12}/o1.pdf'`); asteapta(!r.code && r.afectate === 0, 'OWNER: orfanul PROASPĂT (< 2 h) nu se șterge = 0 rânduri (fereastra)', r)
+  await q(db, `UPDATE storage.objects SET created_at = now() - interval '3 hours' WHERE bucket_id = 'izo-ndt'`)
+  r = await incarca(db, 'OWNER', { tronson: TA12, numar: 'O-VECHI', cale: `${PA}/${TA12}/o1.pdf`, amprenta: sha('pdf-o1-vechi') }); asteapta(r.code === '22023', 'fișierul încărcat acum > 1 h nu se mai înregistrează (22023, fereastra)', r)
   r = await sterge(db, 'OWNER', `bucket_id = 'izo-ndt' AND name = '${PA}/${TA17}/o17.pdf'`); asteapta(!r.code && r.afectate === 0, 'OWNER: fișierul propriu ÎNREGISTRAT (buletinul T17) nu se șterge = 0 rânduri', r)
   r = await sterge(db, 'OWNER', `bucket_id = 'izo-ndt' AND name = '${PA}/${TA17}/t17.pdf'`); asteapta(!r.code && r.afectate === 0, 'OWNER: orfanul ALTUIA (MPA) nu se șterge = 0 rânduri', r)
   r = await sterge(db, 'EXE', `bucket_id = 'izo-ndt' AND name = '${PA}/${TA12}/b2.pdf'`); asteapta(!r.code && r.afectate === 0, 'EXE: fișierul altuia nu se șterge = 0 rânduri', r)
   r = await sterge(db, 'MPA', `bucket_id = 'izo-ndt' AND name IN ('${PA}/${TA12}/b1.pdf', '${PA}/${TA12}/b2.pdf')`)
   asteapta(!r.code && r.afectate === 0, 'MPA: propriile fișiere ÎNREGISTRATE (pe care nu le poate citi) nu se șterg = 0 rânduri', r)
   r = await sterge(db, 'MPA', 'true'); asteapta(!r.code && r.afectate === 0, 'MPA: DELETE fără condiție pe coloane după înregistrări = 0 rânduri', r)
-  r = await sterge(db, 'OWNER', `bucket_id = 'izo-ndt' AND name = '${PA}/${TA12}/o1.pdf'`); asteapta(!r.code && r.afectate === 1, 'OWNER își șterge orfanul neînregistrat o1.pdf = 1 rând', r)
+  r = await sterge(db, 'OWNER', `bucket_id = 'izo-ndt' AND name = '${PA}/${TA12}/o1.pdf'`); asteapta(!r.code && r.afectate === 1, 'OWNER își șterge orfanul neînregistrat o1.pdf după 2 h = 1 rând', r)
   r = await q(db, `SELECT count(*)::int AS n FROM storage.objects WHERE bucket_id = 'izo-ndt' AND name IN ('${PA}/${TA12}/o1.pdf', '${PA}/${TA17}/o17.pdf', '${PA}/${TA17}/t17.pdf')`)
   asteapta(r[0]?.n === 2, 'după ștergeri: o1 șters, o17 (înregistrat) și t17 (al altuia) rămân', r)
   r = await incarca(db, 'OWNER', { tronson: TA12, numar: 'O-1', cale: `${PA}/${TA12}/o1.pdf`, amprenta: sha('pdf-o1') }); asteapta(r.code === '22023', 'orfanul șters nu se mai poate înregistra (22023)', r)
@@ -551,7 +556,8 @@ async function verificaLarg(text, { cuNotice = false } = {}) {
       ['OWNER', undefined, `bucket_id = 'izo-ndt' AND name = '${PA}/${TA12}/l1.pdf'`, 'OWNER fișierul înregistrat al altuia']]) {
       r = await sterge(db, c, unde, { rol }); asteapta(!r.code && r.afectate === 0, `ștergere (${de}) = 0 rânduri`, r)
     }
-    r = await sterge(db, 'OWNER', `bucket_id = 'izo-ndt' AND name = '${PA}/${TA12}/lo.pdf'`); asteapta(!r.code && r.afectate === 1, 'OWNER își șterge orfanul = 1 rând', r)
+    await q(db, `UPDATE storage.objects SET created_at = now() - interval '3 hours' WHERE bucket_id = 'izo-ndt'`)
+    r = await sterge(db, 'OWNER', `bucket_id = 'izo-ndt' AND name = '${PA}/${TA12}/lo.pdf'`); asteapta(!r.code && r.afectate === 1, 'OWNER își șterge orfanul (după 2 h) = 1 rând', r)
     r = await q(db, `SELECT string_agg(name, ',' ORDER BY name) AS n FROM storage.objects WHERE bucket_id = 'izo-ndt'`)
     asteapta(r[0]?.n === `${PA}/${TA12}/l1.pdf`, 'la final în izo-ndt: doar l1 (înregistrat), neatins', r)
   } catch (e) { ab.push('larg: excepție: ' + String(e.message).slice(0, 200)) } finally { await db.close() }
@@ -889,7 +895,7 @@ const MUTANTI = [
     [["    OR (p_nivel = 'export' AND public.fn_executie_pachete_acces(true)", "    OR (p_nivel IN ('export', 'scriere') AND public.fn_executie_pachete_acces(true)"]]],
   ['M3 confirmarea fără CAS pe versiune',
     [["  IF p_versiune IS DISTINCT FROM b.versiune THEN RAISE EXCEPTION 'sud: buletinul s-a schimbat intre timp; reincarca' USING ERRCODE = '40001'; END IF;\n", '']]],
-  ['M4 încărcarea fără verificarea owner-ului obiectului', [[' AND o.name = p_fisier_path AND o.owner_id = auth.uid()::text)', ' AND o.name = p_fisier_path)']]],
+  ['M4 încărcarea fără verificarea owner-ului obiectului', [[' AND o.name = p_fisier_path AND o.owner_id = auth.uid()::text\n', ' AND o.name = p_fisier_path\n']]],
   ['M5 indexul unic pe cheie fără stare <> \'anulat\'',
     [["CREATE UNIQUE INDEX sud_buletine_cheie_uq ON public.sud_buletine (tronson_id, metoda, numar_cheie, data_buletin)\n  WHERE stare <> 'anulat' AND fortat_motiv IS NULL;",
       "CREATE UNIQUE INDEX sud_buletine_cheie_uq ON public.sud_buletine (tronson_id, metoda, numar_cheie, data_buletin)\n  WHERE fortat_motiv IS NULL;"]]],
@@ -936,7 +942,11 @@ const MUTANTI = [
       "           IS DISTINCT FROM\n           (SELECT coalesce(array_agg(k ORDER BY k), '{}') FROM (SELECT b.id::text || ':' || b.versiune::text AS k FROM public.sud_buletine b\n                                                                   WHERE b.tronson_id = v_tronson AND b.proiect_id = v_proiect AND b.stare = 'confirmat'\n                                                                     AND b.id::text || ':' || b.versiune::text IN (SELECT (e->>'id') || ':' || (e->>'versiune') FROM jsonb_array_elements(p_fotografie->'buletine') e)) sb)"]]],
   ['M31 ștergerea orfanului fără dreptul de citire (RLS-ul lui sud_buletine ascunde înregistrarea)',
     [["         AND (SELECT public.fn_sud_drept(split_part(name, '/', 1)::bigint, 'citire'))\n         AND NOT EXISTS", '         AND NOT EXISTS'],
-     ["         AND owner_id = auth.uid()::text AND public.fn_sud_drept(split_part(name, '/', 1)::bigint, 'citire')\n", '         AND owner_id = auth.uid()::text\n']]],
+     ["         AND public.fn_sud_drept(split_part(name, '/', 1)::bigint, 'citire')\n         AND NOT EXISTS (SELECT 1 FROM public.sud_buletine b WHERE b.fisier_path = objects.name)));", "         AND NOT EXISTS (SELECT 1 FROM public.sud_buletine b WHERE b.fisier_path = objects.name)));"]]],
+  ['M32 încărcarea fără fereastra de o oră (cursa cu ștergerea orfanului)', [["\n                      AND o.created_at > now() - interval '1 hour') THEN", ') THEN']]],
+  ['M33 ștergerea orfanului fără fereastra de 2 ore (permisivă + restrictivă)',
+    [["\n         AND created_at < now() - interval '2 hours'\n         AND (SELECT public.fn_sud_drept", "\n         AND (SELECT public.fn_sud_drept"],
+     [" AND created_at < now() - interval '2 hours'\n         AND public.fn_sud_drept", "\n         AND public.fn_sud_drept"]]],
 ]
 for (const [nume, inl] of MUTANTI) {
   let ab

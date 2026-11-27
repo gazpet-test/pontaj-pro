@@ -229,9 +229,10 @@ BEGIN
   DELETE FROM storage.objects WHERE bucket_id = 'izo-ndt' AND name = v_p || '/' || v_t || '/dry1.pdf';
   GET DIAGNOSTICS n = ROW_COUNT;
   IF n <> 0 THEN RAISE EXCEPTION 't_sterge FAIL: owner-ul a sters fisierul inregistrat al altuia'; END IF;
+  -- fereastra de timp: orfanul proaspăt (< 2 h) NU se șterge (ștergerea după 2 h e probată pe PGlite, cu created_at îmbătrânit)
   DELETE FROM storage.objects WHERE bucket_id = 'izo-ndt' AND name = v_p || '/' || v_t || '/dryA.pdf';
   GET DIAGNOSTICS n = ROW_COUNT;
-  IF n <> 1 THEN RAISE EXCEPTION 't_sterge FAIL: owner-ul nu si-a sters orfanul (% randuri)', n; END IF;
+  IF n <> 0 THEN RAISE EXCEPTION 't_sterge FAIL: orfanul proaspat (< 2 h) s-a sters (% randuri) - fereastra lipseste', n; END IF;
   PERFORM set_config('storage.allow_delete_query', 'false', true);
   RAISE NOTICE 'DRY 20270114a t_sterge ok';
 END $t$;
