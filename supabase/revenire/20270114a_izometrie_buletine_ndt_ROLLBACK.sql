@@ -1,5 +1,5 @@
 -- REVENIRE 20270114a_izometrie_buletine_ndt. Runner: scripts/livrare_migrare.sh --plafon-tranzactie-ms 2000 (fără amprenta globală).
--- Scoate EXACT ce a pus migrarea: cele 6 tabele sud_, cele 11 funcții fn_sud_, bucket-ul izo-ndt și cele 2 politici sud_ndt_ pe storage.objects.
+-- Scoate EXACT ce a pus migrarea: cele 6 tabele sud_, cele 11 funcții fn_sud_, bucket-ul izo-ndt și cele 8 politici sud_ndt_ pe storage.objects.
 -- Refuză (nimic schimbat) dacă: există rânduri în oricare tabel sud_ sau obiecte în bucket (datele reale nu se pierd pe tăcute — golirea lor
 --   e o decizie separată a proprietarului), lipsește vreun obiect al migrării, există obiecte sud_ / fn_sud_ în plus, porțile Izometrie nu sunt verzi.
 DO $pre$
@@ -21,13 +21,19 @@ BEGIN
      OR (SELECT count(*) FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relkind = 'r' AND c.relname LIKE 'sud\_%') <> 6
      OR (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_sud\_%') <> 11
      OR NOT EXISTS (SELECT 1 FROM storage.buckets WHERE id = 'izo-ndt')
-     OR (SELECT count(*) FROM pg_policy WHERE polrelid = 'storage.objects'::regclass AND polname IN ('sud_ndt_citire', 'sud_ndt_incarcare')) <> 2 THEN
+     OR (SELECT count(*) FROM pg_policy WHERE polrelid = 'storage.objects'::regclass AND polname IN ('sud_ndt_citire', 'sud_ndt_incarcare',
+           'sud_ndt_sterge_orfan', 'sud_ndt_r_sel', 'sud_ndt_r_ins', 'sud_ndt_r_upd', 'sud_ndt_r_del', 'sud_ndt_r_anon')) <> 8
+     OR (SELECT count(*) FROM pg_policy WHERE polrelid = 'storage.objects'::regclass AND polname LIKE 'sud\_ndt\_%') <> 8 THEN
     RAISE EXCEPTION '20270114a revenire: starea nu e cea pusa de migrare (obiecte lipsa sau in plus); nimic schimbat';
   END IF;
-  -- L14: lock ÎNAINTEA verificării „fără date” (altfel un rând / fișier scris între numărare și DROP s-ar pierde): tabelele sud_ exclusiv,
-  -- rândul bucket-ului FOR UPDATE (încărcarea unui obiect ia FOR KEY SHARE pe el prin FK-ul storage.objects → buckets). NOWAIT: ocupat = refuz.
+  -- L14: lock ÎNAINTEA verificării „fără date” (altfel un rând / fișier scris între numărare și DROP s-ar pierde), ordinea (L06):
+  -- (1) tabelele sud_ exclusiv; (2) politicile de ÎNCĂRCARE scoase (DROP POLICY ține ACCESS EXCLUSIVE pe storage.objects până la COMMIT:
+  -- nicio încărcare în curs sau nouă); (3) rândul bucket-ului FOR UPDATE (încărcarea ia FOR KEY SHARE pe el prin FK-ul storage.objects → buckets).
+  -- Ocupat = refuz (NOWAIT / lock_timeout 100 ms); un refuz anulează tot, inclusiv DROP-urile (nimic schimbat).
   LOCK TABLE public.sud_metode_proiect, public.sud_buletine, public.sud_buletin_randuri, public.sud_suduri_eliminate,
              public.sud_export_deblocari, public.sud_exporturi IN ACCESS EXCLUSIVE MODE NOWAIT;
+  DROP POLICY sud_ndt_incarcare ON storage.objects;
+  DROP POLICY sud_ndt_r_ins ON storage.objects;
   PERFORM 1 FROM storage.buckets WHERE id = 'izo-ndt' FOR UPDATE NOWAIT;
   SELECT (SELECT count(*) FROM public.sud_metode_proiect) + (SELECT count(*) FROM public.sud_buletine) + (SELECT count(*) FROM public.sud_buletin_randuri)
        + (SELECT count(*) FROM public.sud_suduri_eliminate) + (SELECT count(*) FROM public.sud_export_deblocari) + (SELECT count(*) FROM public.sud_exporturi)
@@ -38,9 +44,22 @@ BEGIN
   END IF;
 END $pre$;
 
-DROP POLICY sud_ndt_incarcare ON storage.objects;
+DROP POLICY sud_ndt_r_anon ON storage.objects;
+DROP POLICY sud_ndt_r_del ON storage.objects;
+DROP POLICY sud_ndt_r_upd ON storage.objects;
+DROP POLICY sud_ndt_r_sel ON storage.objects;
+DROP POLICY sud_ndt_sterge_orfan ON storage.objects;
 DROP POLICY sud_ndt_citire ON storage.objects;
-DELETE FROM storage.buckets WHERE id = 'izo-ndt';
+DO $bucket$
+DECLARE v text;
+BEGIN
+  -- Supabase blochează DELETE pe storage.* (trigger protect_delete, ca la 20261120a); bucket-ul e dovedit gol mai sus, sub lock,
+  -- deci deblocarea e locală tranzacției și se închide imediat după ștergere
+  PERFORM set_config('storage.allow_delete_query', 'true', true);
+  DELETE FROM storage.buckets WHERE id = 'izo-ndt' RETURNING id INTO v;
+  PERFORM set_config('storage.allow_delete_query', 'false', true);
+  IF v IS DISTINCT FROM 'izo-ndt' THEN RAISE EXCEPTION '20270114a revenire: bucket-ul izo-ndt nu s-a sters'; END IF;
+END $bucket$;
 DROP FUNCTION public.fn_sud_export_inregistreaza(bigint, text, jsonb, bigint, text);
 DROP FUNCTION public.fn_sud_export_deblocheaza(bigint, text, text, jsonb);
 DROP FUNCTION public.fn_sud_sudura_eliminare_retrage(bigint, text);
@@ -57,7 +76,7 @@ DROP TABLE public.sud_buletine;
 DROP TABLE public.sud_metode_proiect;
 DROP FUNCTION public.fn_sud_tronson_nr(text);
 DROP FUNCTION public.fn_sud_cod_normalizeaza(text, integer);
-DROP FUNCTION public.fn_sud_drept(bigint, boolean);
+DROP FUNCTION public.fn_sud_drept(bigint, text);
 
 DO $post$
 BEGIN

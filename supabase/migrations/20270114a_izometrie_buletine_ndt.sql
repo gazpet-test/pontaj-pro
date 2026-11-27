@@ -8,11 +8,17 @@
 --     sud_export_deblocari (deblocarea exportului de către MP, D11), sud_exporturi (fotografia surselor la export, R6).
 --   * NICIO coloană nouă și NICIUN FK spre tabelele existente (executie_proiecte / executie_tronsoane / executie_pachete_lansare sunt în perimetrul
 --     porților Izometrie E2a–E4b); existența proiectului / tronsonului / pachetului o verifică funcțiile de scriere, sub lock pe rândul părinte.
---   * Bucket privat izo-ndt (PDF-urile buletinelor), cale <proiect_id>/<tronson_id>/<nume>; citire = dreptul de citire, încărcare = dreptul de
---     scriere; fără UPDATE / DELETE pentru clienți.
---   * Dreptul (R9), O SINGURĂ definiție: fn_sud_drept(proiect, scriere). Scriere = owner SAU managerul proiectului (profiles.employee_id =
---     executie_proiecte.mp_employee_id) cu restricția pe proiect existentă fn_executie_proiect_permis(proiect, true). Citire = owner, MP sau
---     accesul existent la pachetele Execuției (fn_executie_pachete_acces(false)) cu fn_executie_proiect_permis(proiect, false). Nimic acordat.
+--   * Bucket privat izo-ndt (PDF-urile buletinelor), cale <proiect_id>/<tronson_id>/<nume>. Politici PERMISIVE (citire, încărcare cu
+--     owner_id = auth.uid(), ștergerea propriului fișier NEÎNREGISTRAT) + politici RESTRICTIVE pe același bucket (tiparul izo_aviz_pdf_r_* de pe
+--     producție, 20261120a: _sel / _ins / _del TO authenticated, _upd TO PUBLIC, _anon FOR ALL TO anon — cele cu funcții NU se aplică lui anon,
+--     care nu are EXECUTE pe fn_sud_drept: dreptul se verifică la pornirea interogării, deci ar pica orice citire anonimă din storage).
+--     Rămân valabile oricât de largă ar fi altă politică permisivă; UPDATE interzis; fișierul înregistrat într-un buletin nu se mai șterge din client.
+--   * Dreptul (R9), O SINGURĂ definiție: fn_sud_drept(proiect, nivel), nivel ∈ citire / export / scriere (alt nivel / NULL = fals, niciodată NULL).
+--     scriere = owner SAU managerul proiectului (profiles.employee_id = executie_proiecte.mp_employee_id) cu fn_executie_proiect_permis(proiect, true);
+--     export (înregistrarea unui export COMPLET, ca exportul de azi) = scriere SAU accesul existent de scriere pe pachete
+--       (fn_executie_pachete_acces(true)) cu fn_executie_proiect_permis(proiect, true);
+--     citire = owner SAU accesul existent de citire pe pachete (fn_executie_pachete_acces(false)) cu fn_executie_proiect_permis(proiect, false).
+--     Exportul INCOMPLET cere deblocarea MP-ului (nivel scriere). Nimic acordat de migrare.
 --   * Scrierile DOAR prin funcții SECURITY DEFINER care verifică dreptul în corp (auth.uid() obligatoriu); clienții au doar SELECT pe tabele.
 --     Autorul, momentele, cheia sudurii, versiunea le pune serverul.
 --   * fn_sud_cod_normalizeaza: aceeași regulă ca fn_izo_sudura_normalizeaza (E4b, mod legacy) și src/lib/izoSudura.js — R final = refacere, alte
@@ -208,16 +214,18 @@ CREATE UNIQUE INDEX sud_exporturi_deblocare_uq ON public.sud_exporturi (deblocar
 CREATE INDEX sud_exporturi_pachet_ix ON public.sud_exporturi (pachet_id, creat_la DESC);
 
 -- ─────────── dreptul (O SINGURĂ definiție, R9) ───────────
-CREATE FUNCTION public.fn_sud_drept(p_proiect bigint, p_scriere boolean) RETURNS boolean
+CREATE FUNCTION public.fn_sud_drept(p_proiect bigint, p_nivel text) RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
-  SELECT auth.uid() IS NOT NULL AND p_proiect IS NOT NULL AND p_scriere IS NOT NULL AND (
+  SELECT coalesce(auth.uid() IS NOT NULL AND p_proiect IS NOT NULL AND p_nivel IN ('citire', 'export', 'scriere') AND (
     EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.is_owner IS TRUE)
-    OR (EXISTS (SELECT 1 FROM public.profiles p JOIN public.executie_proiecte e ON e.id = p_proiect
-                 WHERE p.id = auth.uid() AND p.employee_id IS NOT NULL AND e.mp_employee_id IS NOT NULL
-                   AND p.employee_id::bigint = e.mp_employee_id::bigint)
-        AND public.fn_executie_proiect_permis(p_proiect, p_scriere))
-    OR (NOT p_scriere AND public.fn_executie_pachete_acces(false) AND public.fn_executie_proiect_permis(p_proiect, false))
-  )
+    OR (p_nivel IN ('scriere', 'export')
+        AND EXISTS (SELECT 1 FROM public.profiles p JOIN public.executie_proiecte e ON e.id = p_proiect
+                     WHERE p.id = auth.uid() AND p.employee_id IS NOT NULL AND e.mp_employee_id IS NOT NULL
+                       AND p.employee_id::bigint = e.mp_employee_id::bigint)
+        AND public.fn_executie_proiect_permis(p_proiect, true))
+    OR (p_nivel = 'export' AND public.fn_executie_pachete_acces(true) AND public.fn_executie_proiect_permis(p_proiect, true))
+    OR (p_nivel = 'citire' AND public.fn_executie_pachete_acces(false) AND public.fn_executie_proiect_permis(p_proiect, false))
+  ), false)
 $f$;
 
 -- normalizatorul (copie a regulii legacy din fn_izo_sudura_normalizeaza / src/lib/izoSudura.js; cheia în forma ERP-ului: T<tronson>S<nr><sufix>)
@@ -259,7 +267,7 @@ BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION 'sud: neautentificat' USING ERRCODE = '42501'; END IF;
   PERFORM 1 FROM public.executie_proiecte WHERE id = p_proiect FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'sud: proiect inexistent' USING ERRCODE = '22023'; END IF;
-  IF NOT public.fn_sud_drept(p_proiect, true) THEN RAISE EXCEPTION 'sud: doar managerul de proiect' USING ERRCODE = '42501'; END IF;
+  IF public.fn_sud_drept(p_proiect, 'scriere') IS NOT TRUE THEN RAISE EXCEPTION 'sud: doar managerul de proiect' USING ERRCODE = '42501'; END IF;
   IF p_metode IS NULL OR NOT (p_metode <@ ARRAY['PM', 'PA-UT', 'UT']::text[]) THEN RAISE EXCEPTION 'sud: metode invalide' USING ERRCODE = '22023'; END IF;
   INSERT INTO public.sud_metode_proiect (proiect_id, metode, actualizat_de)
   VALUES (p_proiect, (SELECT coalesce(array_agg(DISTINCT m ORDER BY m), '{}') FROM unnest(p_metode) m), auth.uid())
@@ -274,15 +282,22 @@ BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION 'sud: neautentificat' USING ERRCODE = '42501'; END IF;
   SELECT proiect_id INTO v_proiect FROM public.executie_tronsoane WHERE id = p_tronson FOR UPDATE;
   IF v_proiect IS NULL THEN RAISE EXCEPTION 'sud: tronson inexistent' USING ERRCODE = '22023'; END IF;
-  IF NOT public.fn_sud_drept(v_proiect, true) THEN RAISE EXCEPTION 'sud: doar managerul de proiect' USING ERRCODE = '42501'; END IF;
+  IF public.fn_sud_drept(v_proiect, 'scriere') IS NOT TRUE THEN RAISE EXCEPTION 'sud: doar managerul de proiect' USING ERRCODE = '42501'; END IF;
   IF p_data IS NULL OR p_data > current_date + 1 OR p_data < date '2000-01-01' THEN RAISE EXCEPTION 'sud: data buletinului invalida' USING ERRCODE = '22023'; END IF;
   IF p_citiri IS NOT NULL AND (jsonb_typeof(p_citiri) <> 'object' OR octet_length(p_citiri::text) > 2000000) THEN
     RAISE EXCEPTION 'sud: citirile AI au alt format sau sunt prea mari' USING ERRCODE = '22023';
   END IF;
-  -- fișierul: în bucket-ul izo-ndt, sub calea proiectului și a tronsonului, încărcat de același utilizator
+  -- fișierul: în bucket-ul izo-ndt, sub calea proiectului și a tronsonului, încărcat de același utilizator (owner_id = coloana pe care
+  -- politicile de încărcare o impun = auth.uid(); aceeași în politica de ștergere a orfanului)
   IF p_fisier_path IS NULL OR p_fisier_path !~ ('^' || v_proiect || '/' || p_tronson || '/[^/]+$')
-     OR NOT EXISTS (SELECT 1 FROM storage.objects o WHERE o.bucket_id = 'izo-ndt' AND o.name = p_fisier_path AND o.owner = auth.uid()) THEN
+     OR NOT EXISTS (SELECT 1 FROM storage.objects o WHERE o.bucket_id = 'izo-ndt' AND o.name = p_fisier_path AND o.owner_id = auth.uid()::text) THEN
     RAISE EXCEPTION 'sud: fisierul nu e in arhiva tronsonului sau nu e incarcat de tine' USING ERRCODE = '22023';
+  END IF;
+  -- valorile: refuz explicit (22023), nu CHECK-ul tabelului și nicio tăiere
+  IF p_metoda IS NULL OR p_metoda NOT IN ('PM', 'PA-UT', 'UT', 'PT', 'RT', 'VT', 'ALTA') THEN RAISE EXCEPTION 'sud: metoda invalida' USING ERRCODE = '22023'; END IF;
+  IF btrim(coalesce(p_numar, '')) = '' OR length(p_numar) > 60 OR length(p_firma) > 200 OR length(p_fisier_nume) > 300
+     OR length(p_forteaza_motiv) > 500 OR p_sha256 IS NULL OR p_sha256 !~ '^[0-9a-f]{64}$' THEN
+    RAISE EXCEPTION 'sud: numar / firma / nume fisier / motiv / amprenta invalide sau prea lungi' USING ERRCODE = '22023';
   END IF;
   v_cheie := upper(regexp_replace(btrim(coalesce(p_numar, '')), '\s+', '', 'g'));
   SELECT id INTO v_id FROM public.sud_buletine WHERE proiect_id = v_proiect AND fisier_sha256 = p_sha256 AND stare <> 'anulat' LIMIT 1;
@@ -308,7 +323,7 @@ BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION 'sud: neautentificat' USING ERRCODE = '42501'; END IF;
   SELECT * INTO b FROM public.sud_buletine WHERE id = p_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'sud: buletin inexistent' USING ERRCODE = '22023'; END IF;
-  IF NOT public.fn_sud_drept(b.proiect_id, true) THEN RAISE EXCEPTION 'sud: doar managerul de proiect' USING ERRCODE = '42501'; END IF;
+  IF public.fn_sud_drept(b.proiect_id, 'scriere') IS NOT TRUE THEN RAISE EXCEPTION 'sud: doar managerul de proiect' USING ERRCODE = '42501'; END IF;
   IF b.stare <> 'ciorna' THEN RAISE EXCEPTION 'sud: buletinul nu e ciorna (%)', b.stare USING ERRCODE = '55000'; END IF;
   IF p_versiune IS DISTINCT FROM b.versiune THEN RAISE EXCEPTION 'sud: buletinul s-a schimbat intre timp; reincarca' USING ERRCODE = '40001'; END IF;
   IF p_randuri IS NULL OR jsonb_typeof(p_randuri) <> 'array' OR jsonb_array_length(p_randuri) = 0 OR jsonb_array_length(p_randuri) > 2000 THEN
@@ -318,17 +333,24 @@ BEGIN
   FOR r IN SELECT x FROM jsonb_array_elements(p_randuri) x LOOP
     v_i := v_i + 1;
     IF jsonb_typeof(r) <> 'object' THEN RAISE EXCEPTION 'sud: randul % nu e obiect', v_i USING ERRCODE = '22023'; END IF;
-    v_rez := lower(btrim(coalesce(r->>'rezultat', '')));
+    -- tipurile câmpurilor (conținut extern: nicio coerciție tăcută, nicio trunchiere; peste limită = refuz, L21)
+    IF jsonb_typeof(r->'cod_raw') IS DISTINCT FROM 'string' OR length(r->>'cod_raw') > 80
+       OR jsonb_typeof(r->'rezultat') IS DISTINCT FROM 'string'
+       OR coalesce(jsonb_typeof(r->'data_inspectie'), 'null') NOT IN ('string', 'null')
+       OR (jsonb_typeof(r->'data_inspectie') = 'string' AND r->>'data_inspectie' !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+       OR coalesce(jsonb_typeof(r->'observatii'), 'null') NOT IN ('string', 'null') OR length(r->>'observatii') > 500
+       OR EXISTS (SELECT 1 FROM unnest(ARRAY['start_mm', 'end_mm', 'lungime_mm', 'inaltime_mm', 'adancime_mm']) k
+                   WHERE coalesce(jsonb_typeof(r->k), 'null') NOT IN ('number', 'null')) THEN
+      RAISE EXCEPTION 'sud: randul % are campuri de alt tip sau prea lungi (cod_raw text <= 80, data AAAA-LL-ZZ, indicatii numere, observatii <= 500)', v_i
+        USING ERRCODE = '22023';
+    END IF;
+    v_rez := lower(btrim(r->>'rezultat'));
     v_rez := CASE WHEN v_rez IN ('acceptat', 'accepted', 'admis') THEN 'acceptat' WHEN v_rez IN ('respins', 'rejected') THEN 'respins' END;
     IF v_rez IS NULL THEN RAISE EXCEPTION 'sud: randul % are rezultat necunoscut', v_i USING ERRCODE = '22023'; END IF;
-    -- peste limită = refuz, nu tăiere tăcută (L21)
-    IF length(coalesce(r->>'cod_raw', '')) > 80 OR length(r->>'observatii') > 500 THEN
-      RAISE EXCEPTION 'sud: randul % are codul (max 80) sau observatiile (max 500) prea lungi', v_i USING ERRCODE = '22023';
-    END IF;
     v_n := public.fn_sud_cod_normalizeaza(r->>'cod_raw', v_tnr);
     INSERT INTO public.sud_buletin_randuri (buletin_id, ordine, cod_raw, stare_cod, motiv_cod, tronson_nr, nr, sufix, refacuta, cheie, rezultat,
                                             data_inspectie, ind_start, ind_end, ind_lungime, ind_inaltime, ind_adancime, observatii)
-    VALUES (b.id, v_i, coalesce(r->>'cod_raw', ''), v_n->>'stare', v_n->>'motiv',
+    VALUES (b.id, v_i, r->>'cod_raw', v_n->>'stare', v_n->>'motiv',
             CASE WHEN v_n->>'stare' = 'ok' THEN (v_n->>'tronson')::integer END, CASE WHEN v_n->>'stare' = 'ok' THEN (v_n->>'nr')::integer END,
             coalesce(v_n->>'sufix', ''), coalesce((v_n->>'refacuta')::boolean, false), v_n->>'cheie', v_rez,
             (r->>'data_inspectie')::date, (r->>'start_mm')::numeric, (r->>'end_mm')::numeric, (r->>'lungime_mm')::numeric,
@@ -345,7 +367,7 @@ BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION 'sud: neautentificat' USING ERRCODE = '42501'; END IF;
   SELECT * INTO b FROM public.sud_buletine WHERE id = p_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'sud: buletin inexistent' USING ERRCODE = '22023'; END IF;
-  IF NOT public.fn_sud_drept(b.proiect_id, true) THEN RAISE EXCEPTION 'sud: doar managerul de proiect' USING ERRCODE = '42501'; END IF;
+  IF public.fn_sud_drept(b.proiect_id, 'scriere') IS NOT TRUE THEN RAISE EXCEPTION 'sud: doar managerul de proiect' USING ERRCODE = '42501'; END IF;
   IF b.stare = 'anulat' THEN RAISE EXCEPTION 'sud: buletinul e deja anulat' USING ERRCODE = '55000'; END IF;
   IF length(btrim(coalesce(p_motiv, ''))) < 3 THEN RAISE EXCEPTION 'sud: motivul anularii e obligatoriu' USING ERRCODE = '22023'; END IF;
   UPDATE public.sud_buletine SET stare = 'anulat', anulat_de = auth.uid(), anulat_la = now(), anulat_motiv = btrim(p_motiv), versiune = versiune + 1
@@ -359,7 +381,7 @@ BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION 'sud: neautentificat' USING ERRCODE = '42501'; END IF;
   SELECT proiect_id, public.fn_sud_tronson_nr(cod) INTO v_proiect, v_tnr FROM public.executie_tronsoane WHERE id = p_tronson FOR UPDATE;
   IF v_proiect IS NULL THEN RAISE EXCEPTION 'sud: tronson inexistent' USING ERRCODE = '22023'; END IF;
-  IF NOT public.fn_sud_drept(v_proiect, true) THEN RAISE EXCEPTION 'sud: doar managerul de proiect' USING ERRCODE = '42501'; END IF;
+  IF public.fn_sud_drept(v_proiect, 'scriere') IS NOT TRUE THEN RAISE EXCEPTION 'sud: doar managerul de proiect' USING ERRCODE = '42501'; END IF;
   IF length(btrim(coalesce(p_motiv, ''))) < 3 THEN RAISE EXCEPTION 'sud: motivul e obligatoriu' USING ERRCODE = '22023'; END IF;
   v_n := public.fn_sud_cod_normalizeaza(p_cod, v_tnr);
   IF v_n->>'stare' <> 'ok' OR (v_n->>'refacuta')::boolean THEN RAISE EXCEPTION 'sud: codul sudurii nu e valid pe acest tronson' USING ERRCODE = '22023'; END IF;
@@ -383,7 +405,7 @@ BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION 'sud: neautentificat' USING ERRCODE = '42501'; END IF;
   SELECT * INTO e FROM public.sud_suduri_eliminate WHERE id = p_id FOR UPDATE;
   IF NOT FOUND OR NOT e.activ THEN RAISE EXCEPTION 'sud: marcaj inexistent sau deja retras' USING ERRCODE = '22023'; END IF;
-  IF NOT public.fn_sud_drept(e.proiect_id, true) THEN RAISE EXCEPTION 'sud: doar managerul de proiect' USING ERRCODE = '42501'; END IF;
+  IF public.fn_sud_drept(e.proiect_id, 'scriere') IS NOT TRUE THEN RAISE EXCEPTION 'sud: doar managerul de proiect' USING ERRCODE = '42501'; END IF;
   IF length(btrim(coalesce(p_motiv, ''))) < 3 THEN RAISE EXCEPTION 'sud: motivul e obligatoriu' USING ERRCODE = '22023'; END IF;
   UPDATE public.sud_suduri_eliminate SET activ = false, retras_de = auth.uid(), retras_la = now(), retras_motiv = btrim(p_motiv) WHERE id = e.id;
 END $f$;
@@ -395,7 +417,7 @@ BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION 'sud: neautentificat' USING ERRCODE = '42501'; END IF;
   SELECT proiect_id INTO v_proiect FROM public.executie_pachete_lansare WHERE id = p_pachet FOR UPDATE;
   IF v_proiect IS NULL THEN RAISE EXCEPTION 'sud: pachet inexistent' USING ERRCODE = '22023'; END IF;
-  IF NOT public.fn_sud_drept(v_proiect, true) THEN RAISE EXCEPTION 'sud: doar managerul de proiect deblocheaza exportul' USING ERRCODE = '42501'; END IF;
+  IF public.fn_sud_drept(v_proiect, 'scriere') IS NOT TRUE THEN RAISE EXCEPTION 'sud: doar managerul de proiect deblocheaza exportul' USING ERRCODE = '42501'; END IF;
   IF p_tip NOT IN ('izo', 'inventar') THEN RAISE EXCEPTION 'sud: tip export invalid' USING ERRCODE = '22023'; END IF;
   IF length(btrim(coalesce(p_motiv, ''))) < 5 THEN RAISE EXCEPTION 'sud: motivul deblocarii e obligatoriu' USING ERRCODE = '22023'; END IF;
   IF p_lipsuri IS NULL OR jsonb_typeof(p_lipsuri) <> 'array' OR jsonb_array_length(p_lipsuri) = 0 OR octet_length(p_lipsuri::text) > 500000 THEN
@@ -406,30 +428,65 @@ BEGIN
   RETURN v_id;
 END $f$;
 
+-- Fotografia (R6, §22): {buletine: [{id, versiune}], eliminate: [cheie], metode: [metoda], lipsuri_blocante: [..], avertismente: [..] opțional}.
+-- Serverul o compară cu starea CURENTĂ, sub lock pe pachet: buletinele = EXACT mulțimea buletinelor confirmate ale tronsonului pachetului, cu
+-- versiunea lor (unul în plus, lipsă, anulat, ciornă, al altui tronson / proiect sau cu altă versiune = diferență); eliminatele = setul activ
+-- al tronsonului; metodele = cele obligatorii ale proiectului. Diferență = 40001 (sursele s-au schimbat: reîncarcă fereastra), nimic scris.
+-- Lipsurile NU le poate recalcula serverul în PR1a (regulile lor vin cu PR2): exportul complet cere lipsuri_blocante = []; cel incomplet cere
+-- deblocarea MP-ului pentru EXACT acele lipsuri (a lui, nefolosită, de cel mult o oră, același pachet și tip), consumată doar la înregistrare.
+-- Ordinea lock-urilor (L06): pachetul FOR UPDATE → deblocarea FOR UPDATE; sursele doar citite (o schimbare după verificare = „export depășit”, R6).
 CREATE FUNCTION public.fn_sud_export_inregistreaza(p_pachet bigint, p_tip text, p_fotografie jsonb, p_deblocare_id bigint, p_fisier_path text)
 RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
-DECLARE v_proiect bigint; v_id bigint; d public.sud_export_deblocari%ROWTYPE;
+DECLARE v_proiect bigint; v_tronson bigint; v_id bigint; d public.sud_export_deblocari%ROWTYPE; v_rau text;
 BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION 'sud: neautentificat' USING ERRCODE = '42501'; END IF;
-  SELECT proiect_id INTO v_proiect FROM public.executie_pachete_lansare WHERE id = p_pachet FOR UPDATE;
+  SELECT proiect_id, tronson_id INTO v_proiect, v_tronson FROM public.executie_pachete_lansare WHERE id = p_pachet FOR UPDATE;
   IF v_proiect IS NULL THEN RAISE EXCEPTION 'sud: pachet inexistent' USING ERRCODE = '22023'; END IF;
-  -- exportul complet îl poate înregistra oricine poate scrie pachetele proiectului (ca exportul de azi); cel incomplet doar MP-ul, cu deblocarea lui
+  IF p_tip IS NULL OR p_tip NOT IN ('izo', 'inventar') THEN RAISE EXCEPTION 'sud: tip export invalid' USING ERRCODE = '22023'; END IF;
+  IF p_fotografie IS NULL OR jsonb_typeof(p_fotografie) <> 'object' OR octet_length(p_fotografie::text) > 2000000
+     OR jsonb_typeof(p_fotografie->'buletine') IS DISTINCT FROM 'array' OR jsonb_typeof(p_fotografie->'eliminate') IS DISTINCT FROM 'array'
+     OR jsonb_typeof(p_fotografie->'metode') IS DISTINCT FROM 'array' OR jsonb_typeof(p_fotografie->'lipsuri_blocante') IS DISTINCT FROM 'array'
+     OR coalesce(jsonb_typeof(p_fotografie->'avertismente'), 'array') <> 'array' OR length(p_fisier_path) > 500 THEN
+    RAISE EXCEPTION 'sud: fotografia exportului e incompleta (buletine, eliminate, metode, lipsuri_blocante)' USING ERRCODE = '22023';
+  END IF;
+  IF EXISTS (SELECT 1 FROM jsonb_array_elements(p_fotografie->'buletine') e
+              WHERE jsonb_typeof(e) <> 'object' OR jsonb_typeof(e->'id') IS DISTINCT FROM 'number' OR jsonb_typeof(e->'versiune') IS DISTINCT FROM 'number'
+                 OR e->>'id' !~ '^[0-9]{1,18}$' OR e->>'versiune' !~ '^[0-9]{1,9}$')
+     OR EXISTS (SELECT 1 FROM jsonb_array_elements(p_fotografie->'eliminate') e WHERE jsonb_typeof(e) <> 'string')
+     OR EXISTS (SELECT 1 FROM jsonb_array_elements(p_fotografie->'metode') e WHERE jsonb_typeof(e) <> 'string') THEN
+    RAISE EXCEPTION 'sud: elementele fotografiei au alt tip (buletine {id, versiune} intregi, eliminate / metode text)' USING ERRCODE = '22023';
+  END IF;
   IF p_deblocare_id IS NULL THEN
-    IF NOT (public.fn_sud_drept(v_proiect, true) OR (public.fn_executie_pachete_acces(true) AND public.fn_executie_proiect_permis(v_proiect, true))) THEN
-      RAISE EXCEPTION 'sud: fara drept de export pe proiect' USING ERRCODE = '42501';
+    -- exportul complet: oricine are dreptul de export (ca exportul de azi), doar fără lipsuri blocante
+    IF public.fn_sud_drept(v_proiect, 'export') IS NOT TRUE THEN RAISE EXCEPTION 'sud: fara drept de export pe proiect' USING ERRCODE = '42501'; END IF;
+    IF jsonb_array_length(p_fotografie->'lipsuri_blocante') > 0 THEN
+      RAISE EXCEPTION 'sud: exportul are lipsuri blocante; cere deblocarea managerului de proiect' USING ERRCODE = '42501';
     END IF;
   ELSE
+    IF public.fn_sud_drept(v_proiect, 'scriere') IS NOT TRUE THEN RAISE EXCEPTION 'sud: doar managerul de proiect' USING ERRCODE = '42501'; END IF;
     SELECT * INTO d FROM public.sud_export_deblocari WHERE id = p_deblocare_id FOR UPDATE;
     IF NOT FOUND OR d.pachet_id <> p_pachet OR d.tip <> p_tip OR d.creat_de <> auth.uid() OR d.folosit_la IS NOT NULL
-       OR d.creat_la < now() - interval '1 hour' THEN
+       OR d.creat_la < now() - interval '1 hour' OR d.lipsuri IS DISTINCT FROM p_fotografie->'lipsuri_blocante' THEN
       RAISE EXCEPTION 'sud: deblocarea nu e valabila pentru acest export' USING ERRCODE = '42501';
     END IF;
-    IF NOT public.fn_sud_drept(v_proiect, true) THEN RAISE EXCEPTION 'sud: doar managerul de proiect' USING ERRCODE = '42501'; END IF;
-    UPDATE public.sud_export_deblocari SET folosit_la = now() WHERE id = d.id;
   END IF;
-  IF p_tip NOT IN ('izo', 'inventar') OR p_fotografie IS NULL OR jsonb_typeof(p_fotografie) <> 'object' OR octet_length(p_fotografie::text) > 2000000 THEN
-    RAISE EXCEPTION 'sud: tipul sau fotografia exportului sunt invalide' USING ERRCODE = '22023';
-  END IF;
+  -- sursele: aceleași ca acum (mulțimi întregi, cu dublurile numărate)
+  SELECT string_agg(x, ', ' ORDER BY x) INTO v_rau FROM (
+    SELECT 'buletine' AS x
+     WHERE (SELECT coalesce(array_agg(k ORDER BY k), '{}') FROM (SELECT (e->>'id') || ':' || (e->>'versiune') AS k
+                                                                    FROM jsonb_array_elements(p_fotografie->'buletine') e) fb)
+           IS DISTINCT FROM
+           (SELECT coalesce(array_agg(k ORDER BY k), '{}') FROM (SELECT b.id::text || ':' || b.versiune::text AS k FROM public.sud_buletine b
+                                                                   WHERE b.tronson_id = v_tronson AND b.proiect_id = v_proiect AND b.stare = 'confirmat') sb)
+    UNION ALL
+    SELECT 'eliminate' WHERE (SELECT coalesce(array_agg(x ORDER BY x), '{}') FROM jsonb_array_elements_text(p_fotografie->'eliminate') x)
+      IS DISTINCT FROM (SELECT coalesce(array_agg(cheie ORDER BY cheie), '{}') FROM public.sud_suduri_eliminate WHERE tronson_id = v_tronson AND activ)
+    UNION ALL
+    SELECT 'metode' WHERE (SELECT coalesce(array_agg(x ORDER BY x), '{}') FROM jsonb_array_elements_text(p_fotografie->'metode') x)
+      IS DISTINCT FROM coalesce((SELECT metode FROM public.sud_metode_proiect WHERE proiect_id = v_proiect), '{}')
+  ) z;
+  IF v_rau IS NOT NULL THEN RAISE EXCEPTION 'sud: sursele s-au schimbat intre verificare si export (%); reincarca fereastra', v_rau USING ERRCODE = '40001'; END IF;
+  IF p_deblocare_id IS NOT NULL THEN UPDATE public.sud_export_deblocari SET folosit_la = now() WHERE id = d.id; END IF;
   INSERT INTO public.sud_exporturi (proiect_id, pachet_id, tip, fotografie, incomplet, deblocare_id, fisier_path, creat_de)
   VALUES (v_proiect, p_pachet, p_tip, p_fotografie, p_deblocare_id IS NOT NULL, p_deblocare_id, p_fisier_path, auth.uid()) RETURNING id INTO v_id;
   RETURN v_id;
@@ -450,25 +507,25 @@ GRANT SELECT ON public.sud_metode_proiect, public.sud_buletine, public.sud_bulet
 REVOKE ALL ON SEQUENCE public.sud_buletine_id_seq, public.sud_buletin_randuri_id_seq, public.sud_suduri_eliminate_id_seq,
               public.sud_export_deblocari_id_seq, public.sud_exporturi_id_seq FROM PUBLIC, anon, authenticated, service_role;
 CREATE POLICY sud_metode_proiect_citire ON public.sud_metode_proiect FOR SELECT TO authenticated
-  USING ((SELECT public.fn_sud_drept(proiect_id, false)));
+  USING ((SELECT public.fn_sud_drept(proiect_id, 'citire')));
 CREATE POLICY sud_buletine_citire ON public.sud_buletine FOR SELECT TO authenticated
-  USING ((SELECT public.fn_sud_drept(proiect_id, false)));
+  USING ((SELECT public.fn_sud_drept(proiect_id, 'citire')));
 CREATE POLICY sud_buletin_randuri_citire ON public.sud_buletin_randuri FOR SELECT TO authenticated
   USING (EXISTS (SELECT 1 FROM public.sud_buletine b WHERE b.id = buletin_id));
 CREATE POLICY sud_suduri_eliminate_citire ON public.sud_suduri_eliminate FOR SELECT TO authenticated
-  USING ((SELECT public.fn_sud_drept(proiect_id, false)));
+  USING ((SELECT public.fn_sud_drept(proiect_id, 'citire')));
 CREATE POLICY sud_export_deblocari_citire ON public.sud_export_deblocari FOR SELECT TO authenticated
-  USING ((SELECT public.fn_sud_drept(proiect_id, false)));
+  USING ((SELECT public.fn_sud_drept(proiect_id, 'citire')));
 CREATE POLICY sud_exporturi_citire ON public.sud_exporturi FOR SELECT TO authenticated
-  USING ((SELECT public.fn_sud_drept(proiect_id, false)));
+  USING ((SELECT public.fn_sud_drept(proiect_id, 'citire')));
 
-REVOKE ALL ON FUNCTION public.fn_sud_drept(bigint, boolean), public.fn_sud_cod_normalizeaza(text, integer), public.fn_sud_tronson_nr(text),
+REVOKE ALL ON FUNCTION public.fn_sud_drept(bigint, text), public.fn_sud_cod_normalizeaza(text, integer), public.fn_sud_tronson_nr(text),
   public.fn_sud_metode_seteaza(bigint, text[]),
   public.fn_sud_buletin_incarca(bigint, text, text, date, text, text, text, text, jsonb, text), public.fn_sud_buletin_confirma(bigint, integer, jsonb),
   public.fn_sud_buletin_anuleaza(bigint, text), public.fn_sud_sudura_elimina(bigint, text, text, text[]),
   public.fn_sud_sudura_eliminare_retrage(bigint, text), public.fn_sud_export_deblocheaza(bigint, text, text, jsonb),
   public.fn_sud_export_inregistreaza(bigint, text, jsonb, bigint, text) FROM PUBLIC, anon, service_role;
-GRANT EXECUTE ON FUNCTION public.fn_sud_drept(bigint, boolean), public.fn_sud_cod_normalizeaza(text, integer), public.fn_sud_tronson_nr(text),
+GRANT EXECUTE ON FUNCTION public.fn_sud_drept(bigint, text), public.fn_sud_cod_normalizeaza(text, integer), public.fn_sud_tronson_nr(text),
   public.fn_sud_metode_seteaza(bigint, text[]),
   public.fn_sud_buletin_incarca(bigint, text, text, date, text, text, text, text, jsonb, text), public.fn_sud_buletin_confirma(bigint, integer, jsonb),
   public.fn_sud_buletin_anuleaza(bigint, text), public.fn_sud_sudura_elimina(bigint, text, text, text[]),
@@ -480,12 +537,37 @@ INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_typ
 VALUES ('izo-ndt', 'izo-ndt', false, 52428800, ARRAY['application/pdf']);
 CREATE POLICY sud_ndt_citire ON storage.objects FOR SELECT TO authenticated
   USING (bucket_id = 'izo-ndt' AND name ~ '^[0-9]{1,18}/[0-9]{1,18}/[^/]+$'
-         AND (SELECT public.fn_sud_drept(split_part(name, '/', 1)::bigint, false)));
+         AND (SELECT public.fn_sud_drept(split_part(name, '/', 1)::bigint, 'citire')));
 CREATE POLICY sud_ndt_incarcare ON storage.objects FOR INSERT TO authenticated
-  WITH CHECK (bucket_id = 'izo-ndt' AND name ~ '^[0-9]{1,18}/[0-9]{1,18}/[^/]+$'
+  WITH CHECK (bucket_id = 'izo-ndt' AND name ~ '^[0-9]{1,18}/[0-9]{1,18}/[^/]+$' AND owner_id = (SELECT auth.uid())::text
               AND EXISTS (SELECT 1 FROM public.executie_tronsoane t WHERE t.id = split_part(name, '/', 2)::bigint
                             AND t.proiect_id = split_part(name, '/', 1)::bigint)
-              AND (SELECT public.fn_sud_drept(split_part(name, '/', 1)::bigint, true)));
+              AND (SELECT public.fn_sud_drept(split_part(name, '/', 1)::bigint, 'scriere')));
+-- ștergerea propriului fișier, doar cât NU e înregistrat într-un buletin (orfanul unei încărcări refuzate; buletinele anulate țin fișierul).
+-- Cere și dreptul de CITIRE pe proiect: verificarea „neînregistrat” citește sud_buletine sub RLS-ul apelantului, care vede buletinele
+-- proiectului doar cu citire; fără ea, un buletin nevăzut ar lăsa fișierul înregistrat să pară orfan.
+CREATE POLICY sud_ndt_sterge_orfan ON storage.objects FOR DELETE TO authenticated
+  USING (bucket_id = 'izo-ndt' AND name ~ '^[0-9]{1,18}/[0-9]{1,18}/[^/]+$' AND owner_id = (SELECT auth.uid())::text
+         AND (SELECT public.fn_sud_drept(split_part(name, '/', 1)::bigint, 'citire'))
+         AND NOT EXISTS (SELECT 1 FROM public.sud_buletine b WHERE b.fisier_path = objects.name));
+-- RESTRICTIVE (tiparul izo_aviz_pdf_r_*, 20261120a): pe bucket-ul izo-ndt rămân valabile oricât de largă ar fi altă politică permisivă.
+-- _sel / _ins / _del cheamă funcții și tabele fără drept pentru anon → TO authenticated; anon e oprit pe bucket de _anon (FOR ALL).
+CREATE POLICY sud_ndt_r_sel ON storage.objects AS RESTRICTIVE FOR SELECT TO authenticated
+  USING (bucket_id IS DISTINCT FROM 'izo-ndt' OR (auth.uid() IS NOT NULL AND name ~ '^[0-9]{1,18}/[0-9]{1,18}/[^/]+$'
+         AND public.fn_sud_drept(split_part(name, '/', 1)::bigint, 'citire')));
+CREATE POLICY sud_ndt_r_ins ON storage.objects AS RESTRICTIVE FOR INSERT TO authenticated
+  WITH CHECK (bucket_id IS DISTINCT FROM 'izo-ndt' OR (auth.uid() IS NOT NULL AND name ~ '^[0-9]{1,18}/[0-9]{1,18}/[^/]+$'
+              AND owner_id = auth.uid()::text AND public.fn_sud_drept(split_part(name, '/', 1)::bigint, 'scriere')
+              AND EXISTS (SELECT 1 FROM public.executie_tronsoane t WHERE t.id = split_part(name, '/', 2)::bigint
+                            AND t.proiect_id = split_part(name, '/', 1)::bigint)));
+CREATE POLICY sud_ndt_r_upd ON storage.objects AS RESTRICTIVE FOR UPDATE TO PUBLIC
+  USING (bucket_id IS DISTINCT FROM 'izo-ndt') WITH CHECK (bucket_id IS DISTINCT FROM 'izo-ndt');
+CREATE POLICY sud_ndt_r_del ON storage.objects AS RESTRICTIVE FOR DELETE TO authenticated
+  USING (bucket_id IS DISTINCT FROM 'izo-ndt' OR (auth.uid() IS NOT NULL AND name ~ '^[0-9]{1,18}/[0-9]{1,18}/[^/]+$'
+         AND owner_id = auth.uid()::text AND public.fn_sud_drept(split_part(name, '/', 1)::bigint, 'citire')
+         AND NOT EXISTS (SELECT 1 FROM public.sud_buletine b WHERE b.fisier_path = objects.name)));
+CREATE POLICY sud_ndt_r_anon ON storage.objects AS RESTRICTIVE FOR ALL TO anon
+  USING (bucket_id IS DISTINCT FROM 'izo-ndt') WITH CHECK (bucket_id IS DISTINCT FROM 'izo-ndt');
 
 -- ─────────── postcondiții ───────────
 DO $post$
@@ -522,10 +604,27 @@ BEGIN
   IF (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_sud\_%') <> 11 THEN
     RAISE EXCEPTION '20270114a post: numarul functiilor fn_sud_';
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM storage.buckets WHERE id = 'izo-ndt' AND public IS FALSE)
-     OR (SELECT count(*) FROM pg_policy WHERE polrelid = 'storage.objects'::regclass AND polname LIKE 'sud\_ndt\_%') <> 2 THEN
-    RAISE EXCEPTION '20270114a post: bucket izo-ndt / politicile lui';
+  -- bucket-ul privat + EXACT cele 8 politici sud_ndt_ cu comanda, felul (permisivă / RESTRICTIVĂ) și rolurile lor
+  SELECT string_agg(coalesce(a.n, p.polname::text), ', ' ORDER BY coalesce(a.n, p.polname::text)) INTO v_rau
+    FROM (VALUES ('sud_ndt_citire', 'r', true, '{authenticated}'), ('sud_ndt_incarcare', 'a', true, '{authenticated}'),
+                 ('sud_ndt_sterge_orfan', 'd', true, '{authenticated}'), ('sud_ndt_r_sel', 'r', false, '{authenticated}'),
+                 ('sud_ndt_r_ins', 'a', false, '{authenticated}'), ('sud_ndt_r_upd', 'w', false, '{public}'),
+                 ('sud_ndt_r_del', 'd', false, '{authenticated}'), ('sud_ndt_r_anon', '*', false, '{anon}')) a(n, cmd, perm, roluri)
+    FULL JOIN (SELECT * FROM pg_policy WHERE polrelid = 'storage.objects'::regclass AND polname LIKE 'sud\_ndt\_%') p ON p.polname = a.n
+   WHERE a.n IS NULL OR p.polname IS NULL OR p.polcmd::text IS DISTINCT FROM a.cmd OR p.polpermissive IS DISTINCT FROM a.perm
+      OR (SELECT array_agg(q.rol ORDER BY q.rol) FROM (SELECT CASE r WHEN 0 THEN 'public' ELSE pg_get_userbyid(r)::text END AS rol
+                                                          FROM unnest(p.polroles) r) q)
+         IS DISTINCT FROM a.roluri::text[];
+  IF v_rau IS NOT NULL OR NOT EXISTS (SELECT 1 FROM storage.buckets WHERE id = 'izo-ndt' AND public IS FALSE) THEN
+    RAISE EXCEPTION '20270114a post: bucket izo-ndt / politicile lui: %', coalesce(v_rau, 'bucket');
   END IF;
+  -- informativ: politicile PERMISIVE pe storage.objects care nu încep cu bucket_id = '<un bucket>' (pe producție 27.11.2026: niciuna);
+  --   oricum nu ajung la izo-ndt fără să treacă de cele RESTRICTIVE sud_ndt_r_*
+  SELECT string_agg(polname, ', ' ORDER BY polname) INTO v_rau FROM pg_policy
+   WHERE polrelid = 'storage.objects'::regclass AND polpermissive AND polname NOT LIKE 'sud\_ndt\_%'
+     AND NOT (coalesce(pg_get_expr(polqual, polrelid), pg_get_expr(polwithcheck, polrelid), '') ~ '^\(*bucket_id = ''[a-z0-9_-]+''::text'
+              AND coalesce(pg_get_expr(polwithcheck, polrelid), pg_get_expr(polqual, polrelid), '') ~ '^\(*bucket_id = ''[a-z0-9_-]+''::text');
+  IF v_rau IS NOT NULL THEN RAISE NOTICE '20270114a: politici permisive storage fara bucket fix (acoperite de sud_ndt_r_*): %', v_rau; END IF;
   -- normalizatorul: cazurile de bază (setul complet e în proba PGlite)
   IF public.fn_sud_cod_normalizeaza('GAZPET TR12 S126R', 12) IS DISTINCT FROM
        '{"nr": 126, "cheie": "T12S126", "motiv": null, "stare": "ok", "sufix": "", "tronson": 12, "refacuta": true}'::jsonb
