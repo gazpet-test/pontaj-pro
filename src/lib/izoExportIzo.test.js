@@ -26,7 +26,8 @@ const tronson = { id: 5, cod: 'T7', proiect_id: 1 }
 const tevi = [teava(1, 'S-1', 'T7S1'), teava(2, 'S-2', 'T7S2'), teava(3, 'S-3', null)]
 const buletine = [bul(11, 'PA-UT', '77', '2026-10-28'), bul(12, 'PM', '5', '2026-10-21')]
 const randuri = [rnd(1, 11, 1), rnd(2, 11, 2), rnd(3, 12, 1), rnd(4, 12, 2)]
-const arhiva = (o = {}) => ({ ok: true, buletine, randuri, eliminate: [], metode: ['PA-UT', 'PM'], pachetAnterior: null, drept: { citire: true, scriere: true, export: true }, ...o })
+const AMP = '0123456789abcdef0123456789abcdef'   // amprenta serverului (fn_sud_amprenta_pachet, 20270115b)
+const arhiva = (o = {}) => ({ ok: true, buletine, randuri, eliminate: [], metode: ['PA-UT', 'PM'], pachetAnterior: null, drept: { citire: true, scriere: true, export: true }, amprentaServer: AMP, ...o })
 
 describe('randuriPentruStare — rândurile din BD', () => {
   it('cheia se reface din tronson_nr / nr / sufix (forma JS „7|1|”), nu din cheia BD „T7S1”', () => {
@@ -120,7 +121,7 @@ describe('lipsuri → fereastra', () => {
     expect(g[1].coduri.map(c => [c.cod, c.elemente.map(e => e.rand)])).toEqual([['buletin_lipsa', [1, 2]], ['buletin_fara_pdf', [1]]])
   })
   it('starea butonului: blocaj → dezactivat; deblocabil → doar MP, cu bifă și motiv ≥ 5', () => {
-    const ev = (o) => ({ fotografie: {}, verificare: { blocaje: [], blocajeDeblocabile: [], avertismente: [], ...o } })
+    const ev = (o) => ({ fotografie: { amprenta_pachet: AMP }, verificare: { blocaje: [], blocajeDeblocabile: [], avertismente: [], ...o } })
     const L = [{ cod: 'buletin_lipsa', rand: 1, mesaj: 'x' }]
     expect(stareButonExport({ evaluare: ev({ blocaje: [{ cod: 'km_start_lipsa' }] }), drept: { scriere: true } }).activ).toBe(false)
     expect(stareButonExport({ evaluare: ev({ blocajeDeblocabile: L }), drept: { scriere: false }, bifa: true, motiv: 'motiv lung' }).activ).toBe(false)
@@ -130,6 +131,38 @@ describe('lipsuri → fereastra', () => {
     expect(stareButonExport({ evaluare: ev({ blocajeDeblocabile: L }), drept: { scriere: true }, bifa: true, motiv: 'lipsă PM' })).toEqual({ activ: true, incomplet: true, motiv: null })
     expect(stareButonExport({ evaluare: ev({}), drept: { export: false } }).activ).toBe(false)
     expect(stareButonExport({ evaluare: ev({}), drept: { export: null } })).toEqual({ activ: true, incomplet: false, motiv: null })
+  })
+  it('20270115b: fără amprenta serverului (lipsă / altă formă) butonul rămâne oprit, pe ambele căi (complet și deblocat)', () => {
+    const L = [{ cod: 'buletin_lipsa', rand: 1, mesaj: 'x' }]
+    for (const amp of [null, undefined, '', AMP.toUpperCase(), AMP.slice(1), 42]) {
+      const ev = o => ({ fotografie: { amprenta_pachet: amp }, verificare: { blocaje: [], blocajeDeblocabile: [], avertismente: [], ...o } })
+      const c = stareButonExport({ evaluare: ev({}), drept: { export: true } })
+      expect(c.activ).toBe(false); expect(c.motiv).toMatch(/Amprenta pachetului de pe server/)
+      const d = stareButonExport({ evaluare: ev({ blocajeDeblocabile: L }), drept: { scriere: true }, bifa: true, motiv: 'lipsă PM' })
+      expect(d).toMatchObject({ activ: false, incomplet: true }); expect(d.motiv).toMatch(/Amprenta pachetului de pe server/)
+    }
+    // fără drept de export mesajul rămâne cel al dreptului
+    expect(stareButonExport({ evaluare: { fotografie: { amprenta_pachet: null }, verificare: { blocaje: [], blocajeDeblocabile: [], avertismente: [] } }, drept: { export: false } }).motiv).toMatch(/Nu ai drept de export/)
+  })
+})
+
+describe('20270115b: amprenta serverului în fotografie și în „export depășit”', () => {
+  it('fotografia o ia din arhivă doar în forma md5 hex minuscul; altfel null', () => {
+    const v = { blocajeDeblocabile: [], avertismente: [] }
+    expect(construiesteFotografie({ arhiva: arhiva(), verificare: v }).amprenta_pachet).toBe(AMP)
+    for (const a of [null, undefined, AMP.toUpperCase(), AMP + '0', 'x'.repeat(32), 5]) {
+      expect(construiesteFotografie({ arhiva: arhiva({ amprentaServer: a }), verificare: v }).amprenta_pachet).toBe(null)
+    }
+  })
+  it('amprente diferite cu rândurile clientului identice = diferență; una lipsă (export vechi / citire eșuată) = nu se compară', () => {
+    const f = o => ({ pachet: amprentaPachet(pachet), randuri: amprentaRanduri(tevi), ...o })
+    expect(diferentePachet(f({ amprenta_pachet: AMP }), f({ amprenta_pachet: AMP }))).toEqual([])
+    expect(diferentePachet(f({ amprenta_pachet: AMP }), f({ amprenta_pachet: 'f'.repeat(32) }), 'după export')).toEqual(['Pachetul sau rândurile lui s-au schimbat după export (amprenta calculată de server).'])
+    expect(diferentePachet(f({}), f({ amprenta_pachet: AMP }))).toEqual([])
+    expect(diferentePachet(f({ amprenta_pachet: AMP }), f({ amprenta_pachet: null }))).toEqual([])
+    // o diferență a clientului nu se dublează cu cea a serverului
+    const dif = diferentePachet(f({ amprenta_pachet: AMP }), { ...f({ amprenta_pachet: 'f'.repeat(32) }), pachet: { ...amprentaPachet(pachet), revizie: 1 } })
+    expect(dif).toHaveLength(1); expect(dif[0]).toMatch(/Revizia/)
   })
 })
 

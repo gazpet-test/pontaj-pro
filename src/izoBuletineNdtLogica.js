@@ -200,6 +200,14 @@ export function mapeazaRaspunsEdge({ data = null, error = null, status = null, c
   const st = Number(status ?? error?.context?.status ?? 0)
   const codB = String(b?.cod ?? b?.code ?? b?.eroare ?? '')
   const msgB = txt(b?.mesaj ?? b?.message ?? b?.error ?? '')
+  // cererea de citire păstrată pe server (20270115b): stările cererii, înaintea oricărei potriviri pe text
+  if (codB === 'citire_in_curs') return { tip: 'in_curs', mesaj: `${msgB || 'O citire a acestui buletin e deja în lucru.'} Apasă din nou peste câteva secunde: aceeași cerere nu se plătește de două ori.` }
+  if (codB === 'citire_necunoscuta') return { tip: 'necunoscuta', mesaj: msgB || 'Citirea pornită anterior nu s-a încheiat; rezultatul și costul sunt necunoscute.' }
+  if (codB === 'citire_esuata') return { tip: 'esuata', mesaj: msgB || 'Această cerere de citire s-a încheiat cu eroare. Pornește o citire nouă.' }
+  if (codB === 'prea_multe_citiri') return { tip: 'limita', mesaj: msgB || 'Buletinul a atins numărul maxim de citiri cu AI. Completează rândurile manual.' }
+  if (codB === 'cheie_alta_cerere') return { tip: 'eroare', mesaj: msgB || 'Cheia cererii a fost folosită pentru altă citire. Reîncarcă pagina.' }
+  // ordinea livrării (review PR #1222 r1 P1): edge nou, bază încă fără 20270115b = nimic rezervat, nimic consumat (cert, cheia iese)
+  if (codB === 'actualizare_in_curs') return { tip: 'nepublicat', mesaj: msgB || 'Citirea cu AI e oprită cât se face actualizarea serverului. Nimic consumat; introdu rândurile manual sau încearcă mai târziu.' }
   if (/plafon/i.test(codB) || /plafon/i.test(msgB)) {
     return { tip: 'plafon', mesaj: `Citirea cu AI nu e disponibilă acum (plafon AI atins sau neconfigurat). ${msgB}`.trim() + ' Introdu rândurile manual.' }
   }
@@ -215,7 +223,142 @@ export function mapeazaRaspunsEdge({ data = null, error = null, status = null, c
     return { tip: 'eroare', mesaj: msgB || txt(error?.message) || 'Citirea a eșuat.' }
   }
   const n = normalizeazaCitire(data)
-  return n.ok ? { tip: 'ok', citire: n.citire } : { tip: 'invalid', mesaj: n.mesaj }
+  if (!n.ok) return { tip: 'invalid', mesaj: n.mesaj }
+  // salvată = serverul a confirmat salvarea în sud_citiri (20270115b); orice altceva = nesalvată (avertismentul rămâne, L18)
+  const salvata = data?.salvata === true && Number.isSafeInteger(data?.citire_id) && data.citire_id > 0
+  return { tip: 'ok', citire: n.citire, salvata, citireId: salvata ? data.citire_id : null, idempotent: data?.idempotent === true }
+}
+
+/** Semnătura rândurilor editabile (doar valorile coloanelor, fără id-urile locale): rândurile neschimbate față de citirea salvată = nimic nesalvat. */
+export function semnaturaRanduri(randuri) {
+  return JSON.stringify((randuri || []).map(r => COLOANE_LIPIRE.map(k => (r?.[k] === null || r?.[k] === undefined ? '' : String(r[k])))))
+}
+
+/**
+ * Citirile salvate ale unui buletin (sud_citiri, stare „gata”) → ce se încarcă la deschidere: ultima citire principală și, dacă există,
+ * o citire alternativă MAI NOUĂ decât ea (pentru comparația existentă). Ordinea = id-ul (serverul îl dă crescător). Fără principală = nimic.
+ * @returns {{principal: object|null, alternativ: object|null}}
+ */
+export function alegeCitiriSalvate(lista) {
+  const gata = (Array.isArray(lista) ? lista : []).filter(x => x && x.stare === 'gata' && x.citire && typeof x.citire === 'object')
+  const desc = [...gata].sort((a, b) => Number(b.id) - Number(a.id))
+  const principal = desc.find(x => x.tip === 'principal') || null
+  const alternativ = principal ? desc.find(x => x.tip === 'alternativ' && Number(x.id) > Number(principal.id)) || null : null
+  return { principal, alternativ }
+}
+
+// ── cererile de citire păstrate în browser (review PR #1222 r1 P1: cheia nu se pierde) ──────────────
+// O intrare pe CHEIA cererii (UUID), nu o listă comună: două taburi nu-și suprascriu intrările. Intrarea se scrie și se verifică ÎNAINTEA
+// trimiterii (eșec = nu se trimite, L05) și iese doar la un rezultat dovedit: citire salvată, cerere încheiată pe server, refuz cert.
+// faza: 'trimisa' (cererea a plecat, rezultatul nu e încă știut) | 'nesalvata' (edge-ul a dat citirea, dar serverul n-a confirmat salvarea:
+// `raspuns` = citirea BRUTĂ + costul, exact cum le-a trimis edge-ul, pentru reluarea salvării cu aceeași cheie, fără apel AI).
+export const PREFIX_CERERE_NDT = 'izoNdtCitire:'
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+/** Stocarea locală a ferestrei; null dacă browserul n-o dă (mod privat, politică). Accesul însuși poate arunca. */
+export function stocareLocala(w = typeof window !== 'undefined' ? window : null) {
+  try { return w && w.localStorage ? w.localStorage : null } catch { return null }
+}
+
+function intrareValida(x) {
+  return !!x && typeof x === 'object' && x.v === 1 && typeof x.cerere === 'string' && UUID_RE.test(x.cerere)
+    && Number.isSafeInteger(x.buletin_id) && x.buletin_id > 0 && (x.tip === 'principal' || x.tip === 'alternativ')
+    && (x.faza === 'trimisa' || x.faza === 'nesalvata') && typeof x.creat_la === 'string'
+}
+
+/** Scrie intrarea și o recitește; true doar dacă ce s-a citit e identic cu ce s-a scris (stocare lipsă / plină / refuzată = false). */
+export function scrieCerereNdt(stocare, intrare) {
+  if (!stocare || !intrareValida(intrare)) return false
+  const k = PREFIX_CERERE_NDT + intrare.cerere, v = JSON.stringify(intrare)
+  try { stocare.setItem(k, v); return stocare.getItem(k) === v } catch { return false }
+}
+
+/** Scoate intrarea cheii; true dacă după ștergere nu mai există. */
+export function stergeCerereNdt(stocare, cerere) {
+  if (!stocare) return false
+  try { stocare.removeItem(PREFIX_CERERE_NDT + cerere); return stocare.getItem(PREFIX_CERERE_NDT + cerere) === null } catch { return false }
+}
+
+/**
+ * Intrările păstrate pentru un buletin, cele mai noi întâi. Intrările cu altă formă (alt prefix al altui modul nu se ating) se numără,
+ * nu dispar tăcut (L12). Eroarea de citire a stocării = { eroare } (L18: nu „nicio cerere”).
+ * @returns {{intrari: object[], invalide: number, eroare: string|null}}
+ */
+export function cereriNdtPastrate(stocare, buletinId) {
+  if (!stocare) return { intrari: [], invalide: 0, eroare: null }
+  const intrari = []
+  let invalide = 0
+  try {
+    for (let i = 0; i < stocare.length; i++) {
+      const k = stocare.key(i)
+      if (typeof k !== 'string' || !k.startsWith(PREFIX_CERERE_NDT)) continue
+      let x = null
+      try { x = JSON.parse(stocare.getItem(k)) } catch { x = null }
+      if (!intrareValida(x) || PREFIX_CERERE_NDT + x.cerere !== k) { invalide++; continue }
+      if (x.buletin_id === buletinId) intrari.push(x)
+    }
+  } catch (e) { return { intrari: [], invalide, eroare: e?.message || String(e) } }
+  intrari.sort((a, b) => (a.creat_la < b.creat_la ? 1 : a.creat_la > b.creat_la ? -1 : 0))
+  return { intrari, invalide, eroare: null }
+}
+
+/**
+ * Ce se face cu cheia după răspunsul edge-ului (rezultatul lui mapeazaRaspunsEdge):
+ *  'sterge'    = rezultat cert (citire salvată de server; refuz de reguli; cerere încheiată / necunoscută la server; funcție nepublicată);
+ *  'pastreaza' = necunoscut (rețea / 5xx / în lucru): apăsarea următoare reia ACEEAȘI cheie (L05);
+ *  'nesalvata' = citirea a venit, dar salvarea pe server nu e confirmată: cheia + citirea rămân, iar reluarea salvează cu aceeași cheie.
+ */
+export function decizieCheieNdt(r) {
+  if (!r || typeof r !== 'object') return 'pastreaza'
+  if (r.tip === 'ok') return r.salvata === true ? 'sterge' : 'nesalvata'
+  if (r.tip === 'necunoscut' || r.tip === 'in_curs') return 'pastreaza'
+  return 'sterge'
+}
+
+/** Partea din răspunsul edge-ului care se trimite înapoi, identic, la reluarea salvării (citirea brută + costul decontat). */
+export function raspunsDeSalvat(data) {
+  if (!data || typeof data !== 'object' || !data.citire || typeof data.citire !== 'object') return null
+  const cost = typeof data.cost_usd === 'number' && Number.isFinite(data.cost_usd) && data.cost_usd >= 0 ? data.cost_usd : null
+  if (cost === null || typeof data.cost_cunoscut !== 'boolean') return null
+  return { citire: data.citire, cost_usd: cost, cost_cunoscut: data.cost_cunoscut, model: typeof data.model === 'string' ? data.model : null }
+}
+
+/**
+ * Răspunsul fn_sud_citire_salveaza la reluarea salvării → { tip: 'salvata', id } | { tip: 'incheiata' | 'refuzata', mesaj } (certe: cheia iese)
+ * | { tip: 'necunoscut', mesaj } (cheia rămâne). Doar SQLSTATE-urile de reguli ale funcției sunt certe: 55000 (cererea e deja încheiată altfel /
+ * buletinul nu mai e ciornă), 22023 (citire de altă formă / cerere inexistentă). 42501 NU dovedește nimic (dreptul se verifică înaintea
+ * cererii), iar rețeaua / 5xx / lipsa funcției = necunoscut (L05).
+ */
+export function clasificaSalvareCitire({ data = null, error = null } = {}) {
+  if (!error) {
+    const id = Number(data)
+    if (Number.isSafeInteger(id) && id > 0 && (typeof data === 'number' || typeof data === 'string')) return { tip: 'salvata', id }
+    return { tip: 'necunoscut', mesaj: 'Serverul a răspuns fără id-ul citirii salvate. Nu se știe dacă s-a salvat: apasă din nou «Reia salvarea».' }
+  }
+  const cod = String(error.code ?? '')
+  const msg = txt(error.message)
+  if (cod === '55000') return { tip: 'incheiata', mesaj: `Cererea de citire e deja încheiată pe server (${msg || 'altă stare'}); citirea din ecran nu se mai poate salva. Rândurile rămân în tabel până la confirmare.` }
+  if (cod === '22023') return { tip: 'refuzata', mesaj: `Serverul a refuzat salvarea citirii (${msg || 'date invalide'}). Rândurile rămân în tabel până la confirmare.` }
+  return { tip: 'necunoscut', mesaj: `Salvarea nu s-a confirmat (${cod === '42501' ? 'dreptul nu a putut fi dovedit acum' : 'rețea / server'}). Citirea rămâne păstrată în acest browser: apasă din nou «Reia salvarea» (aceeași cerere, fără o nouă citire AI).` }
+}
+
+/**
+ * La deschidere: intrările păstrate față de rândurile sud_citiri ale buletinului (TOATE stările, nu doar „gata”).
+ * gata / esuat = rezultat dovedit → intrarea iese; in_curs / rând lipsă = rămâne (cheia se refolosește; „nesalvata” se poate salva).
+ * @returns {{cerere:string, actiune:'sterge'|'pastreaza', motiv:'salvata'|'esuata'|'de_salvat'|'in_lucru'|'fara_rand', rand:object|null, intrare:object}[]}
+ */
+export function reconciliazaCereriNdt(intrari, randuriServer) {
+  const peCheie = new Map()
+  for (const r of Array.isArray(randuriServer) ? randuriServer : []) {
+    if (r && typeof r.cheie_idempotenta === 'string') peCheie.set(r.cheie_idempotenta.toLowerCase(), r)
+  }
+  return (Array.isArray(intrari) ? intrari : []).map(intrare => {
+    const rand = peCheie.get(intrare.cerere.toLowerCase()) || null
+    if (rand?.stare === 'gata') return { cerere: intrare.cerere, actiune: 'sterge', motiv: 'salvata', rand, intrare }
+    if (rand?.stare === 'esuat') return { cerere: intrare.cerere, actiune: 'sterge', motiv: 'esuata', rand, intrare }
+    const motiv = rand ? (intrare.faza === 'nesalvata' ? 'de_salvat' : 'in_lucru') : 'fara_rand'
+    return { cerere: intrare.cerere, actiune: 'pastreaza', motiv, rand, intrare }
+  })
 }
 
 // ── rândurile editabile ──────────────────────────────────────────────────
