@@ -8,7 +8,8 @@
 // 2. livrarea L15 v2: manifestul generat = lista revizuită supabase/tests/20270116a_izometrie_coordonate_clase_subcontr.l15.obiecte.tsv (--scrie-obiecte
 //    o rescrie); GLOBAL greșit / manifest incomplet = refuz; livrarea aprobată + garda finală; dry-run-ul de pe clonă rulează aici și nu lasă nimic.
 // 3. COMPORTAMENT = dry-run-ul (valorile așteptate scrise de mână acolo) + verificările de aici (Storage: fereastra de o oră, orfanii, UPDATE, anon;
-//    limitele de mărime), ca authenticated cu JWT-ul fiecărui cont.
+//    limitele de mărime; tronsonul șters / mutat pe alt proiect / cu alt cod între încărcare și confirmare = refuz, dreptul pe proiectul actual;
+//    paritatea regulii clasei validator ↔ CHECK), ca authenticated cu JWT-ul fiecărui cont.
 // 4. paritatea cu src/lib/izoCoordonate.js: rândurile „ok” din parseazaCoordonate trec și primesc cheia JS; nesigure / nepotrivite / dubluri = refuz.
 // 5. revenirea: aplicare → revenire → reaplicare; revenirea cu date / fișiere / corp schimbat / obiect lipsă sau în plus = refuz, nimic schimbat.
 // 6. MUTANȚI: comportamentali (postcondițiile scoase: dry-run-ul / verificările / paritatea îi prind), structurali (postcondițiile), pe gărzi.
@@ -223,6 +224,79 @@ async function verifica(db) {
     for (const [c, n] of [['OWNER', 5], ['EXE', 5], ['CTC', 5], ['MPA', 0], ['MPB', 0], ['NOMOD', 0]]) {
       r = await ca(db, c, `SELECT count(*)::int AS n FROM storage.objects WHERE bucket_id = 'izo-sud-doc'`); asteapta(r.rows?.[0]?.n === n, `${c} vede ${n} fișiere în izo-sud-doc`, r)
       r = await ca(db, c, `SELECT count(*)::int AS n FROM storage.objects`); asteapta(!r.code, `${c} citește tot storage.objects fără eroare (obiectul nenumeric din alt bucket)`, r)
+    }
+    // (g) tronsonul recitit SUB LOCK la confirmare / anulare (review r1 P1): șters, mutat pe alt proiect, cod schimbat între încărcare și confirmare.
+    //     Confirmarea = refuz 22023 (dreptul pe proiectul ACTUAL: MP-ul vechi 42501), nimic activat / scris; anularea = dreptul pe proiectul actual
+    //     (tronson șters = proiectul încărcării); codul rescris cu același număr = calea legitimă (confirmarea trece).
+    await q(db, `INSERT INTO public.executie_tronsoane (id, proiect_id, cod) VALUES (1401, ${PA}, 'TR14'), (1402, ${PA}, 'TR15'), (1403, ${PA}, 'TR16'), (1404, ${PA}, 'TR17'), (1405, ${PA}, 'TR18')`)
+    const incarcaPe = async (t, chei) => { const u = await urca(db, 'MPA', `${PA}/${t}/g${t}.txt`); if (u.code) return u
+      return coordIncarca(db, 'MPA', t, `${PA}/${t}/g${t}.txt`, sha('g' + t), chei.map((k, i) => rand(i + 1, k))) }
+    const sursaPe = async t => { const u = await urca(db, 'MPA', `${PA}/${t}/g${t}.pdf`); if (u.code) return u
+      return ca(db, 'MPA', `SELECT public.fn_sud_clase_incarca(${t}, '${PA}/${t}/g${t}.pdf', 'g.pdf', '${sha('gs' + t)}', NULL) AS id`, [], { commit: true }) }
+    const confC = (cont, id) => ca(db, cont, `SELECT public.fn_sud_coord_confirma($1::bigint, 1, '{}') AS r`, [id], { commit: true })
+    const anC = (cont, id) => ca(db, cont, `SELECT public.fn_sud_coord_anuleaza($1::bigint, 1, 'tronson schimbat') AS r`, [id], { commit: true })
+    const confS = (cont, id) => ca(db, cont, `SELECT public.fn_sud_clase_confirma($1::bigint, 1, $2::jsonb) AS n`, [id, JSON.stringify([{ km_de: 0, km_pana: 100, clasa: '2' }])], { commit: true })
+    const anS = (cont, id) => ca(db, cont, `SELECT public.fn_sud_clase_anuleaza($1::bigint, 1, 'tronson schimbat') AS r`, [id], { commit: true })
+    const stareInc = async id => (await q(db, `SELECT i.stare || ':' || i.versiune || ':' || coalesce(string_agg(c.stare, ',' ORDER BY c.linie), '') AS s
+      FROM public.sud_coordonate_incarcari i LEFT JOIN public.sud_coordonate c ON c.incarcare_id = i.id WHERE i.id = $1 GROUP BY i.id`, [id]))[0]?.s
+    const stareSursa = async id => (await q(db, `SELECT s.stare || ':' || s.versiune || ':' || (SELECT count(*) FROM public.sud_clase_interval WHERE sursa_id = s.id) AS s
+      FROM public.sud_clase_surse s WHERE s.id = $1`, [id]))[0]?.s
+    const anulat = (r, n) => !r.code && r.rows?.[0]?.r?.anulate === n && JSON.stringify(r.rows?.[0]?.r?.fara_pozitie) === '[]'
+    const id = r => Number(r.rows?.[0]?.id)
+    // tronson șters (T14 coordonate, T15 clase)
+    r = await incarcaPe(1401, ['T14S1', 'T14S2']); const gSt = id(r); asteapta(gSt > 0, 'încărcarea pe T14', r)
+    r = await sursaPe(1402); const gSs = id(r); asteapta(gSs > 0, 'sursa claselor pe T15', r)
+    await q(db, 'DELETE FROM public.executie_tronsoane WHERE id IN (1401, 1402)')
+    for (const c of ['MPA', 'OWNER']) {
+      r = await confC(c, gSt); asteapta(r.code === '22023' && /tronsonul incarcarii nu mai exista/.test(r.message), `${c}: confirmarea coordonatelor pe tronsonul șters = 22023`, r)
+      r = await confS(c, gSs); asteapta(r.code === '22023' && /tronsonul sursei claselor nu mai exista/.test(r.message), `${c}: confirmarea claselor pe tronsonul șters = 22023`, r)
+    }
+    asteapta(await stareInc(gSt) === 'ciorna:1:propus,propus', 'tronson șters: nicio poziție activată', await stareInc(gSt))
+    asteapta(await stareSursa(gSs) === 'ciorna:1:0', 'tronson șters: niciun interval scris', await stareSursa(gSs))
+    r = await anC('MPA', gSt); asteapta(anulat(r, 2), 'MPA anulează încărcarea de pe tronsonul șters (dreptul pe proiectul încărcării): 2 anulate, nicio sudură fără poziție', r)
+    r = await anS('MPA', gSs); asteapta(!r.code && (await stareSursa(gSs)) === 'anulat:2:0', 'MPA anulează sursa de pe tronsonul șters', r)
+    // tronson mutat pe proiectul B (T16 coordonate, T17 clase)
+    r = await incarcaPe(1403, ['T16S1']); const gMt = id(r); asteapta(gMt > 0, 'încărcarea pe T16', r)
+    r = await sursaPe(1404); const gMs = id(r); asteapta(gMs > 0, 'sursa claselor pe T17', r)
+    await q(db, `UPDATE public.executie_tronsoane SET proiect_id = ${PB} WHERE id IN (1403, 1404)`)
+    r = await confC('MPA', gMt); asteapta(r.code === '42501', 'MPA (proiectul vechi): confirmarea coordonatelor pe tronsonul mutat = 42501 (dreptul pe proiectul actual)', r)
+    r = await confS('MPA', gMs); asteapta(r.code === '42501', 'MPA (proiectul vechi): confirmarea claselor pe tronsonul mutat = 42501', r)
+    for (const c of ['MPB', 'OWNER']) {
+      r = await confC(c, gMt); asteapta(r.code === '22023' && /mutat pe alt proiect/.test(r.message), `${c}: confirmarea coordonatelor pe tronsonul mutat = 22023`, r)
+      r = await confS(c, gMs); asteapta(r.code === '22023' && /mutat pe alt proiect/.test(r.message), `${c}: confirmarea claselor pe tronsonul mutat = 22023`, r)
+    }
+    asteapta(await stareInc(gMt) === 'ciorna:1:propus', 'tronson mutat: nicio poziție activată', await stareInc(gMt))
+    asteapta(await stareSursa(gMs) === 'ciorna:1:0', 'tronson mutat: niciun interval scris', await stareSursa(gMs))
+    r = await anC('MPA', gMt); asteapta(r.code === '42501', 'MPA (proiectul vechi) nu anulează încărcarea de pe tronsonul mutat', r)
+    r = await anS('MPA', gMs); asteapta(r.code === '42501', 'MPA (proiectul vechi) nu anulează sursa de pe tronsonul mutat', r)
+    r = await anC('MPB', gMt); asteapta(anulat(r, 1), 'MPB (proiectul actual) anulează încărcarea de pe tronsonul mutat', r)
+    r = await anS('MPB', gMs); asteapta(!r.code && (await stareSursa(gMs)) === 'anulat:2:0', 'MPB (proiectul actual) anulează sursa de pe tronsonul mutat', r)
+    // codul tronsonului schimbat (T18): alt număr / fără număr = 22023; rescris cu același număr = trece
+    r = await incarcaPe(1405, ['T18S1', 'T18S2']); const gCt = id(r); asteapta(gCt > 0, 'încărcarea pe T18', r)
+    for (const cod of ['TR19', 'FARA-NUMAR']) {
+      await q(db, `UPDATE public.executie_tronsoane SET cod = '${cod}' WHERE id = 1405`)
+      r = await confC('MPA', gCt); asteapta(r.code === '22023' && /codul tronsonului s-a schimbat/.test(r.message), `codul tronsonului schimbat în ${cod}: confirmarea = 22023`, r)
+    }
+    asteapta(await stareInc(gCt) === 'ciorna:1:propus,propus', 'cod schimbat: nicio poziție activată', await stareInc(gCt))
+    await q(db, `UPDATE public.executie_tronsoane SET cod = 'T18' WHERE id = 1405`)
+    r = await confC('MPA', gCt); asteapta(!r.code && r.rows?.[0]?.r?.active === 2, 'codul rescris cu același număr (TR18 → T18): confirmarea trece', r)
+    // (h) regula clasei (L19): validatorul + normalizarea de la scriere (upper(btrim())) = CHECK-ul tabelului, pe același tabel de cazuri scris de mână;
+    //     CHECK-ul refuză și forma nenormalizată
+    const ch = String.fromCharCode
+    const CLASE = [['1', '1'], [' 2a ', '2A'], ['iii', 'III'], ['CL.3', 'CL.3'], ['2/3', '2/3'], ['1+', '1+'], ['a-1', 'A-1'], ['ABCDEFGHIJ', 'ABCDEFGHIJ'], ['5', '5'],
+      ['ABCDEFGHIJK', null], ['', null], ['   ', null], ['2 A', null], ['3' + ch(9), null], [ch(10) + '3', null], ['3' + ch(160), null], ['3' + ch(8203), null],
+      ['CL' + ch(258), null], ['2_3', null], ['2,5', null], ['(3)', null], ['3' + ch(65279), null]]
+    const insereaza = async val => {
+      await db.exec('BEGIN')
+      try { await db.query(`INSERT INTO public.sud_clase_interval (sursa_id, proiect_id, tronson_id, ordine, km_de, km_pana, clasa, anulat) VALUES ($1, ${PA}, 1402, 999, 0, 1, $2, true)`, [gSs, val]); return true }
+      catch { return false } finally { await db.exec('ROLLBACK') }
+    }
+    for (const [x, astept] of CLASE) {
+      const v = (await q(db, `SELECT public.fn_sud_clasa_interval_valid(jsonb_build_object('km_de', 0, 'km_pana', 1, 'clasa', $1::text)) AS v, upper(btrim($1::text)) AS n`, [x]))[0]
+      const okCheck = await insereaza(v.n)
+      const brutRefuzat = astept === null || v.n === x || !(await insereaza(x))
+      asteapta((v.v === null) === (astept !== null) && okCheck === (astept !== null) && (astept === null || v.n === astept) && brutRefuzat,
+        `clasa ${JSON.stringify(x)}: validator ${v.v ?? 'valid'}, CHECK ${okCheck}, scris ${JSON.stringify(v.n)} (aștepta ${JSON.stringify(astept)})`)
     }
   } catch (e) { ab.push('excepție în verificări: ' + String(e.message).slice(0, 200)) }
   return ab
@@ -555,24 +629,25 @@ const MUTANTI = [
   ['M5 coordonatele cu oricâte zecimale', [["    IF v <> round(v, 3) THEN RETURN k || ': peste 3 zecimale'; END IF;\n    -- limita în variabilă", '    -- limita în variabilă'], ['x = round(x, 3) AND y = round(y, 3) AND z = round(z, 3)\n    AND ', '']]],
   ['M6 cheia sudurii din codul brut, nu din codul ales de om', [["         public.fn_sud_cod_normalizeaza(e.r->>'cod', v_tnr)->>'cheie',\n         (public", "         public.fn_sud_cod_normalizeaza(e.r->>'cod_raw', v_tnr)->>'cheie',\n         (public"]]],
   ['M7 rândul fără verificarea cheilor în plus', [["     OR EXISTS (SELECT 1 FROM jsonb_object_keys(r) j WHERE j NOT IN ('linie', 'cod_raw', 'cod', 'x', 'y', 'z')) THEN", '     THEN']]],
-  ['M8 confirmarea coordonatelor fără CAS pe versiune', [["  IF i.stare <> 'ciorna' THEN RAISE EXCEPTION 'sud: incarcarea nu e ciorna (%)', i.stare USING ERRCODE = '55000'; END IF;\n  IF p_versiune IS DISTINCT FROM i.versiune THEN RAISE EXCEPTION 'sud: incarcarea s-a schimbat intre timp; reincarca' USING ERRCODE = '40001'; END IF;\n  -- pozițiile",
-    "  IF i.stare <> 'ciorna' THEN RAISE EXCEPTION 'sud: incarcarea nu e ciorna (%)', i.stare USING ERRCODE = '55000'; END IF;\n  -- pozițiile"]]],
+  ['M8 confirmarea coordonatelor fără CAS pe versiune', [["  IF i.stare <> 'ciorna' THEN RAISE EXCEPTION 'sud: incarcarea nu e ciorna (%)', i.stare USING ERRCODE = '55000'; END IF;\n  IF p_versiune IS DISTINCT FROM i.versiune THEN RAISE EXCEPTION 'sud: incarcarea s-a schimbat intre timp; reincarca' USING ERRCODE = '40001'; END IF;\n  IF v_tp IS DISTINCT FROM i.proiect_id THEN",
+    "  IF i.stare <> 'ciorna' THEN RAISE EXCEPTION 'sud: incarcarea nu e ciorna (%)', i.stare USING ERRCODE = '55000'; END IF;\n  IF v_tp IS DISTINCT FROM i.proiect_id THEN"]]],
   ['M9 confirmarea fără confirmarea înlocuirilor', [['  IF v_cer IS DISTINCT FROM v_dif THEN', '  IF false THEN']]],
   ['M10 înlocuirile cerute și pentru valorile identice', [["  SELECT coalesce(array_agg(n.cheie ORDER BY n.cheie) FILTER (WHERE (a.x, a.y, a.z) IS DISTINCT FROM (n.x, n.y, n.z)), '{}'),", "  SELECT coalesce(array_agg(n.cheie ORDER BY n.cheie), '{}'),"]]],
-  ['M11 confirmarea fără dreptul de scriere', [["  SELECT * INTO i FROM public.sud_coordonate_incarcari WHERE id = p_incarcare FOR UPDATE;\n  IF public.fn_sud_drept(i.proiect_id, 'scriere') IS NOT TRUE THEN RAISE EXCEPTION 'sud: doar managerul de proiect' USING ERRCODE = '42501'; END IF;\n  IF i.stare <> 'ciorna'",
+  ['M11 confirmarea fără dreptul de scriere', [["  SELECT * INTO i FROM public.sud_coordonate_incarcari WHERE id = p_incarcare FOR UPDATE;\n  IF public.fn_sud_drept(v_tp, 'scriere') IS NOT TRUE THEN RAISE EXCEPTION 'sud: doar managerul de proiect' USING ERRCODE = '42501'; END IF;\n  IF i.stare <> 'ciorna'",
     "  SELECT * INTO i FROM public.sud_coordonate_incarcari WHERE id = p_incarcare FOR UPDATE;\n  IF i.stare <> 'ciorna'"]]],
   ['M12 anularea coordonatelor fără CAS', [["  IF i.stare = 'anulat' THEN RAISE EXCEPTION 'sud: incarcarea e deja anulata' USING ERRCODE = '55000'; END IF;\n  IF p_versiune IS DISTINCT FROM i.versiune THEN RAISE EXCEPTION 'sud: incarcarea s-a schimbat intre timp; reincarca' USING ERRCODE = '40001'; END IF;\n",
     "  IF i.stare = 'anulat' THEN RAISE EXCEPTION 'sud: incarcarea e deja anulata' USING ERRCODE = '55000'; END IF;\n"]]],
-  ['M13 anularea lasă pozițiile active', [["  UPDATE public.sud_coordonate SET stare = 'anulat' WHERE incarcare_id = i.id AND stare IN ('propus', 'activ');", "  UPDATE public.sud_coordonate SET stare = 'anulat' WHERE incarcare_id = i.id AND stare IN ('propus');"]]],
+  ['M13 anularea lasă pozițiile active', [["     WHERE v.id = c.id AND c.incarcare_id = i.id AND c.stare IN ('propus', 'activ')", "     WHERE v.id = c.id AND c.incarcare_id = i.id AND c.stare IN ('propus')"]]],
   ['M14 confirmarea claselor fără verificarea suprapunerilor (doar constrângerea)', [["  IF v_i IS NOT NULL THEN RAISE EXCEPTION 'sud: intervalele % si % se suprapun', v_i, v_j USING ERRCODE = '22023'; END IF;\n", '']]],
   ['M15 constrângerea de excludere și pe intervalele anulate', [['    WHERE (NOT anulat)\n);', '\n);']]],
   ['M16 intervale închise (capetele comune refuzate)', [["numrange(km_de, km_pana, '[)') WITH &&)", "numrange(km_de, km_pana, '[]') WITH &&)"], ["   WHERE a.i < b.i AND numrange((a.r->>'km_de')::numeric, (a.r->>'km_pana')::numeric, '[)') && numrange((b.r->>'km_de')::numeric, (b.r->>'km_pana')::numeric, '[)')",
     "   WHERE a.i < b.i AND numrange((a.r->>'km_de')::numeric, (a.r->>'km_pana')::numeric, '[]') && numrange((b.r->>'km_de')::numeric, (b.r->>'km_pana')::numeric, '[]')"]]],
-  ['M17 clasa în afara listei 1–4', [["  IF jsonb_typeof(r->'clasa') <> 'string' OR r->>'clasa' NOT IN ('1', '2', '3', '4') THEN RETURN 'clasa'; END IF;", "  IF jsonb_typeof(r->'clasa') <> 'string' THEN RETURN 'clasa'; END IF;"],
-    ["  clasa text NOT NULL CHECK (clasa IN ('1', '2', '3', '4')),", '  clasa text NOT NULL,']]],
+  ['M17 clasa fără regula de formă (orice text, și spații interne)', [["  IF jsonb_typeof(r->'clasa') <> 'string' OR btrim(r->>'clasa') !~ '^[0-9A-Za-z./+-]{1,10}$' THEN RETURN 'clasa'; END IF;", "  IF jsonb_typeof(r->'clasa') <> 'string' THEN RETURN 'clasa'; END IF;"],
+    ["  clasa text NOT NULL CHECK (clasa ~ '^[0-9A-Z./+-]{1,10}$'),", '  clasa text NOT NULL,']]],
+  ['M17b clasa scrisă fără normalizare (spațiile și literele mici rămân)', [["(e.r->>'km_pana')::numeric, upper(btrim(e.r->>'clasa'))", "(e.r->>'km_pana')::numeric, e.r->>'clasa'"]]],
   ['M18 mai multe surse de clase vii pe tronson', [["  SELECT id INTO v_id FROM public.sud_clase_surse WHERE tronson_id = p_tronson AND stare <> 'anulat' LIMIT 1;\n  IF v_id IS NOT NULL THEN RAISE EXCEPTION 'sud: clase_deja_incarcate:%', v_id USING ERRCODE = '23505'; END IF;\n", ''],
     ["CREATE UNIQUE INDEX sud_clase_surse_tronson_uq ON public.sud_clase_surse (tronson_id) WHERE stare <> 'anulat';\n", '']]],
-  ['M19 confirmarea claselor fără CAS', [["  IF p_versiune IS DISTINCT FROM s.versiune THEN RAISE EXCEPTION 'sud: sursa claselor s-a schimbat intre timp; reincarca' USING ERRCODE = '40001'; END IF;\n  IF p_intervale IS NULL", '  IF p_intervale IS NULL']]],
+  ['M19 confirmarea claselor fără CAS', [["  IF p_versiune IS DISTINCT FROM s.versiune THEN RAISE EXCEPTION 'sud: sursa claselor s-a schimbat intre timp; reincarca' USING ERRCODE = '40001'; END IF;\n  IF v_tp IS DISTINCT FROM s.proiect_id THEN", '  IF v_tp IS DISTINCT FROM s.proiect_id THEN']]],
   ['M20 marcajul fără codul pachetului', [["  IF v_cheie IS DISTINCT FROM upper(regexp_replace(btrim(coalesce(v_cod, '')), '\\s+', '', 'g')) OR p_revizie IS DISTINCT FROM v_rev THEN", '  IF p_revizie IS DISTINCT FROM v_rev THEN']]],
   ['M21 marcajul fără revizia pachetului', [["  IF v_cheie IS DISTINCT FROM upper(regexp_replace(btrim(coalesce(v_cod, '')), '\\s+', '', 'g')) OR p_revizie IS DISTINCT FROM v_rev THEN", "  IF v_cheie IS DISTINCT FROM upper(regexp_replace(btrim(coalesce(v_cod, '')), '\\s+', '', 'g')) THEN"]]],
   ['M22 Excel-ul opțional fără motiv (D19)', [["  ELSIF length(btrim(coalesce(p_excel_lipsa_motiv, ''))) < 5 THEN", '  ELSIF false THEN'],
@@ -593,6 +668,22 @@ const MUTANTI = [
     ["              AND owner_id = auth.uid()::text AND public.fn_sud_drept(split_part(name, '/', 1)::bigint, 'scriere')\n              AND EXISTS (SELECT 1 FROM public.executie_tronsoane t WHERE t.id = split_part(name, '/', 2)::bigint\n                            AND t.proiect_id = split_part(name, '/', 1)::bigint)));\nCREATE POLICY sud_doc_r_upd",
      "              AND owner_id = auth.uid()::text\n              AND EXISTS (SELECT 1 FROM public.executie_tronsoane t WHERE t.id = split_part(name, '/', 2)::bigint\n                            AND t.proiect_id = split_part(name, '/', 1)::bigint)));\nCREATE POLICY sud_doc_r_upd"]]],
   ['M32 cheia de linie duplicată acceptată (refuzul lăsat pe constrângere)', [["  IF v_rau IS NOT NULL THEN RAISE EXCEPTION 'sud: linia % apare de mai multe ori', v_rau USING ERRCODE = '22023'; END IF;\n", '']]],
+  // review r1 P1: tronsonul recitit sub lock la confirmare / anulare
+  ['M33 confirmarea coordonatelor fără existența tronsonului', [["  IF v_tp IS NULL THEN RAISE EXCEPTION 'sud: tronsonul incarcarii nu mai exista; anuleaza incarcarea' USING ERRCODE = '22023'; END IF;\n", '']]],
+  ['M34 confirmarea coordonatelor cu dreptul pe proiectul încărcării (nu pe cel actual)', [["  IF public.fn_sud_drept(v_tp, 'scriere') IS NOT TRUE THEN RAISE EXCEPTION 'sud: doar managerul de proiect' USING ERRCODE = '42501'; END IF;\n  IF i.stare <> 'ciorna'",
+    "  IF public.fn_sud_drept(i.proiect_id, 'scriere') IS NOT TRUE THEN RAISE EXCEPTION 'sud: doar managerul de proiect' USING ERRCODE = '42501'; END IF;\n  IF i.stare <> 'ciorna'"]]],
+  ['M35 confirmarea coordonatelor fără verificarea mutării pe alt proiect', [["  IF v_tp IS DISTINCT FROM i.proiect_id THEN\n    RAISE EXCEPTION 'sud: tronsonul incarcarii a fost mutat pe alt proiect dupa incarcare; anuleaza si reincarca' USING ERRCODE = '22023';\n  END IF;\n", '']]],
+  ['M36 confirmarea coordonatelor fără verificarea codului actual al tronsonului', [["  IF v_tnr IS NULL OR EXISTS (SELECT 1 FROM public.sud_coordonate c WHERE c.incarcare_id = i.id", "  IF false AND EXISTS (SELECT 1 FROM public.sud_coordonate c WHERE c.incarcare_id = i.id"]]],
+  ['M37 confirmarea claselor fără existența tronsonului', [["  IF v_tp IS NULL THEN RAISE EXCEPTION 'sud: tronsonul sursei claselor nu mai exista; anuleaza sursa' USING ERRCODE = '22023'; END IF;\n", '']]],
+  ['M38 confirmarea claselor cu dreptul pe proiectul sursei (nu pe cel actual)', [["  IF public.fn_sud_drept(v_tp, 'scriere') IS NOT TRUE THEN RAISE EXCEPTION 'sud: doar managerul de proiect' USING ERRCODE = '42501'; END IF;\n  IF s.stare <> 'ciorna'",
+    "  IF public.fn_sud_drept(s.proiect_id, 'scriere') IS NOT TRUE THEN RAISE EXCEPTION 'sud: doar managerul de proiect' USING ERRCODE = '42501'; END IF;\n  IF s.stare <> 'ciorna'"]]],
+  ['M39 confirmarea claselor fără verificarea mutării pe alt proiect', [["  IF v_tp IS DISTINCT FROM s.proiect_id THEN\n    RAISE EXCEPTION 'sud: tronsonul sursei claselor a fost mutat pe alt proiect dupa incarcare; anuleaza si reincarca' USING ERRCODE = '22023';\n  END IF;\n", '']]],
+  ['M40 anularea coordonatelor cu dreptul pe proiectul încărcării', [["IF public.fn_sud_drept(coalesce(v_tp, i.proiect_id), 'scriere')", "IF public.fn_sud_drept(i.proiect_id, 'scriere')"]]],
+  ['M41 anularea claselor cu dreptul pe proiectul sursei', [["IF public.fn_sud_drept(coalesce(v_tp, s.proiect_id), 'scriere')", "IF public.fn_sud_drept(s.proiect_id, 'scriere')"]]],
+  // decizia 3: anularea nu reactivează pozițiile vechi, dar numește sudurile rămase fără poziție
+  ['M42 anularea fără lista sudurilor rămase fără poziție', [["coalesce(jsonb_agg(cheie ORDER BY linie) FILTER (WHERE stare_veche = 'activ'), '[]'::jsonb)", "'[]'::jsonb"]]],
+  ['M43 lista „fără poziție” cu pozițiile ciornei (care nu erau active)', [["jsonb_agg(cheie ORDER BY linie) FILTER (WHERE stare_veche = 'activ')", 'jsonb_agg(cheie ORDER BY linie)']]],
+  ['M44 lista „fără poziție” în ordinea cheilor, nu a liniilor', [["jsonb_agg(cheie ORDER BY linie) FILTER", 'jsonb_agg(cheie ORDER BY cheie DESC) FILTER']]],
 ]
 for (const [nume, inl] of MUTANTI) {
   let ab

@@ -122,7 +122,7 @@ BEGIN
   PERFORM pg_temp.np_ca('b');
   INSERT INTO storage.objects (bucket_id, name, owner, owner_id)
   SELECT 'izo-sud-doc', pg_temp.np_cale('p1', 't1', n), auth.uid(), auth.uid()::text
-    FROM unnest(ARRAY['coord1.txt', 'coord2.txt', 'coord3.txt', 'schema1.pdf', 'schema2.pdf', 'sub1.pdf', 'sub1.xlsx', 'sub2.pdf']) n;
+    FROM unnest(ARRAY['coord1.txt', 'coord2.txt', 'coord3.txt', 'coord4.txt', 'schema1.pdf', 'schema2.pdf', 'sub1.pdf', 'sub1.xlsx', 'sub2.pdf']) n;
   INSERT INTO storage.objects (bucket_id, name, owner, owner_id) VALUES ('izo-sud-doc', pg_temp.np_cale('p1', 't2', 'coord_t13.txt'), auth.uid(), auth.uid()::text);
   PERFORM pg_temp.np_ca('a');
   INSERT INTO storage.objects (bucket_id, name, owner, owner_id) VALUES ('izo-sud-doc', pg_temp.np_cale('p1', 't1', 'al_ownerului.txt'), auth.uid(), auth.uid()::text);
@@ -237,17 +237,21 @@ BEGIN
   RAISE NOTICE 'DRY 20270116a t_coord_reincarca ok';
 END $t$;
 
--- ── t_coord_anuleaza: CAS, motiv; anularea U2 scoate pozitiile ei, cele inlocuite de ea NU revin singure ──
+-- ── t_coord_anuleaza: CAS, motiv; anularea U2 scoate pozitiile ei, cele inlocuite de ea NU revin singure; rezultatul numeste sudurile ramase
+--    fara pozitie (pentru ecran), in ordinea liniilor; o ciorna anulata nu lasa nicio sudura fara pozitie ──
 DO $t$
-DECLARE v_u2 bigint := pg_temp.np_id('u2'); n int;
+DECLARE v_u2 bigint := pg_temp.np_id('u2'); r jsonb; v bigint;
 BEGIN
   PERFORM pg_temp.np_ca('c');
   PERFORM pg_temp.np_astept('t_coord_anuleaza', 'MP-ul altui proiect', pg_temp.np_cod(format('SELECT public.fn_sud_coord_anuleaza(%s, 2, ''gresit'')', v_u2)), '42501');
   PERFORM pg_temp.np_ca('b');
   PERFORM pg_temp.np_astept('t_coord_anuleaza', 'versiune veche', pg_temp.np_cod(format('SELECT public.fn_sud_coord_anuleaza(%s, 1, ''gresit'')', v_u2)), '40001');
   PERFORM pg_temp.np_astept('t_coord_anuleaza', 'motiv gol', pg_temp.np_cod(format('SELECT public.fn_sud_coord_anuleaza(%s, 2, ''  '')', v_u2)), '22023');
-  n := public.fn_sud_coord_anuleaza(v_u2, 2, 'fisier gresit');
-  IF n <> 3 THEN RAISE EXCEPTION 't_coord_anuleaza FAIL: % pozitii scoase (astepta 3)', n; END IF;
+  r := public.fn_sud_coord_anuleaza(v_u2, 2, 'fisier gresit');
+  -- U2 = T12S1 (inlocuise U1 identic), T12S2 (inlocuise U1 altfel), T12S4 (nou): toate trei raman fara pozitie; T12S3 (din U1) ramane activa
+  IF r IS DISTINCT FROM '{"anulate": 3, "fara_pozitie": ["T12S1", "T12S2", "T12S4"]}'::jsonb THEN
+    RAISE EXCEPTION 't_coord_anuleaza FAIL: rezultat % (astepta 3 anulate, fara pozitie T12S1, T12S2, T12S4)', r;
+  END IF;
   PERFORM pg_temp.np_astept('t_coord_anuleaza', 'a doua anulare', pg_temp.np_cod(format('SELECT public.fn_sud_coord_anuleaza(%s, 3, ''din nou'')', v_u2)), '55000');
   PERFORM pg_temp.np_ca('a');
   IF pg_temp.np_activ('t1') IS DISTINCT FROM 'T12S3@584124.000'
@@ -263,14 +267,26 @@ BEGIN
   IF pg_temp.np_activ('t1') IS DISTINCT FROM 'T12S1@584100.000,T12S2@584112.000,T12S3@584124.000' THEN
     RAISE EXCEPTION 't_coord_anuleaza FAIL: dupa U3 pozitiile active %', pg_temp.np_activ('t1');
   END IF;
+  -- o ciorna (U4, cu T12S1 deja activa din U3) anulata: pozitia ei nu era activa, deci nicio sudura nu ramane fara pozitie, T12S1 ramane activa
+  PERFORM pg_temp.np_ca('b');
+  v := public.fn_sud_coord_incarca(pg_temp.np_id('t1'), pg_temp.np_cale('p1', 't1', 'coord4.txt'), 'coord4.txt', repeat('a4', 32),
+    jsonb_build_array(pg_temp.np_rand(1, 'T12S1', 'T12S1', 584100.250, 412300.000, 120.000)), NULL);
+  r := public.fn_sud_coord_anuleaza(v, 1, 'ciorna gresita');
+  IF r IS DISTINCT FROM '{"anulate": 1, "fara_pozitie": []}'::jsonb THEN RAISE EXCEPTION 't_coord_anuleaza FAIL: ciorna anulata = % (astepta 1, lista goala)', r; END IF;
+  PERFORM pg_temp.np_ca('a');
+  IF pg_temp.np_activ('t1') IS DISTINCT FROM 'T12S1@584100.000,T12S2@584112.000,T12S3@584124.000' THEN
+    RAISE EXCEPTION 't_coord_anuleaza FAIL: dupa ciorna anulata pozitiile active %', pg_temp.np_activ('t1');
+  END IF;
   RAISE NOTICE 'DRY 20270116a t_coord_anuleaza ok';
 END $t$;
 
--- ── t_clase: o sursa vie pe tronson; intervalele scrise o data, la confirmare; fara suprapuneri (capetele comune permise); anularea elibereaza tronsonul ──
+-- ── t_clase: o sursa vie pe tronson; intervalele scrise o data, la confirmare; fara suprapuneri (capetele comune permise); anularea elibereaza tronsonul;
+--    clasa = text scurt normalizat de server (spatiile de la capete scoase, majuscule, 1-10 caractere din 0-9 A-Z . / + -), fara lista fixa de clase ──
 DO $t$
 DECLARE c text; v bigint; n int; t1 bigint := pg_temp.np_id('t1');
   fi text := 'SELECT public.fn_sud_clase_confirma(%s, %s, %L::jsonb)';
-  bune jsonb := '[{"km_de": 0, "km_pana": 1000, "clasa": "1"}, {"km_de": 1000, "km_pana": 2500.5, "clasa": "2"}, {"km_de": 2500.5, "km_pana": 4000, "clasa": "3"}]';
+  bune jsonb := '[{"km_de": 0, "km_pana": 1000, "clasa": "1"}, {"km_de": 1000, "km_pana": 2500.5, "clasa": " 2a "}, {"km_de": 2500.5, "km_pana": 4000, "clasa": "3"}]';
+  cu_clasa text := 'SELECT public.fn_sud_clase_confirma(%s, 1, jsonb_build_array(jsonb_build_object(''km_de'', 0, ''km_pana'', 1000, ''clasa'', %s)))';
 BEGIN
   FOREACH c IN ARRAY ARRAY['c', 'd', 'e', 'g'] LOOP
     PERFORM pg_temp.np_ca(c);
@@ -286,7 +302,14 @@ BEGIN
     t1, pg_temp.np_cale('p1', 't1', 'schema2.pdf'), repeat('b2', 32))), '23505');
   PERFORM pg_temp.np_astept('t_clase', 'intervale suprapuse', pg_temp.np_cod(format(fi, v, 1, '[{"km_de": 0, "km_pana": 1000, "clasa": "1"}, {"km_de": 999.999, "km_pana": 2000, "clasa": "2"}]')), '22023');
   PERFORM pg_temp.np_astept('t_clase', 'interval cuprins in altul', pg_temp.np_cod(format(fi, v, 1, '[{"km_de": 0, "km_pana": 1000, "clasa": "1"}, {"km_de": 100, "km_pana": 200, "clasa": "1"}]')), '22023');
-  PERFORM pg_temp.np_astept('t_clase', 'clasa 5', pg_temp.np_cod(format(fi, v, 1, '[{"km_de": 0, "km_pana": 1000, "clasa": "5"}]')), '22023');
+  PERFORM pg_temp.np_astept('t_clase', 'clasa cu spatiu intern', pg_temp.np_cod(format(fi, v, 1, '[{"km_de": 0, "km_pana": 1000, "clasa": "2 A"}]')), '22023');
+  PERFORM pg_temp.np_astept('t_clase', 'clasa de 11 caractere', pg_temp.np_cod(format(fi, v, 1, '[{"km_de": 0, "km_pana": 1000, "clasa": "CLASA123456"}]')), '22023');
+  PERFORM pg_temp.np_astept('t_clase', 'clasa doar spatii', pg_temp.np_cod(format(fi, v, 1, '[{"km_de": 0, "km_pana": 1000, "clasa": "   "}]')), '22023');
+  PERFORM pg_temp.np_astept('t_clase', 'clasa goala', pg_temp.np_cod(format(fi, v, 1, '[{"km_de": 0, "km_pana": 1000, "clasa": ""}]')), '22023');
+  PERFORM pg_temp.np_astept('t_clase', 'clasa cu tab la capat', pg_temp.np_cod(format(cu_clasa, v, '''3'' || chr(9)')), '22023');
+  PERFORM pg_temp.np_astept('t_clase', 'clasa cu spatiu fara intrerupere (NBSP)', pg_temp.np_cod(format(cu_clasa, v, '''3'' || chr(160)')), '22023');
+  PERFORM pg_temp.np_astept('t_clase', 'clasa cu caracter de latime zero', pg_temp.np_cod(format(cu_clasa, v, '''3'' || chr(8203)')), '22023');
+  PERFORM pg_temp.np_astept('t_clase', 'clasa cu litera romaneasca', pg_temp.np_cod(format(cu_clasa, v, '''CL'' || chr(258)')), '22023');
   PERFORM pg_temp.np_astept('t_clase', 'clasa numar', pg_temp.np_cod(format(fi, v, 1, '[{"km_de": 0, "km_pana": 1000, "clasa": 2}]')), '22023');
   PERFORM pg_temp.np_astept('t_clase', 'km cu 4 zecimale', pg_temp.np_cod(format(fi, v, 1, '[{"km_de": 0, "km_pana": 1000.0001, "clasa": "1"}]')), '22023');
   PERFORM pg_temp.np_astept('t_clase', 'km_pana = km_de', pg_temp.np_cod(format(fi, v, 1, '[{"km_de": 10, "km_pana": 10, "clasa": "1"}]')), '22023');
@@ -303,14 +326,20 @@ BEGIN
   PERFORM public.fn_sud_clase_anuleaza(v, 2, 'schema gresita');
   PERFORM pg_temp.np_ca('a');
   IF (SELECT string_agg(km_de::text || '-' || km_pana::text || ':' || clasa || ':' || anulat::text, ',' ORDER BY ordine) FROM public.sud_clase_interval WHERE sursa_id = v)
-       IS DISTINCT FROM '0-1000:1:true,1000-2500.5:2:true,2500.5-4000:3:true' THEN
-    RAISE EXCEPTION 't_clase FAIL: intervalele sursei anulate';
+       IS DISTINCT FROM '0-1000:1:true,1000-2500.5:2A:true,2500.5-4000:3:true' THEN
+    RAISE EXCEPTION 't_clase FAIL: intervalele sursei anulate (astepta clasa „ 2a ” scrisa „2A”)';
   END IF;
   PERFORM pg_temp.np_ca('b');
   v := public.fn_sud_clase_incarca(t1, pg_temp.np_cale('p1', 't1', 'schema2.pdf'), 'schema2.pdf', repeat('b2', 32), NULL);
   INSERT INTO np_fix VALUES ('s2', v);
-  IF public.fn_sud_clase_confirma(v, 1, '[{"km_de": 0, "km_pana": 3000, "clasa": "2"}, {"km_de": 3000, "km_pana": 4000, "clasa": "4"}]') <> 2 THEN
+  -- notatii fara lista fixa: „iii” (romane) si „5” trec, scrise cu majuscule
+  IF public.fn_sud_clase_confirma(v, 1, '[{"km_de": 0, "km_pana": 3000, "clasa": "iii"}, {"km_de": 3000, "km_pana": 4000, "clasa": "5"}]') <> 2 THEN
     RAISE EXCEPTION 't_clase FAIL: sursa noua dupa anulare';
+  END IF;
+  PERFORM pg_temp.np_ca('a');
+  IF (SELECT string_agg(km_de::text || '-' || km_pana::text || ':' || clasa || ':' || anulat::text, ',' ORDER BY ordine) FROM public.sud_clase_interval WHERE sursa_id = v)
+       IS DISTINCT FROM '0-3000:III:false,3000-4000:5:false' THEN
+    RAISE EXCEPTION 't_clase FAIL: intervalele sursei noi (astepta III si 5)';
   END IF;
   RAISE NOTICE 'DRY 20270116a t_clase ok';
 END $t$;
@@ -383,8 +412,9 @@ BEGIN
     SELECT concat_ws('|', (SELECT count(*) FROM public.sud_coordonate_incarcari), (SELECT count(*) FROM public.sud_coordonate), (SELECT count(*) FROM public.sud_clase_surse),
                      (SELECT count(*) FROM public.sud_clase_interval), (SELECT count(*) FROM public.sud_pachete_subcontractor),
                      (SELECT count(*) FROM storage.objects WHERE bucket_id = 'izo-sud-doc')) INTO s;
-    -- U1 (3) + U2 (3) + U3 (2) = 8 pozitii in 3 incarcari; 2 surse (3 + 2 intervale); 3 marcaje; 10 fisiere (8 + 1 pe T13 + 1 al ownerului)
-    v_ast := CASE WHEN c IN ('a', 'd', 'e') THEN '3|8|2|5|3|10' ELSE '0|0|0|0|0|0' END;
+    -- U1 (3) + U2 (3) + U3 (2) + U4 (1, ciorna anulata) = 9 pozitii in 4 incarcari; 2 surse (3 + 2 intervale); 3 marcaje;
+    -- 11 fisiere (9 + 1 pe T13 + 1 al ownerului)
+    v_ast := CASE WHEN c IN ('a', 'd', 'e') THEN '4|9|2|5|3|11' ELSE '0|0|0|0|0|0' END;
     IF s IS DISTINCT FROM v_ast THEN RAISE EXCEPTION 't_citire FAIL: contul % vede % (astepta %)', c, s, v_ast; END IF;
   END LOOP;
   RAISE NOTICE 'DRY 20270116a t_citire ok';

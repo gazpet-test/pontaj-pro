@@ -11,7 +11,9 @@
 --     sud_coordonate (un rând pe sudură și încărcare; cheia sudurii = tronson + număr + sufix, FĂRĂ refacere — §22 — calculată de SERVER; o singură
 --     poziție activă pe sudură, istoricul rămâne: o reîncărcare confirmată trece pozițiile vechi în „inlocuit”);
 --     sud_clase_surse (schema de montaj citită o dată, cu citirea AI păstrată ca dată; ciorna → confirmat → anulat, o singură sursă vie pe tronson) și
---     sud_clase_interval (intervalele [km_de, km_pana) → clasa 1–4, scrise O DATĂ, la confirmarea MP-ului; FĂRĂ suprapuneri pe tronson: constrângere
+--     sud_clase_interval (intervalele [km_de, km_pana) → clasa = text scurt normalizat de server — fără spații la capete, majuscule, 1–10 caractere
+--     din [0-9 A-Z . / + -], fără spații interne; notația o validează MP-ul la confirmare, nu o listă fixă —, scrise O DATĂ, la confirmarea MP-ului;
+--     FĂRĂ suprapuneri pe tronson: constrângere
 --     de excludere GiST pe intervalele neanulate — capetele comune sunt permise, sudura de la graniță o decide omul în ecran, ca în
 --     src/exportInventarXlsx.js);
 --     sud_pachete_subcontractor (marcajul „executat de subcontractor”: codul și revizia reale ale pachetului, PDF-ul aprobat obligatoriu, Excel-ul
@@ -32,7 +34,9 @@
 --   zecimale, suprapuneri). Rezervarea plafonului AI (R10) vine cu funcțiile edge (PR4 / PR6), nu aici.
 -- Concurență (L06): ordinea lock-urilor pe toate căile acestei migrări = tronsonul FOR UPDATE → încărcarea / sursa FOR UPDATE → rândurile copil;
 --   marcajul de subcontractor: pachetul FOR UPDATE → marcajul; înregistrarea exportului: pachetul FOR UPDATE → deblocarea (sursele doar citite).
---   Confirmarea / anularea cer versiunea citită (CAS, 40001).
+--   Confirmarea / anularea cer versiunea citită (CAS, 40001). Tronsonul se RECITEȘTE sub lock la confirmare / anulare: dreptul se verifică pe
+--   proiectul LUI ACTUAL; la confirmare, un tronson șters, mutat pe alt proiect sau (la coordonate) cu alt număr în cod față de încărcare = refuz
+--   22023, nimic activat (anulează și reîncarcă).
 -- Revenire: supabase/revenire/20270116a_izometrie_coordonate_clase_subcontr_ROLLBACK.sql (refuză dacă există date sau fișiere; repune corpul 20270115b).
 -- Probe: scripts/pglite/test_izometrie_coordonate_clase_local.mjs (pe 20270114a + 20270115b aplicate).
 DO $pre$
@@ -215,7 +219,8 @@ CREATE TABLE public.sud_clase_interval (
   ordine integer NOT NULL,
   km_de numeric NOT NULL,
   km_pana numeric NOT NULL,
-  clasa text NOT NULL CHECK (clasa IN ('1', '2', '3', '4')),
+  -- forma normalizată (aceeași regulă ca fn_sud_clasa_interval_valid + upper(btrim()) la scriere; paritatea e probată în PGlite)
+  clasa text NOT NULL CHECK (clasa ~ '^[0-9A-Z./+-]{1,10}$'),
   anulat boolean NOT NULL DEFAULT false,
   CONSTRAINT sud_clase_interval_km_ck CHECK (km_de >= 0 AND km_pana > km_de AND km_pana < 10000000 AND km_de = round(km_de, 3) AND km_pana = round(km_pana, 3)),
   UNIQUE (sursa_id, ordine),
@@ -298,7 +303,9 @@ BEGIN
 END $f$;
 
 -- Un interval de clasă confirmat de MP: {km_de, km_pana, clasa}; metri (aceeași unitate ca poz_km_m din pachet), cel mult 3 zecimale,
--- 0 <= km_de < km_pana < 10.000 km, clasa '1'..'4' (text). NULL = valid, altfel motivul.
+-- 0 <= km_de < km_pana < 10.000 km. Clasa: text; după scoaterea spațiilor de la capete, 1–10 caractere din [0-9 A-Z a-z . / + -] (fără spații
+-- interne, fără caractere invizibile; litere ASCII, deci majusculele nu depind de localizare). Se scrie cu majuscule (upper(btrim()) în
+-- fn_sud_clase_confirma). Notația (1–4, III, 2A …) nu e restrânsă aici: o validează MP-ul la confirmare. NULL = valid, altfel motivul.
 CREATE FUNCTION public.fn_sud_clasa_interval_valid(r jsonb) RETURNS text
 LANGUAGE plpgsql IMMUTABLE SET search_path = public, pg_temp AS $f$
 DECLARE k text; v numeric;
@@ -315,7 +322,7 @@ BEGIN
     IF v < 0 OR v >= 10000000 THEN RETURN k || ': in afara domeniului'; END IF;
   END LOOP;
   IF (r->>'km_pana')::numeric <= (r->>'km_de')::numeric THEN RETURN 'km_pana <= km_de'; END IF;
-  IF jsonb_typeof(r->'clasa') <> 'string' OR r->>'clasa' NOT IN ('1', '2', '3', '4') THEN RETURN 'clasa'; END IF;
+  IF jsonb_typeof(r->'clasa') <> 'string' OR btrim(r->>'clasa') !~ '^[0-9A-Za-z./+-]{1,10}$' THEN RETURN 'clasa'; END IF;
   RETURN NULL;
 END $f$;
 
@@ -377,19 +384,31 @@ END $f$;
 -- Confirmarea (CAS pe versiune): pozițiile propuse devin active; o poziție activă a aceleiași suduri trece în „inlocuit” (istoricul rămâne, §16).
 -- Când valorile diferă, înlocuirea cere confirmarea explicită: p_inlocuiri = EXACT mulțimea cheilor cu altă poziție activă (cum le-a văzut omul);
 -- altă mulțime = 40001 (starea s-a schimbat sau înlocuirile nu sunt confirmate), nimic scris. Pozițiile identice se înlocuiesc fără confirmare.
+-- Tronsonul se recitește SUB LOCK (FK-ul lipsește intenționat): trebuie să existe, să fie tot pe proiectul încărcării, iar cheile sudurilor
+-- recalculate cu codul LUI ACTUAL (fn_sud_tronson_nr → fn_sud_cod_normalizeaza) = cheile de la încărcare; dreptul se verifică pe proiectul ACTUAL.
+-- Altfel refuz 22023, nimic activat (omul anulează și reîncarcă).
 -- Ordinea lock-urilor (L06): tronsonul FOR UPDATE → încărcarea FOR UPDATE → rândurile sud_coordonate (UPDATE pe tronsonul blocat).
 CREATE FUNCTION public.fn_sud_coord_confirma(p_incarcare bigint, p_versiune integer, p_inlocuiri text[]) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
-DECLARE v_tronson bigint; i public.sud_coordonate_incarcari%ROWTYPE; v_dif text[]; v_cer text[]; v_ident integer; v_inl integer; v_act integer;
+DECLARE v_tronson bigint; v_tp bigint; v_tnr integer; i public.sud_coordonate_incarcari%ROWTYPE; v_dif text[]; v_cer text[]; v_ident integer; v_inl integer; v_act integer;
 BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION 'sud: neautentificat' USING ERRCODE = '42501'; END IF;
   SELECT tronson_id INTO v_tronson FROM public.sud_coordonate_incarcari WHERE id = p_incarcare;
   IF v_tronson IS NULL THEN RAISE EXCEPTION 'sud: incarcare inexistenta' USING ERRCODE = '22023'; END IF;
-  PERFORM 1 FROM public.executie_tronsoane WHERE id = v_tronson FOR UPDATE;
+  SELECT proiect_id, public.fn_sud_tronson_nr(cod) INTO v_tp, v_tnr FROM public.executie_tronsoane WHERE id = v_tronson FOR UPDATE;
+  IF v_tp IS NULL THEN RAISE EXCEPTION 'sud: tronsonul incarcarii nu mai exista; anuleaza incarcarea' USING ERRCODE = '22023'; END IF;
   SELECT * INTO i FROM public.sud_coordonate_incarcari WHERE id = p_incarcare FOR UPDATE;
-  IF public.fn_sud_drept(i.proiect_id, 'scriere') IS NOT TRUE THEN RAISE EXCEPTION 'sud: doar managerul de proiect' USING ERRCODE = '42501'; END IF;
+  IF public.fn_sud_drept(v_tp, 'scriere') IS NOT TRUE THEN RAISE EXCEPTION 'sud: doar managerul de proiect' USING ERRCODE = '42501'; END IF;
   IF i.stare <> 'ciorna' THEN RAISE EXCEPTION 'sud: incarcarea nu e ciorna (%)', i.stare USING ERRCODE = '55000'; END IF;
   IF p_versiune IS DISTINCT FROM i.versiune THEN RAISE EXCEPTION 'sud: incarcarea s-a schimbat intre timp; reincarca' USING ERRCODE = '40001'; END IF;
+  IF v_tp IS DISTINCT FROM i.proiect_id THEN
+    RAISE EXCEPTION 'sud: tronsonul incarcarii a fost mutat pe alt proiect dupa incarcare; anuleaza si reincarca' USING ERRCODE = '22023';
+  END IF;
+  IF v_tnr IS NULL OR EXISTS (SELECT 1 FROM public.sud_coordonate c WHERE c.incarcare_id = i.id
+                                AND (public.fn_sud_cod_normalizeaza(c.cod, v_tnr)->>'stare' IS DISTINCT FROM 'ok'
+                                     OR public.fn_sud_cod_normalizeaza(c.cod, v_tnr)->>'cheie' IS DISTINCT FROM c.cheie)) THEN
+    RAISE EXCEPTION 'sud: codul tronsonului s-a schimbat dupa incarcare (cheile sudurilor nu mai corespund); anuleaza si reincarca' USING ERRCODE = '22023';
+  END IF;
   -- pozițiile active ale acelorași suduri: cu alte valori (cer confirmarea) / identice (se înlocuiesc fără ea)
   SELECT coalesce(array_agg(n.cheie ORDER BY n.cheie) FILTER (WHERE (a.x, a.y, a.z) IS DISTINCT FROM (n.x, n.y, n.z)), '{}'),
          count(*) FILTER (WHERE (a.x, a.y, a.z) IS NOT DISTINCT FROM (n.x, n.y, n.z))
@@ -417,25 +436,36 @@ END $f$;
 
 -- Anularea (CAS pe versiune, cu motiv): o ciornă sau o încărcare confirmată. Pozițiile ei propuse / active devin „anulat”; pozițiile pe care le
 -- înlocuise NU revin singure (nicio poziție nu reapare fără confirmarea omului): sudura rămâne fără poziție până la o încărcare nouă (lipsa se vede
--- în inventar, R8). Ordinea lock-urilor (L06): tronsonul → încărcarea → rândurile.
-CREATE FUNCTION public.fn_sud_coord_anuleaza(p_incarcare bigint, p_versiune integer, p_motiv text) RETURNS integer
+-- în inventar, R8). Rezultatul: {anulate: câte poziții au ieșit, fara_pozitie: [cheile sudurilor care aveau poziția ACTIVĂ din această încărcare
+-- și rămân fără nicio poziție activă, în ordinea liniilor din fișier]} — ecranul le afișează (la o ciornă lista e goală: nimic nu era activ).
+-- Dreptul: pe proiectul ACTUAL al tronsonului (recitit sub lock); dacă tronsonul nu mai există, pe proiectul încărcării (anularea curăță, nu
+-- activează nimic, L20). Ordinea lock-urilor (L06): tronsonul → încărcarea → rândurile.
+CREATE FUNCTION public.fn_sud_coord_anuleaza(p_incarcare bigint, p_versiune integer, p_motiv text) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
-DECLARE v_tronson bigint; i public.sud_coordonate_incarcari%ROWTYPE; v_n integer;
+DECLARE v_tronson bigint; v_tp bigint; i public.sud_coordonate_incarcari%ROWTYPE; v_n integer; v_fara jsonb;
 BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION 'sud: neautentificat' USING ERRCODE = '42501'; END IF;
   SELECT tronson_id INTO v_tronson FROM public.sud_coordonate_incarcari WHERE id = p_incarcare;
   IF v_tronson IS NULL THEN RAISE EXCEPTION 'sud: incarcare inexistenta' USING ERRCODE = '22023'; END IF;
-  PERFORM 1 FROM public.executie_tronsoane WHERE id = v_tronson FOR UPDATE;
+  SELECT proiect_id INTO v_tp FROM public.executie_tronsoane WHERE id = v_tronson FOR UPDATE;
   SELECT * INTO i FROM public.sud_coordonate_incarcari WHERE id = p_incarcare FOR UPDATE;
-  IF public.fn_sud_drept(i.proiect_id, 'scriere') IS NOT TRUE THEN RAISE EXCEPTION 'sud: doar managerul de proiect' USING ERRCODE = '42501'; END IF;
+  IF public.fn_sud_drept(coalesce(v_tp, i.proiect_id), 'scriere') IS NOT TRUE THEN RAISE EXCEPTION 'sud: doar managerul de proiect' USING ERRCODE = '42501'; END IF;
   IF i.stare = 'anulat' THEN RAISE EXCEPTION 'sud: incarcarea e deja anulata' USING ERRCODE = '55000'; END IF;
   IF p_versiune IS DISTINCT FROM i.versiune THEN RAISE EXCEPTION 'sud: incarcarea s-a schimbat intre timp; reincarca' USING ERRCODE = '40001'; END IF;
   IF length(btrim(coalesce(p_motiv, ''))) < 3 THEN RAISE EXCEPTION 'sud: motivul anularii e obligatoriu' USING ERRCODE = '22023'; END IF;
-  UPDATE public.sud_coordonate SET stare = 'anulat' WHERE incarcare_id = i.id AND stare IN ('propus', 'activ');
-  GET DIAGNOSTICS v_n = ROW_COUNT;
+  WITH scoase AS (
+    UPDATE public.sud_coordonate c SET stare = 'anulat' FROM public.sud_coordonate v
+     WHERE v.id = c.id AND c.incarcare_id = i.id AND c.stare IN ('propus', 'activ')
+    RETURNING c.cheie, c.linie, v.stare AS stare_veche)
+  SELECT count(*), coalesce(jsonb_agg(cheie ORDER BY linie) FILTER (WHERE stare_veche = 'activ'), '[]'::jsonb) INTO v_n, v_fara FROM scoase;
+  -- (indexul unic: o singură poziție activă pe sudură, deci cele scoase din „activ” nu mai au nicio poziție activă; verificarea o confirmă)
+  IF EXISTS (SELECT 1 FROM public.sud_coordonate a WHERE a.tronson_id = i.tronson_id AND a.stare = 'activ'
+               AND a.cheie IN (SELECT jsonb_array_elements_text(v_fara))) THEN
+    RAISE EXCEPTION 'sud: anularea a lasat pozitii active pe sudurile scoase';
+  END IF;
   UPDATE public.sud_coordonate_incarcari SET stare = 'anulat', anulat_de = auth.uid(), anulat_la = now(), anulat_motiv = btrim(p_motiv), versiune = versiune + 1
    WHERE id = i.id;
-  RETURN v_n;
+  RETURN jsonb_build_object('anulate', v_n, 'fara_pozitie', v_fara);
 END $f$;
 
 -- ─────────── clasele de locație (D17, §15) ───────────
@@ -468,19 +498,25 @@ BEGIN
 END $f$;
 
 -- Confirmarea MP-ului (CAS pe versiune): intervalele validate (fn_sud_clasa_interval_valid), fără suprapuneri între ele ([km_de, km_pana): capetele
--- comune sunt permise) — refuz explicit 22023 înaintea constrângerii de excludere. Ordinea lock-urilor (L06): tronsonul → sursa → (inserări).
+-- comune sunt permise) — refuz explicit 22023 înaintea constrângerii de excludere. Clasa se scrie normalizată (upper(btrim())).
+-- Tronsonul se recitește SUB LOCK: trebuie să existe și să fie tot pe proiectul sursei; dreptul se verifică pe proiectul ACTUAL; altfel 22023, nimic scris.
+-- Ordinea lock-urilor (L06): tronsonul → sursa → (inserări).
 CREATE FUNCTION public.fn_sud_clase_confirma(p_sursa bigint, p_versiune integer, p_intervale jsonb) RETURNS integer
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
-DECLARE v_tronson bigint; s public.sud_clase_surse%ROWTYPE; v_i bigint; v_j bigint; v_rau text; v_n integer;
+DECLARE v_tronson bigint; v_tp bigint; s public.sud_clase_surse%ROWTYPE; v_i bigint; v_j bigint; v_rau text; v_n integer;
 BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION 'sud: neautentificat' USING ERRCODE = '42501'; END IF;
   SELECT tronson_id INTO v_tronson FROM public.sud_clase_surse WHERE id = p_sursa;
   IF v_tronson IS NULL THEN RAISE EXCEPTION 'sud: sursa claselor inexistenta' USING ERRCODE = '22023'; END IF;
-  PERFORM 1 FROM public.executie_tronsoane WHERE id = v_tronson FOR UPDATE;
+  SELECT proiect_id INTO v_tp FROM public.executie_tronsoane WHERE id = v_tronson FOR UPDATE;
+  IF v_tp IS NULL THEN RAISE EXCEPTION 'sud: tronsonul sursei claselor nu mai exista; anuleaza sursa' USING ERRCODE = '22023'; END IF;
   SELECT * INTO s FROM public.sud_clase_surse WHERE id = p_sursa FOR UPDATE;
-  IF public.fn_sud_drept(s.proiect_id, 'scriere') IS NOT TRUE THEN RAISE EXCEPTION 'sud: doar managerul de proiect' USING ERRCODE = '42501'; END IF;
+  IF public.fn_sud_drept(v_tp, 'scriere') IS NOT TRUE THEN RAISE EXCEPTION 'sud: doar managerul de proiect' USING ERRCODE = '42501'; END IF;
   IF s.stare <> 'ciorna' THEN RAISE EXCEPTION 'sud: sursa claselor nu e ciorna (%)', s.stare USING ERRCODE = '55000'; END IF;
   IF p_versiune IS DISTINCT FROM s.versiune THEN RAISE EXCEPTION 'sud: sursa claselor s-a schimbat intre timp; reincarca' USING ERRCODE = '40001'; END IF;
+  IF v_tp IS DISTINCT FROM s.proiect_id THEN
+    RAISE EXCEPTION 'sud: tronsonul sursei claselor a fost mutat pe alt proiect dupa incarcare; anuleaza si reincarca' USING ERRCODE = '22023';
+  END IF;
   IF p_intervale IS NULL OR jsonb_typeof(p_intervale) <> 'array' OR jsonb_array_length(p_intervale) = 0 OR jsonb_array_length(p_intervale) > 500 THEN
     RAISE EXCEPTION 'sud: intervalele lipsesc sau sunt peste 500' USING ERRCODE = '22023';
   END IF;
@@ -492,7 +528,7 @@ BEGIN
    ORDER BY a.i, b.i LIMIT 1;
   IF v_i IS NOT NULL THEN RAISE EXCEPTION 'sud: intervalele % si % se suprapun', v_i, v_j USING ERRCODE = '22023'; END IF;
   INSERT INTO public.sud_clase_interval (sursa_id, proiect_id, tronson_id, ordine, km_de, km_pana, clasa)
-  SELECT s.id, s.proiect_id, s.tronson_id, e.i, (e.r->>'km_de')::numeric, (e.r->>'km_pana')::numeric, e.r->>'clasa'
+  SELECT s.id, s.proiect_id, s.tronson_id, e.i, (e.r->>'km_de')::numeric, (e.r->>'km_pana')::numeric, upper(btrim(e.r->>'clasa'))
     FROM jsonb_array_elements(p_intervale) WITH ORDINALITY e(r, i) ORDER BY e.i;
   GET DIAGNOSTICS v_n = ROW_COUNT;
   UPDATE public.sud_clase_surse SET stare = 'confirmat', confirmat_de = auth.uid(), confirmat_la = now(), versiune = versiune + 1 WHERE id = s.id;
@@ -500,17 +536,18 @@ BEGIN
 END $f$;
 
 -- Anularea (CAS, cu motiv): intervalele ies din constrângerea de excludere (anulat), sursa devine „anulat”; o sursă nouă se poate încărca după.
+-- Dreptul: pe proiectul ACTUAL al tronsonului (recitit sub lock); tronson inexistent = pe proiectul sursei (anularea curăță, L20).
 -- Ordinea lock-urilor (L06): tronsonul → sursa → intervalele.
 CREATE FUNCTION public.fn_sud_clase_anuleaza(p_sursa bigint, p_versiune integer, p_motiv text) RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
-DECLARE v_tronson bigint; s public.sud_clase_surse%ROWTYPE;
+DECLARE v_tronson bigint; v_tp bigint; s public.sud_clase_surse%ROWTYPE;
 BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION 'sud: neautentificat' USING ERRCODE = '42501'; END IF;
   SELECT tronson_id INTO v_tronson FROM public.sud_clase_surse WHERE id = p_sursa;
   IF v_tronson IS NULL THEN RAISE EXCEPTION 'sud: sursa claselor inexistenta' USING ERRCODE = '22023'; END IF;
-  PERFORM 1 FROM public.executie_tronsoane WHERE id = v_tronson FOR UPDATE;
+  SELECT proiect_id INTO v_tp FROM public.executie_tronsoane WHERE id = v_tronson FOR UPDATE;
   SELECT * INTO s FROM public.sud_clase_surse WHERE id = p_sursa FOR UPDATE;
-  IF public.fn_sud_drept(s.proiect_id, 'scriere') IS NOT TRUE THEN RAISE EXCEPTION 'sud: doar managerul de proiect' USING ERRCODE = '42501'; END IF;
+  IF public.fn_sud_drept(coalesce(v_tp, s.proiect_id), 'scriere') IS NOT TRUE THEN RAISE EXCEPTION 'sud: doar managerul de proiect' USING ERRCODE = '42501'; END IF;
   IF s.stare = 'anulat' THEN RAISE EXCEPTION 'sud: sursa claselor e deja anulata' USING ERRCODE = '55000'; END IF;
   IF p_versiune IS DISTINCT FROM s.versiune THEN RAISE EXCEPTION 'sud: sursa claselor s-a schimbat intre timp; reincarca' USING ERRCODE = '40001'; END IF;
   IF length(btrim(coalesce(p_motiv, ''))) < 3 THEN RAISE EXCEPTION 'sud: motivul anularii e obligatoriu' USING ERRCODE = '22023'; END IF;
@@ -836,7 +873,8 @@ BEGIN
      OR public.fn_sud_coord_rand_valid('{"linie": 1, "cod_raw": "T12S1", "cod": "T12S1", "x": "584123.456", "y": 412345.001, "z": 120.5}') IS NULL
      OR public.fn_sud_clasa_interval_valid('{"km_de": 0, "km_pana": 1250.5, "clasa": "2"}') IS NOT NULL
      OR public.fn_sud_clasa_interval_valid('{"km_de": 1250.5, "km_pana": 1250.5, "clasa": "2"}') IS NULL
-     OR public.fn_sud_clasa_interval_valid('{"km_de": 0, "km_pana": 100, "clasa": "5"}') IS NULL THEN
+     OR public.fn_sud_clasa_interval_valid('{"km_de": 0, "km_pana": 100, "clasa": " 2a "}') IS NOT NULL
+     OR public.fn_sud_clasa_interval_valid('{"km_de": 0, "km_pana": 100, "clasa": "2 A"}') IS NULL THEN
     RAISE EXCEPTION '20270116a post: validarile nu dau rezultatele asteptate';
   END IF;
   -- ștampilele porților Izometrie, CALCULATE după ultima schimbare (docs/izometrie/PORTI_REGULA.md: rândul bucket-ului izo-* și politicile de pe
