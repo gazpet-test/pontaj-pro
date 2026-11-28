@@ -1,22 +1,25 @@
 import { useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase.js'
 import { G, btnMic, fmtData } from './ctcUi.jsx'
-import { construiesteIzometrii } from './ctcIzometrii.js'
+import { construiesteIzometrii, descarcaIzometrie } from './ctcIzometrii.js'
 
 // Izometriile generate în Execuție → Izometrie (export Centralizator Transgaz + PDF aprobat), DOAR citire.
 // Generarea/ștergerea rămân la managerul de proiect, în Execuție. Fișierele se descarcă direct din
 // bucket-ul executie-pachete-pdf (fără copii); se văd toate reviziile, cea mai nouă prima.
+// Exportul IZO livrat în fișiere separate (> 50 MB) se descarcă întreg, ca în istoricul din Izometrie: ZIP făcut pe calculator.
 export default function CtcIzometriiProiect({ proiectId }) {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [eroare, setEroare] = useState('')
+  const [info, setInfo] = useState('')
   const [busy, setBusy] = useState(null)
   const [toate, setToate] = useState(false)   // false = doar ultima revizie pe document
-  const activ = useRef(true)
+  const gen = useRef(0)   // generația: alt proiect / demontarea invalidează o descărcare în curs (L24)
 
   useEffect(() => {
     let anulat = false
-    activ.current = true
+    const g = ++gen.current
+    setBusy(null); setInfo('')
     ;(async () => {
       try {
         const [rP, rT] = await Promise.all([
@@ -25,6 +28,7 @@ export default function CtcIzometriiProiect({ proiectId }) {
           supabase.from('executie_tronsoane').select('id, cod, denumire').eq('proiect_id', proiectId),
         ])
         if (rP.error) throw rP.error
+        if (rT.error) throw rT.error
         const pachete = rP.data || []
         let docs = []
         if (pachete.length) {
@@ -41,17 +45,27 @@ export default function CtcIzometriiProiect({ proiectId }) {
         if (!anulat) setLoading(false)
       }
     })()
-    return () => { anulat = true; activ.current = false }
+    return () => { anulat = true; if (gen.current === g) gen.current++ }
   }, [proiectId])
 
   const descarca = async (r) => {
-    setBusy(r.id); setEroare('')
-    const { data, error } = await supabase.storage.from('executie-pachete-pdf')
-      .createSignedUrl(r.fisier_path, 120, { download: r.fisier_nume || true })
-    if (!activ.current) return
+    const g = gen.current
+    setBusy(r.id); setEroare(''); setInfo('')
+    const res = await descarcaIzometrie(supabase, r, proiectId)
+    if (g !== gen.current) return
     setBusy(null)
-    if (error || !data?.signedUrl) { setEroare(`${r.fisier_nume}: ${error?.message || 'fișierul nu poate fi descărcat.'}`); return }
-    window.open(data.signedUrl, '_blank', 'noopener')
+    if (!res.ok) { setEroare(`${r.fisier_nume}: ${res.eroare}`); return }
+    if (res.url) { window.open(res.url, '_blank', 'noopener'); return }
+    // livrare separată: toate fișierele exportului, puse în ZIP pe calculator
+    const url = URL.createObjectURL(new Blob([res.bytes], { type: 'application/zip' }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = res.nume
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    setInfo(`✓ ${res.nume} (${res.numar} fișiere de pe server, puse într-o arhivă)`)
   }
 
   const vizibile = toate ? rows : rows.filter(r => r.ultima)
@@ -70,6 +84,7 @@ export default function CtcIzometriiProiect({ proiectId }) {
       </div>
       {loading && <div style={{ color: G.muted }}>Se încarcă izometriile...</div>}
       {eroare && <div role="alert" style={{ color: G.red }}>{eroare}</div>}
+      {info && <div role="status" style={{ color: G.green }}>{info}</div>}
       {!loading && !eroare && !rows.length && <div style={{ color: G.muted }}>Nicio izometrie generată pe acest proiect.</div>}
       {vizibile.map(r => (
         <div key={r.id} style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', padding: '8px 0', borderTop: `1px solid ${G.border}`, opacity: r.ultima ? 1 : 0.7 }}>
@@ -78,6 +93,7 @@ export default function CtcIzometriiProiect({ proiectId }) {
             <div>{r.cod} · rev{r.revizie} · {r.tronson}</div>
             <small style={{ color: G.muted }}>
               {fmtData(r.uploadat_la)} · {r.tip_document === 'pdf_aprobare_transgaz' ? 'PDF aprobare Transgaz' : 'Centralizator'}
+              {r.separat && ' · + PDF-urile în fișiere separate (Descarcă le pune într-o arhivă)'}
               {!r.ultima && ' · revizie/variantă mai veche'}
             </small>
           </div>
@@ -85,7 +101,7 @@ export default function CtcIzometriiProiect({ proiectId }) {
             {r.aprobat ? '✅ Aprobat' : '📝 Ciornă'}
           </span>
           <button disabled={busy !== null} onClick={() => descarca(r)} style={btnMic(G.blue)}>
-            {busy === r.id ? 'Se descarcă...' : '⬇ Descarcă'}
+            {busy === r.id ? 'Se descarcă...' : r.separat ? '⬇ Descarcă (ZIP)' : '⬇ Descarcă'}
           </button>
         </div>
       ))}
