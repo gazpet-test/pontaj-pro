@@ -1,0 +1,42 @@
+# 20270115b: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase)
+coloana	coloana public.sud_citiri.buletin_id	creat
+coloana	coloana public.sud_citiri.cheie_idempotenta	creat
+coloana	coloana public.sud_citiri.citire	creat
+coloana	coloana public.sud_citiri.cost_cunoscut	creat
+coloana	coloana public.sud_citiri.cost_usd	creat
+coloana	coloana public.sud_citiri.creat_de	creat
+coloana	coloana public.sud_citiri.creat_la	creat
+coloana	coloana public.sud_citiri.eroare_cod	creat
+coloana	coloana public.sud_citiri.id	creat
+coloana	coloana public.sud_citiri.incheiat_la	creat
+coloana	coloana public.sud_citiri.model	creat
+coloana	coloana public.sud_citiri.nr_randuri	creat
+coloana	coloana public.sud_citiri.proiect_id	creat
+coloana	coloana public.sud_citiri.stare	creat
+coloana	coloana public.sud_citiri.tip	creat
+constrangere	constrangere tabel public.sud_citiri.sud_citiri_buletin_id_fkey	creat
+constrangere	constrangere tabel public.sud_citiri.sud_citiri_cheie_uq	creat
+constrangere	constrangere tabel public.sud_citiri.sud_citiri_cost_usd_check	creat
+constrangere	constrangere tabel public.sud_citiri.sud_citiri_eroare_cod_check	creat
+constrangere	constrangere tabel public.sud_citiri.sud_citiri_model_check	creat
+constrangere	constrangere tabel public.sud_citiri.sud_citiri_pkey	creat
+constrangere	constrangere tabel public.sud_citiri.sud_citiri_stare_check	creat
+constrangere	constrangere tabel public.sud_citiri.sud_citiri_stare_ck	creat
+constrangere	constrangere tabel public.sud_citiri.sud_citiri_tip_check	creat
+functie	functie public.fn_sud_amprenta_pachet(bigint)	creat
+functie	functie public.fn_sud_citire_rezerva(bigint,text,text,uuid)	creat
+functie	functie public.fn_sud_citire_salveaza(uuid,jsonb,numeric,boolean,text)	creat
+functie	functie public.fn_sud_citire_valida(jsonb)	creat
+functie	functie public.fn_sud_export_inregistreaza(bigint,text,jsonb,bigint,text)	schimbat
+politica	politica public.sud_citiri.sud_citiri_citire	creat
+relatie	relatie public.sud_citiri	creat
+relatie	relatie public.sud_citiri_buletin_ix	creat
+relatie	relatie public.sud_citiri_cheie_uq	creat
+relatie	relatie public.sud_citiri_id_seq	creat
+relatie	relatie public.sud_citiri_pkey	creat
+tip	tip public.sud_citiri	creat
+tip	tip public.sud_citiri[]	creat
+trigger	trigger public.sud_buletine intern sud_citiri_buletin_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.sud_buletine intern sud_citiri_buletin_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.sud_citiri intern sud_citiri_buletin_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.sud_citiri intern sud_citiri_buletin_id_fkey "RI_FKey_check_upd"() 17	creat

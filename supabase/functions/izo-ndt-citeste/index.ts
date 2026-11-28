@@ -1,6 +1,7 @@
-// izo-ndt-citeste v1 (27.11.2026, PR2a Buletine NDT) — citirea unui buletin NDT cu AI, pentru confirmarea MP-ului.
-// Intrare: POST { buletin_id, model?: 'principal' | 'alternativ' } cu JWT-ul utilizatorului. Logica și fișa de securitate: handler.ts.
-// Nu confirmă și nu scrie rânduri: întoarce citirea; confirmarea o face MP-ul prin fn_sud_buletin_confirma.
+// izo-ndt-citeste v2 (28.11.2026, citirile pe server — migrarea 20270115b) — citirea unui buletin NDT cu AI, pentru confirmarea MP-ului.
+// Intrare: POST { buletin_id, cerere: UUID (cheia intenției, refolosită la reluare), model?: 'principal' | 'alternativ' } cu JWT-ul
+// utilizatorului. Logica și fișa de securitate: handler.ts. Cere migrarea 20270115b aplicată (fn_sud_citire_rezerva / _salveaza).
+// Nu confirmă și nu scrie rânduri: salvează citirea validată în sud_citiri și o întoarce; confirmarea o face MP-ul prin fn_sud_buletin_confirma.
 // Secrete (doar numele): ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY (ultimul DOAR pentru ai_plafon_*).
 // Opționale: IZO_NDT_MODEL_PRINCIPAL / IZO_NDT_MODEL_ALTERNATIV (doar din lista permisă din handler.ts).
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"

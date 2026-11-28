@@ -5,7 +5,9 @@ import {
   tronsonNrDinCod, cheieDinServer, codDinCheie, aziBucuresti, valideazaFisier, sha256Hex, caleFisier, valideazaIncarcare,
   mapeazaEroareRpc, normalizeazaCitire, mapeazaRaspunsEdge, randuriDinCitire, parseazaLipire, pregatesteRanduriConfirmare,
   combinaCitiri, randArhivaPentruStare, calculeazaVerificari, filtreazaBuletine, coduriDinPachete, valideazaEliminare,
-  MAX_PDF_OCTETI, combinaSemnaleCitiri,
+  MAX_PDF_OCTETI, combinaSemnaleCitiri, semnaturaRanduri, alegeCitiriSalvate,
+  PREFIX_CERERE_NDT, stocareLocala, scrieCerereNdt, stergeCerereNdt, cereriNdtPastrate, decizieCheieNdt, raspunsDeSalvat,
+  clasificaSalvareCitire, reconciliazaCereriNdt,
 } from './izoBuletineNdtLogica.js'
 import { comparaCitiri } from './lib/izoNdt.js'
 import { createHash, webcrypto } from 'node:crypto'
@@ -160,6 +162,156 @@ describe('normalizeazaCitire / mapeazaRaspunsEdge', () => {
     expect(r.tip).toBe('necunoscut')
     expect(r.mesaj).toMatch(/nu se reîncearcă automat/)
     expect(mapeazaRaspunsEdge({ error: { name: 'FunctionsHttpError', context: { status: 502 } } }).tip).toBe('necunoscut')
+  })
+  // 20270115b: răspunsul edge-ului cu citirea păstrată pe server (contractul handler.ts: salvata / citire_id / idempotent; codurile cererii)
+  it('salvată doar cu salvata: true ȘI citire_id întreg pozitiv; altfel nesalvată (L18)', () => {
+    expect(mapeazaRaspunsEdge({ data: { ...citireEdge, salvata: true, citire_id: 12, idempotent: true } })).toMatchObject({ tip: 'ok', salvata: true, citireId: 12, idempotent: true })
+    for (const extra of [{}, { salvata: true }, { salvata: true, citire_id: null }, { salvata: true, citire_id: '12' }, { salvata: 'true', citire_id: 12 }, { salvata: false, citire_id: 12 }, { salvata: true, citire_id: 0 }]) {
+      const r = mapeazaRaspunsEdge({ data: { ...citireEdge, ...extra } })
+      expect(r.tip).toBe('ok'); expect(r.salvata).toBe(false); expect(r.citireId).toBeNull()
+    }
+  })
+  it('codurile cererii de citire: în lucru / necunoscută / eșuată / limita / cheie refolosită — fiecare cu tipul lui, nu „plafon” sau „invalid”', () => {
+    const cu = cod => mapeazaRaspunsEdge({ error: { name: 'FunctionsHttpError', context: { status: 409 } }, corp: { success: false, eroare: cod, mesaj: 'm' } })
+    expect(cu('citire_in_curs').tip).toBe('in_curs')
+    expect(cu('citire_in_curs').mesaj).toMatch(/nu se plătește de două ori/)
+    expect(cu('citire_necunoscuta').tip).toBe('necunoscuta')
+    expect(cu('citire_esuata').tip).toBe('esuata')
+    expect(mapeazaRaspunsEdge({ error: { name: 'FunctionsHttpError', context: { status: 429 } }, corp: { eroare: 'prea_multe_citiri', mesaj: 'maxim 5' } }).tip).toBe('limita')
+    expect(cu('cheie_alta_cerere').tip).toBe('eroare')
+    // cererea indisponibilă (503) rămâne „necunoscut”: nu se știe dacă a pornit ceva
+    expect(mapeazaRaspunsEdge({ error: { name: 'FunctionsHttpError', context: { status: 503 } }, corp: { eroare: 'cerere_indisponibila', mesaj: 'x' } }).tip).toBe('necunoscut')
+  })
+})
+
+describe('citirile salvate (20270115b): alegerea la deschidere și semnătura rândurilor', () => {
+  const C = (id, tip, stare = 'gata') => ({ id, tip, stare, citire: { randuri: [] }, model: 'claude-sonnet-5-5' })
+  it('ultima principală; alternativa doar dacă e MAI NOUĂ decât ea; „in_curs” / „esuat” / fără citire nu se aleg', () => {
+    expect(alegeCitiriSalvate([])).toEqual({ principal: null, alternativ: null })
+    expect(alegeCitiriSalvate(null)).toEqual({ principal: null, alternativ: null })
+    expect(alegeCitiriSalvate([C(1, 'alternativ')])).toEqual({ principal: null, alternativ: null })
+    const a = alegeCitiriSalvate([C(1, 'principal'), C(2, 'alternativ'), C(3, 'principal'), C(4, 'alternativ', 'esuat'), C(5, 'principal', 'in_curs')])
+    expect(a.principal.id).toBe(3); expect(a.alternativ).toBeNull()
+    const b = alegeCitiriSalvate([C(3, 'principal'), C(1, 'principal'), C(6, 'alternativ'), C(4, 'alternativ')])
+    expect(b.principal.id).toBe(3); expect(b.alternativ.id).toBe(6)
+    expect(alegeCitiriSalvate([{ ...C(2, 'principal'), citire: null }]).principal).toBeNull()
+  })
+  it('semnătura: aceleași valori = aceeași semnătură, oricare ar fi id-urile locale; o valoare schimbată / un rând în plus = alta', () => {
+    const r = randuriDinCitire({ randuri: [{ cod_raw: 'T12S1', rezultat: 'acceptat', start_mm: 1.5 }] })
+    const r2 = randuriDinCitire({ randuri: [{ cod_raw: 'T12S1', rezultat: 'acceptat', start_mm: 1.5 }] })
+    expect(r[0]._id).not.toBe(r2[0]._id)
+    expect(semnaturaRanduri(r)).toBe(semnaturaRanduri(r2))
+    expect(semnaturaRanduri([{ ...r[0], rezultat: 'respins' }])).not.toBe(semnaturaRanduri(r))
+    expect(semnaturaRanduri([...r, ...r2])).not.toBe(semnaturaRanduri(r))
+    expect(semnaturaRanduri([])).toBe('[]')
+    // null / '' sunt același gol (celula goală din tabel); 1.5 și '1.5' aceeași valoare afișată
+    expect(semnaturaRanduri([{ cod_raw: 'X', start_mm: null }])).toBe(semnaturaRanduri([{ cod_raw: 'X', start_mm: '' }]))
+    expect(semnaturaRanduri([{ cod_raw: 'X', start_mm: 1.5 }])).toBe(semnaturaRanduri([{ cod_raw: 'X', start_mm: '1.5' }]))
+  })
+})
+
+// ── review PR #1222 r1 P1: cheia cererii nu se pierde (registrul din browser + reluarea salvării) ──
+// O stocare falsă cu interfața Storage (length / key / getItem / setItem / removeItem); `rupta` simulează stocarea plină / refuzată.
+function stocareFalsa({ rupta = null, mincinoasa = false } = {}) {
+  const m = new Map()
+  return {
+    m,
+    get length() { if (rupta === 'citire') throw new Error('SecurityError'); return m.size },
+    key: i => [...m.keys()][i] ?? null,
+    getItem: k => { if (rupta === 'citire') throw new Error('SecurityError'); return m.has(k) ? (mincinoasa ? '{}' : m.get(k)) : null },
+    setItem: (k, v) => { if (rupta === 'scriere') throw new Error('QuotaExceededError'); m.set(k, String(v)) },
+    removeItem: k => { m.delete(k) },
+  }
+}
+const K1 = '0b8f7a32-5c1d-4e2f-9a6b-1c2d3e4f5a6b', K2 = '1c9e8b43-6d2e-4f3a-8b7c-2d3e4f5a6b7c', K3 = '2daf9c54-7e3f-4a4b-9c8d-3e4f5a6b7c8d'
+const INTR = (cerere, o = {}) => ({ v: 1, cerere, buletin_id: 1, tip: 'principal', faza: 'trimisa', creat_la: '2026-11-28T10:00:00.000Z', ...o })
+
+describe('cererile de citire păstrate în browser (PR #1222 r2, P1 cheia pierdută)', () => {
+  it('scrierea se verifică prin recitire; stocare lipsă / plină / care minte / intrare invalidă = false (atunci citirea plătită nu pornește)', () => {
+    const s = stocareFalsa()
+    expect(scrieCerereNdt(s, INTR(K1))).toBe(true)
+    expect(JSON.parse(s.m.get(PREFIX_CERERE_NDT + K1))).toEqual(INTR(K1))
+    expect(scrieCerereNdt(null, INTR(K1))).toBe(false)
+    expect(scrieCerereNdt(stocareFalsa({ rupta: 'scriere' }), INTR(K1))).toBe(false)
+    expect(scrieCerereNdt(stocareFalsa({ mincinoasa: true }), INTR(K1))).toBe(false)
+    for (const rau of [INTR('nu-uuid'), INTR(K1, { tip: 'alt' }), INTR(K1, { faza: 'gata' }), INTR(K1, { buletin_id: '1' }), INTR(K1, { v: 2 }), { ...INTR(K1), creat_la: 5 }]) {
+      expect(scrieCerereNdt(stocareFalsa(), rau)).toBe(false)
+    }
+    // ștergerea e verificată și ea; pe cheia altei cereri nu atinge nimic
+    expect(stergeCerereNdt(s, K2)).toBe(true); expect(s.m.size).toBe(1)
+    expect(stergeCerereNdt(s, K1)).toBe(true); expect(s.m.size).toBe(0)
+    expect(stergeCerereNdt(null, K1)).toBe(false)
+  })
+  it('stocareLocala: fereastra fără localStorage sau cu acces care aruncă = null (nu excepție)', () => {
+    expect(stocareLocala(null)).toBeNull()
+    expect(stocareLocala({})).toBeNull()
+    expect(stocareLocala({ get localStorage() { throw new Error('SecurityError') } })).toBeNull()
+    const ls = stocareFalsa()
+    expect(stocareLocala({ localStorage: ls })).toBe(ls)
+  })
+  it('intrările unui buletin: o intrare pe cheie, cele mai noi întâi, alt buletin / alt modul neatinse, forma greșită numărată (L12), eroarea raportată (L18)', () => {
+    const s = stocareFalsa()
+    scrieCerereNdt(s, INTR(K1, { creat_la: '2026-11-28T10:00:00.000Z' }))
+    scrieCerereNdt(s, INTR(K2, { creat_la: '2026-11-28T11:00:00.000Z', tip: 'alternativ' }))
+    scrieCerereNdt(s, INTR(K3, { buletin_id: 2 }))
+    s.setItem('ctc_tab', 'carti')                                   // alt modul: nu se numără, nu se atinge
+    s.setItem(PREFIX_CERERE_NDT + 'x', '{nu json')                    // formă greșită
+    s.setItem(PREFIX_CERERE_NDT + K3.replace('2', '3'), JSON.stringify(INTR(K1)))   // cheia din nume ≠ cheia din conținut
+    const r = cereriNdtPastrate(s, 1)
+    expect(r.intrari.map(x => x.cerere)).toEqual([K2, K1])
+    expect(r.invalide).toBe(2); expect(r.eroare).toBeNull()
+    expect(cereriNdtPastrate(s, 2).intrari.map(x => x.cerere)).toEqual([K3])
+    expect(cereriNdtPastrate(null, 1)).toEqual({ intrari: [], invalide: 0, eroare: null })
+    expect(cereriNdtPastrate(stocareFalsa({ rupta: 'citire' }), 1).eroare).toMatch(/SecurityError/)
+    expect(s.getItem('ctc_tab')).toBe('carti')
+  })
+  it('decizia pe cheie după edge: salvată = iese; citire NEsalvată = rămâne cu citirea (reproducerea r1: era „ok” și se ștergea); necunoscut / în lucru = rămâne; refuz cert = iese', () => {
+    // reproducerea exactă din review-ul r1 (HTTP 200, salvata:false, avertisment salvare_neconfirmata)
+    const r1 = mapeazaRaspunsEdge({ data: { success: true, salvata: false, citire_id: null, avertisment: 'salvare_neconfirmata', citire: { antet: {}, randuri: [{ cod_raw: 'T12S1', rezultat: 'acceptat' }], incerte: [], partial: false, pagini_necitite: [] } } })
+    expect(r1.tip).toBe('ok'); expect(decizieCheieNdt(r1)).toBe('nesalvata')
+    expect(decizieCheieNdt({ tip: 'ok', salvata: true })).toBe('sterge')
+    expect(decizieCheieNdt({ tip: 'ok' })).toBe('nesalvata')
+    for (const tip of ['necunoscut', 'in_curs']) expect(decizieCheieNdt({ tip })).toBe('pastreaza')
+    for (const tip of ['plafon', 'drept', 'stare', 'invalid', 'eroare', 'nepublicat', 'limita', 'esuata', 'necunoscuta']) expect(decizieCheieNdt({ tip }), tip).toBe('sterge')
+    expect(decizieCheieNdt(null)).toBe('pastreaza')
+  })
+  it('ce se păstrează pentru reluare = citirea BRUTĂ + costul, exact ca de la edge; cost lipsă / invalid = nimic de reluat (cheia rămâne „trimisa”)', () => {
+    const citire = { antet: { numar: '1' }, randuri: [{ cod_raw: 'T12S1' }], incerte: [] }
+    expect(raspunsDeSalvat({ citire, cost_usd: 0.0123, cost_cunoscut: true, model: 'claude-sonnet-5-5' }))
+      .toEqual({ citire, cost_usd: 0.0123, cost_cunoscut: true, model: 'claude-sonnet-5-5' })
+    expect(raspunsDeSalvat({ citire, cost_usd: 0.37, cost_cunoscut: false }).model).toBeNull()
+    for (const rau of [null, {}, { citire: null, cost_usd: 1, cost_cunoscut: true }, { citire, cost_usd: '0.1', cost_cunoscut: true }, { citire, cost_usd: -1, cost_cunoscut: true },
+      { citire, cost_usd: NaN, cost_cunoscut: true }, { citire, cost_usd: 0.1 }, { citire, cost_usd: 0.1, cost_cunoscut: 'true' }]) {
+      expect(raspunsDeSalvat(rau)).toBeNull()
+    }
+  })
+  it('reluarea salvării (fn_sud_citire_salveaza): doar 55000 / 22023 sunt certe; 42501, rețea, 5xx, funcție lipsă, id lipsă = necunoscut (cheia rămâne, L05)', () => {
+    expect(clasificaSalvareCitire({ data: 31 })).toEqual({ tip: 'salvata', id: 31 })
+    expect(clasificaSalvareCitire({ data: '31' })).toEqual({ tip: 'salvata', id: 31 })
+    expect(clasificaSalvareCitire({ error: { code: '55000', message: 'sud: cererea de citire e deja incheiata (esuat)' } }).tip).toBe('incheiata')
+    expect(clasificaSalvareCitire({ error: { code: '22023', message: 'sud: citirea are alta forma (randuri)' } }).tip).toBe('refuzata')
+    for (const res of [{ error: { code: '42501', message: 'sud: doar cel care a pornit' } }, { error: { code: '', message: 'TypeError: Failed to fetch' } },
+      { error: { code: 'PGRST202', message: 'lipsă' } }, { error: { code: '57014', message: 'timeout' } }, { error: { message: 'x' } },
+      { data: null }, { data: 0 }, { data: -1 }, { data: 1.5 }, { data: { id: 3 } }, {}]) {
+      const s = clasificaSalvareCitire(res)
+      expect(s.tip, JSON.stringify(res)).toBe('necunoscut'); expect(s.mesaj).toMatch(/Reia salvarea/)
+    }
+    expect(clasificaSalvareCitire()).toMatchObject({ tip: 'necunoscut' })
+  })
+  it('la deschidere: TOATE stările de pe server — gata / esuat = iese; in_curs = rămâne (de salvat sau în lucru); rând lipsă = rămâne', () => {
+    const intrari = [INTR(K1, { faza: 'nesalvata' }), INTR(K2), INTR(K3, { tip: 'alternativ' }), INTR('3ebfad65-8f4a-4b5c-8d9e-4f5a6b7c8d9e')]
+    const server = [{ id: 7, cheie_idempotenta: K1.toUpperCase(), stare: 'in_curs' }, { id: 8, cheie_idempotenta: K2, stare: 'gata' },
+      { id: 9, cheie_idempotenta: K3, stare: 'esuat', eroare_cod: 'apel_ai_esuat' }]
+    const r = reconciliazaCereriNdt(intrari, server)
+    expect(r.map(x => [x.actiune, x.motiv, x.rand?.id ?? null])).toEqual([
+      ['pastreaza', 'de_salvat', 7], ['sterge', 'salvata', 8], ['sterge', 'esuata', 9], ['pastreaza', 'fara_rand', null]])
+    expect(reconciliazaCereriNdt([INTR(K1)], [{ id: 7, cheie_idempotenta: K1, stare: 'in_curs' }])[0].motiv).toBe('in_lucru')
+    expect(reconciliazaCereriNdt([INTR(K1)], null)[0]).toMatchObject({ actiune: 'pastreaza', motiv: 'fara_rand' })
+    expect(reconciliazaCereriNdt(null, server)).toEqual([])
+  })
+  it('ordinea livrării: „actualizare_in_curs” (edge nou, bază fără 20270115b) = nepublicat, cert (cheia iese), mesajul edge-ului', () => {
+    const r = mapeazaRaspunsEdge({ error: { name: 'FunctionsHttpError', context: { status: 503 } }, corp: { success: false, eroare: 'actualizare_in_curs', mesaj: 'Citirea cu AI e oprită cât se face actualizarea serverului. Nimic consumat.' } })
+    expect(r.tip).toBe('nepublicat'); expect(r.mesaj).toMatch(/Nimic consumat/); expect(decizieCheieNdt(r)).toBe('sterge')
   })
 })
 

@@ -14,8 +14,10 @@ import { comparaCitiri, normalizeazaRezultat } from './lib/izoNdt.js'
 import {
   BUCKET_NDT, METODE, METODE_OBLIGABILE, STARI_BULETIN, ETICHETA_STARE, CAMPURI_INDICATII, VARIANTE_ALEGERE,
   tronsonNrDinCod, codDinCheie, fmtMoment, fmtData, valideazaFisier, sha256Hex, caleFisier, valideazaIncarcare,
-  mapeazaEroareRpc, mapeazaRaspunsEdge, randGol, randuriDinCitire, parseazaLipire, pregatesteRanduriConfirmare,
+  mapeazaEroareRpc, mapeazaRaspunsEdge, normalizeazaCitire, randGol, randuriDinCitire, parseazaLipire, pregatesteRanduriConfirmare,
   combinaCitiri, combinaSemnaleCitiri, randArhivaPentruStare, calculeazaVerificari, filtreazaBuletine, coduriDinPachete, valideazaEliminare,
+  semnaturaRanduri, alegeCitiriSalvate, stocareLocala, scrieCerereNdt, stergeCerereNdt, cereriNdtPastrate, decizieCheieNdt, raspunsDeSalvat,
+  clasificaSalvareCitire, reconciliazaCereriNdt,
 } from './izoBuletineNdtLogica.js'
 
 const G = {
@@ -84,9 +86,9 @@ export default function IzoBuletineNdt({ proiectId, tronsoane, initialTronsonId,
   const tronson = useMemo(() => (tronsoane || []).find(t => t.id === tronsonId) || null, [tronsoane, tronsonId])
   const reincarca = () => setReloadKey(k => k + 1)
   const anunta = (msg, c = G.green) => { setToast({ msg, c }); setTimeout(() => setToast(null), 4000) }
-  // TODO(PR #1218 r1, P1 :291/:523): citirea AI și corecturile stau doar în ecran până la confirmare; păstrarea lor pe
-  // server cere un tabel nou (decizia proprietarului). Până atunci: avertisment vizibil + confirmare la închidere.
-  const poatePleca = () => !nesalvat.current || window.confirm('Citirea și rândurile din tabel nu sunt salvate (se salvează doar la confirmare). Dacă închizi, se pierd. Închizi oricum?')
+  // Citirea AI se păstrează pe server (sud_citiri, migrarea 20270115b; PR #1218 r1 P1 :291/:523) și se reîncarcă la deschidere.
+  // Ce rămâne doar în ecran până la confirmare: corecturile manuale (și o citire pe care serverul n-a confirmat-o) → avertisment + confirmare.
+  const poatePleca = () => !nesalvat.current || window.confirm('Rândurile din tabel (corecturile tale) nu sunt salvate: se salvează doar la confirmare. Dacă închizi, se pierd. Închizi oricum?')
   // navigarea internă (alt tab din Izometrie) trece prin aceeași confirmare (Jak r2 P1); la demontare garda se scoate
   useEffect(() => { if (!onGarda) return; onGarda(poatePleca); return () => onGarda(null) }, [onGarda])
   useEffect(() => {
@@ -445,7 +447,7 @@ function BuletinDetaliu({ buletin, tronson, poateScrie, buletineTronson, elimina
         </div>
         <div style={{ flex:'1 1 520px', minWidth:360 }}>
           {buletin.stare === 'ciorna' && poateScrie
-            ? <Confirmare buletin={buletin} tronson={tronson} buletineTronson={buletineTronson} eliminate={eliminate} onSchimbat={onSchimbat} onNesalvat={onNesalvat} />
+            ? <Confirmare key={buletin.id} buletin={buletin} tronson={tronson} buletineTronson={buletineTronson} eliminate={eliminate} onSchimbat={onSchimbat} onNesalvat={onNesalvat} />
             : <RanduriConfirmate buletin={buletin} />}
           {buletin.stare === 'ciorna' && !poateScrie && <Mesaj c={G.muted}>Ciornă: rândurile le confirmă managerul de proiect.</Mesaj>}
           {poateScrie && buletin.stare !== 'anulat' && (
@@ -509,15 +511,103 @@ function Confirmare({ buletin, tronson, buletineTronson, eliminate, onSchimbat, 
   const [mesaj, setMesaj] = useState(null)
   const [lucru, setLucru] = useState(null)            // 'citire' | 'citire2' | 'confirmare'
   const [verificat, setVerificat] = useState(false)
+  // citirea principală e salvată pe server (sud_citiri) și semnătura rândurilor ei: rândurile egale cu ea = nimic nesalvat (20270115b)
+  const [bazaSalvata, setBazaSalvata] = useState(null)   // semnaturaRanduri(...) a citirii salvate; null = nicio citire salvată în tabel
+  const [salvate, setSalvate] = useState({ gata: false, eroare: null, info: null })   // încărcarea citirilor salvate la deschidere
+  // cheia cererii (UUID) pe tip de citire: una pe intenție, păstrată după un răspuns necunoscut (rețea / 5xx / în lucru) sau o salvare
+  // neconfirmată, ca o apăsare nouă să reia aceeași cerere fără a doua plată (L04 / L05); un rezultat cert o scoate. Cheia stă și în
+  // stocarea locală a browserului (o intrare pe cheie, scrisă ÎNAINTEA trimiterii), deci supraviețuiește închiderii panoului / paginii.
+  const chei = useRef({})
+  // citirile primite de la edge, dar nesalvate pe server (salvata: false), pe tip: { cerere, raspuns: {citire brută, cost} } → „Reia salvarea”
+  const [deSalvat, setDeSalvat] = useState({})
+  // citirea principală din tabel: cheia ei (dacă e nesalvată) și semnătura rândurilor ei, ca după salvarea reluată corecturile să se vadă corect
+  const afisat = useRef(null)
   const tok = useRef(0)
   const tNr = tronsonNrDinCod(tronson.cod)
   useEffect(() => () => { tok.current++ }, [])
-  // munca nesalvată (citire AI / rânduri în tabel) se anunță părintelui: închiderea panoului cere confirmare
-  const areNesalvat = !!citire || randuri.length > 0
+  // munca nesalvată se anunță părintelui: închiderea panoului cere confirmare. Citirea salvată pe server nu mai e „nesalvată”;
+  // rămân corecturile manuale (rânduri diferite de citirea salvată) și o citire pe care serverul n-a confirmat-o.
+  const corecturi = bazaSalvata !== null && semnaturaRanduri(randuri) !== bazaSalvata
+  const areNesalvat = bazaSalvata !== null ? corecturi : (!!citire || randuri.length > 0)
   useEffect(() => { onNesalvat?.(areNesalvat) }, [areNesalvat]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => { onNesalvat?.(false) }, []) // eslint-disable-line react-hooks/exhaustive-deps
   // pe durata unei cereri (citire / confirmare) tabelul e blocat: ce se trimite = ce se vede (L24, Jakarinos #1218 r1)
   const blocat = !!lucru
+  const randuriRef = useRef(randuri)
+  randuriRef.current = randuri
+
+  // la deschiderea ciornei: cheile păstrate în browser (sincron, înaintea oricărei apăsări) + TOATE cererile de citire ale buletinului de pe
+  // server (gata / in_curs / esuat, nu doar „gata”): o cheie păstrată iese doar la un rezultat dovedit (gata / esuat), altfel se refolosește.
+  // În tabel intră cea mai nouă citire principală: salvată pe server sau primită și nesalvată (păstrată aici) (+ alternativa mai nouă,
+  // pentru comparație). Se aplică doar dacă între timp nu s-a pornit nimic (token) și tabelul e încă gol (L24); eroarea de citire se arată,
+  // nu înseamnă „nicio citire” (L18).
+  useEffect(() => {
+    let g = true
+    const t0 = tok.current
+    const viu = () => { if (!g) throw new Error('citire anulată') }
+    const stocare = stocareLocala()
+    const pastrate = cereriNdtPastrate(stocare, buletin.id)
+    const ds = {}
+    for (const x of pastrate.intrari) {   // cele mai noi întâi: pe fiecare tip se refolosește cea mai nouă cheie
+      if (!chei.current[x.tip]) chei.current[x.tip] = x.cerere
+      if (x.faza === 'nesalvata' && x.raspuns && !ds[x.tip] && chei.current[x.tip] === x.cerere) ds[x.tip] = x
+    }
+    setDeSalvat(ds)
+    const avertLocal = [pastrate.eroare && `cererile păstrate în browser nu s-au putut citi (${pastrate.eroare})`,
+      pastrate.invalide && `${pastrate.invalide} cereri păstrate în browser au alt format și au fost ignorate`].filter(Boolean)
+    ;(async () => {
+      try {
+        const lista = await tot(() => supabase.from('sud_citiri').select('id, tip, model, stare, citire, creat_la, cheie_idempotenta, eroare_cod').eq('buletin_id', buletin.id), viu)
+        if (!g) return
+        const rec = reconciliazaCereriNdt(pastrate.intrari, lista)
+        const sterse = new Set()
+        const note = [...avertLocal]
+        for (const x of rec) {
+          if (x.actiune !== 'sterge') continue
+          stergeCerereNdt(stocare, x.cerere); sterse.add(x.cerere)
+          if (chei.current[x.intrare.tip] === x.cerere) delete chei.current[x.intrare.tip]
+          if (x.motiv === 'esuata') note.push(`o citire pornită anterior s-a încheiat pe server cu eroare (${x.rand.eroare_cod || '—'})`)
+        }
+        if (rec.some(x => x.actiune === 'pastreaza' && x.motiv === 'in_lucru')) {
+          note.push('o citire pornită anterior nu are încă rezultat pe server; „Citește cu AI” reia aceeași cerere (fără o nouă plată)')
+        }
+        const dsFinal = Object.fromEntries(Object.entries(ds).filter(([, x]) => !sterse.has(x.cerere)))
+        setDeSalvat(cur => Object.fromEntries(Object.entries(cur).filter(([, x]) => !sterse.has(x?.cerere))))
+        // candidații: rândurile „gata” + citirile nesalvate păstrate aici (cu id-ul rândului lor in_curs; fără rând = cea mai nouă)
+        const idRand = new Map(rec.filter(x => x.rand).map(x => [x.cerere, Number(x.rand.id)]))
+        const locale = Object.values(dsFinal).map(x => ({ id: idRand.get(x.cerere) ?? Number.MAX_SAFE_INTEGER, tip: x.tip, stare: 'gata',
+          citire: x.raspuns.citire, model: x.raspuns.model || '?', creat_la: x.creat_la, _nesalvata: x.cerere }))
+        const { principal: p, alternativ: a } = alegeCitiriSalvate([...lista, ...locale])
+        const infoNote = note.length ? ` Notă: ${note.join('; ')}.` : ''
+        if (!p) { setSalvate({ gata: true, eroare: null, info: infoNote.trim() || null }); return }
+        if (t0 !== tok.current || randuriRef.current.length) {
+          setSalvate({ gata: true, eroare: null, info: `Există o citire AI ${p._nesalvata ? 'nesalvată, păstrată în acest browser' : 'salvată'} (${p.model}, ${fmtMoment(p.creat_la)}); tabelul are deja rânduri, deci nu a fost încărcată.${infoNote}` })
+          return
+        }
+        const np = normalizeazaCitire({ citire: p.citire, model: p.model })
+        if (!np.ok) { setSalvate({ gata: true, eroare: `citirea ${p._nesalvata ? 'păstrată în browser' : `salvată #${p.id}`} are alt format: ${np.mesaj}`, info: infoNote.trim() || null }); return }
+        const rows = randuriDinCitire(np.citire)
+        const semn = semnaturaRanduri(rows)
+        afisat.current = { cerere: p._nesalvata || null, semnatura: semn }
+        setCitire(np.citire); setRanduri(rows); setBazaSalvata(p._nesalvata ? null : semn); setVerificat(false)
+        let info = p._nesalvata
+          ? `Citirea AI (${p.model}, ${fmtMoment(p.creat_la)}) NU e salvată pe server: e păstrată în acest browser și încărcată în tabel. Apasă «Reia salvarea» (fără o nouă citire, fără o nouă plată).`
+          : `Citirea AI salvată (${p.model}, ${fmtMoment(p.creat_la)}) e încărcată în tabel.`
+        if (a) {
+          const na = normalizeazaCitire({ citire: a.citire, model: a.model })
+          const cmp = na.ok ? comparaCitiri(np.citire, na.citire, { tronson: tNr }) : null
+          const fel = a._nesalvata ? 'A doua citire (nesalvată, păstrată în browser)' : 'A doua citire salvată'
+          if (cmp?.ok) { setComparatie(cmp); setCitire2(na.citire); setAlegeri({}); info += ` ${fel} e deschisă pentru comparație.` }
+          else info += ` ${fel} nu se poate compara (${na.ok ? cmp.erori.join(', ') : na.mesaj}).`
+        }
+        setSalvate({ gata: true, eroare: null, info: info + infoNote })
+      } catch (e) {
+        // citirea de pe server a picat: cheile păstrate rămân neatinse (nimic dovedit), „Reia salvarea” rămâne disponibilă
+        if (g) setSalvate({ gata: true, eroare: [mapeazaEroareRpc(e)?.mesaj || e?.message || String(e), ...avertLocal].join('; '), info: null })
+      }
+    })()
+    return () => { g = false }
+  }, [buletin.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // sursele verificărilor: sudurile din pachetele tronsonului + rândurile buletinelor confirmate (necitite = null, L18)
   const idsConfirmate = useMemo(() => buletineTronson.filter(b => b.stare === 'confirmat').map(b => b.id).join(','), [buletineTronson])
@@ -556,29 +646,100 @@ function Confirmare({ buletin, tronson, buletineTronson, eliminate, onSchimbat, 
 
   const citeste = async (model) => {
     if (lucru) return
+    // o citire primită și nesalvată pe acest tip: se reia DOAR salvarea (aceeași cheie, fără apel AI); o citire nouă ar plăti din nou
+    if (deSalvat[model]) {
+      setMesaj({ c: G.yellow, t: 'Există o citire AI primită, dar nesalvată pe server: apasă «Reia salvarea» (fără o nouă citire și fără o nouă plată) sau «Renunță la ea».' })
+      return
+    }
     if (model === 'principal' && randuri.length && !window.confirm('Tabelul are deja rânduri. Citirea cu AI le înlocuiește. Continui?')) return
+    // cheia intenției: nouă la o apăsare nouă, aceeași după un răspuns necunoscut (reluarea întoarce citirea salvată, fără a doua plată).
+    // L05: cheia se scrie în browser și se verifică ÎNAINTEA trimiterii; dacă nu se poate păstra, citirea plătită nu pornește.
+    const stocare = stocareLocala()
+    const cheie = chei.current[model] || crypto.randomUUID()
+    const intrare = { v: 1, cerere: cheie, buletin_id: buletin.id, tip: model, faza: 'trimisa', creat_la: new Date().toISOString() }
+    if (!scrieCerereNdt(stocare, intrare)) {
+      setMesaj({ c: G.red, t: 'Browserul nu permite păstrarea cererii (stocare locală indisponibilă sau plină). Citirea cu AI nu pornește, ca o întrerupere să nu ducă la o a doua plată; introdu rândurile manual sau folosește alt browser.' })
+      return
+    }
+    chei.current[model] = cheie
     const t = ++tok.current
     setLucru(model === 'principal' ? 'citire' : 'citire2'); setMesaj(null)
     try {
-      const { data, error } = await supabase.functions.invoke('izo-ndt-citeste', { body: { buletin_id: buletin.id, model } })
+      const { data, error } = await supabase.functions.invoke('izo-ndt-citeste', { body: { buletin_id: buletin.id, model, cerere: cheie } })
       const corp = error ? await corpEroareEdge(error) : null
-      if (t !== tok.current) return
       const r = mapeazaRaspunsEdge({ data, error, corp })
-      if (r.tip !== 'ok') { setMesaj({ c: r.tip === 'necunoscut' || r.tip === 'nepublicat' ? G.yellow : G.red, t: r.mesaj }); return }
+      // Cheia se decide ÎNAINTEA verificării tokenului: și dacă panoul s-a închis între timp, stocarea afla rezultatul (L05).
+      // rezultat cert = intenția s-a încheiat; necunoscut / în lucru = cheia rămâne; citire nesalvată = cheia + citirea rămân pentru reluarea salvării
+      const decizie = decizieCheieNdt(r)
+      const rs = decizie === 'nesalvata' ? raspunsDeSalvat(data) : null
+      let pastrata = false
+      if (decizie === 'sterge') { stergeCerereNdt(stocare, cheie); if (chei.current[model] === cheie) delete chei.current[model] }
+      if (rs) {
+        const intrN = { ...intrare, faza: 'nesalvata', raspuns: rs }
+        pastrata = scrieCerereNdt(stocare, intrN)
+        setDeSalvat(d => ({ ...d, [model]: intrN }))
+      }
+      if (t !== tok.current) return
+      if (r.tip !== 'ok') {
+        const reluare = r.tip === 'necunoscut' ? ' Apasă din nou mai târziu: se reia ACEEAȘI cerere (nu se plătește de două ori).' : ''
+        setMesaj({ c: ['necunoscut', 'nepublicat', 'in_curs', 'necunoscuta'].includes(r.tip) ? G.yellow : G.red, t: r.mesaj + reluare })
+        return
+      }
+      const nesalv = r.salvata ? ''
+        : rs && pastrata ? ' ATENȚIE: serverul NU a confirmat salvarea citirii. E păstrată în acest browser: apasă «Reia salvarea» (fără o nouă citire, fără o nouă plată).'
+        : rs ? ' ATENȚIE: serverul NU a confirmat salvarea, iar browserul nu a putut păstra citirea: apasă «Reia salvarea» înainte să închizi panoul.'
+        : ' ATENȚIE: serverul NU a confirmat salvarea citirii. Cererea rămâne păstrată: apasă din nou „Citește” peste câteva secunde (aceeași cerere, fără o nouă plată).'
       if (model === 'principal') {
-        setCitire(r.citire); setRanduri(randuriDinCitire(r.citire)); setComparatie(null); setCitire2(null); setCitire2Aplicata(null); setAlegeri({}); setVerificat(false)
-        setMesaj({ c: G.green, t: `Citite ${r.citire.randuri.length} rânduri${r.citire.model ? ` (${r.citire.model})` : ''}. Verifică-le pe PDF înainte de confirmare.` })
+        const rows = randuriDinCitire(r.citire)
+        const semn = semnaturaRanduri(rows)
+        afisat.current = { cerere: r.salvata ? null : cheie, semnatura: semn }
+        setCitire(r.citire); setRanduri(rows); setComparatie(null); setCitire2(null); setCitire2Aplicata(null); setAlegeri({}); setVerificat(false)
+        setBazaSalvata(r.salvata ? semn : null)
+        setMesaj({ c: r.salvata ? G.green : G.yellow, t: `Citite ${r.citire.randuri.length} rânduri${r.citire.model ? ` (${r.citire.model})` : ''}${r.idempotent ? ' (citirea salvată deja, fără o nouă plată)' : ''}. Verifică-le pe PDF înainte de confirmare.${nesalv}` })
       } else {
         const cmp = comparaCitiri(citire, r.citire, { tronson: tNr })
         if (!cmp.ok) { setMesaj({ c: G.red, t: `Citirile nu se pot compara: ${cmp.erori.join(', ')}` }); return }
         setComparatie(cmp); setCitire2(r.citire); setAlegeri({})
-        setMesaj({ c: G.blue, t: `A doua citire: ${cmp.rezumat.potrivit} rânduri potrivite, ${cmp.randuri.length - cmp.rezumat.potrivit} de ales.` })
+        setMesaj({ c: r.salvata ? G.blue : G.yellow, t: `A doua citire: ${cmp.rezumat.potrivit} rânduri potrivite, ${cmp.randuri.length - cmp.rezumat.potrivit} de ales.${nesalv}` })
       }
     } catch (e) {
       if (t === tok.current) setMesaj({ c: G.red, t: e?.message || String(e) })
     } finally {
       if (t === tok.current) setLucru(null)
     }
+  }
+
+  // Reluarea salvării unei citiri primite și nesalvate: fn_sud_citire_salveaza cu ACEEAȘI cheie, citirea brută și costul primite de la edge
+  // (idempotentă: dacă salvarea a trecut de fapt, întoarce același id). Fără apel AI, fără rezervare de plafon. Doar un rezultat dovedit
+  // scoate cheia (salvată / cerere încheiată altfel / refuz de formă); 42501, rețeaua, 5xx = necunoscut, cheia și citirea rămân (L05).
+  const reiaSalvarea = async (tip) => {
+    const x = deSalvat[tip]
+    if (!x || lucru) return
+    const t = ++tok.current
+    setLucru('salvare'); setMesaj(null)
+    let res
+    try {
+      res = await supabase.rpc('fn_sud_citire_salveaza', { p_cheie: x.cerere, p_citire: x.raspuns.citire, p_cost_usd: x.raspuns.cost_usd, p_cost_cunoscut: x.raspuns.cost_cunoscut, p_eroare: null })
+    } catch (e) { res = { data: null, error: { message: e?.message || String(e) } } }
+    const s = clasificaSalvareCitire(res || {})
+    if (s.tip !== 'necunoscut') { stergeCerereNdt(stocareLocala(), x.cerere); if (chei.current[tip] === x.cerere) delete chei.current[tip] }
+    if (t !== tok.current) return
+    setLucru(null)
+    if (s.tip !== 'necunoscut') setDeSalvat(d => { const n = { ...d }; if (n[tip]?.cerere === x.cerere) delete n[tip]; return n })
+    if (s.tip === 'salvata') {
+      if (tip === 'principal' && afisat.current?.cerere === x.cerere) { setBazaSalvata(afisat.current.semnatura); afisat.current = { ...afisat.current, cerere: null } }
+      setMesaj({ c: G.green, t: `Citirea AI e salvată pe server (#${s.id}), fără o nouă citire și fără o nouă plată.` })
+    } else setMesaj({ c: s.tip === 'necunoscut' ? G.yellow : G.red, t: s.mesaj })
+  }
+  // Renunțarea e alegerea explicită a omului: cheia iese, deci o citire nouă pornește o cerere nouă (care se plătește din nou)
+  const renuntaLaNesalvata = (tip) => {
+    const x = deSalvat[tip]
+    if (!x || lucru) return
+    if (!window.confirm('Renunți la citirea AI nesalvată? Rândurile rămân în tabel până închizi panoul; o citire nouă cu AI se plătește din nou.')) return
+    stergeCerereNdt(stocareLocala(), x.cerere)
+    if (chei.current[tip] === x.cerere) delete chei.current[tip]
+    setDeSalvat(d => { const n = { ...d }; if (n[tip]?.cerere === x.cerere) delete n[tip]; return n })
+    setMesaj({ c: G.muted, t: 'Citirea nesalvată a fost scoasă din browser.' })
   }
 
   const aplicaAlegerile = () => {
@@ -631,7 +792,19 @@ function Confirmare({ buletin, tronson, buletineTronson, eliminate, onSchimbat, 
         <button style={S.btnS} onClick={() => setLipire(lipire === null ? '' : null)} disabled={!!lucru}>📋 Lipește din Excel</button>
       </div>
       {mesaj && <Mesaj c={mesaj.c}>{mesaj.t}</Mesaj>}
-      {areNesalvat && <Mesaj c={G.yellow}>⚠ {citire ? 'Citirea AI și rândurile' : 'Rândurile'} din tabel nu sunt salvate: se salvează doar la confirmare. Dacă închizi panoul înainte, se pierd{citire ? ' (iar citirea cu AI trebuie refăcută)' : ''}.</Mesaj>}
+      {['principal', 'alternativ'].filter(k => deSalvat[k]).map(k => (
+        <div key={k} style={{ margin:'6px 0', padding:'6px 8px', border:`1px solid ${G.yellow}`, borderRadius:6, fontSize:12, color:G.yellow, display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+          <span>⚠ Citire nesalvată{k === 'alternativ' ? ' (a doua citire)' : ''}: serverul nu a confirmat salvarea ({deSalvat[k].raspuns?.model || 'AI'}, {fmtMoment(deSalvat[k].creat_la)}). E păstrată în acest browser.</span>
+          <button style={S.btnS} onClick={() => reiaSalvarea(k)} disabled={!!lucru}>{lucru === 'salvare' ? 'Se salvează…' : '↻ Reia salvarea'}</button>
+          <button style={S.btnS} onClick={() => renuntaLaNesalvata(k)} disabled={!!lucru}>Renunță la ea</button>
+        </div>
+      ))}
+      {salvate.eroare && <Mesaj c={G.red}>Citirile AI salvate nu s-au putut citi: {salvate.eroare}</Mesaj>}
+      {salvate.info && <Mesaj c={G.muted}>{salvate.info}</Mesaj>}
+      {areNesalvat && (bazaSalvata !== null
+        ? <Mesaj c={G.yellow}>⚠ Corecturile tale din tabel nu sunt salvate: se salvează doar la confirmare. Citirea AI rămâne salvată pe server; dacă închizi panoul, se pierd doar corecturile.</Mesaj>
+        : <Mesaj c={G.yellow}>⚠ {citire ? 'Citirea AI și rândurile' : 'Rândurile'} din tabel nu sunt salvate: se salvează doar la confirmare. Dacă închizi panoul înainte, se pierd{citire ? ' (citirea nu a fost confirmată ca salvată pe server)' : ''}.</Mesaj>)}
+      {!areNesalvat && bazaSalvata !== null && <Mesaj c={G.green}>✓ Citirea AI e salvată pe server; nicio corectură nesalvată.</Mesaj>}
       {lipire !== null && (
         <div style={{ margin:'8px 0' }}>
           <div style={{ fontSize:12, color:G.muted }}>Coloanele, în ordine: cod, rezultat, dată, start, end, lungime, înălțime, adâncime, observații.</div>

@@ -2086,7 +2086,7 @@ function ExportIzoModal({ pachet, tronson, tevi, exporting, history, onConfirm, 
 
         {/* FOOTER */}
         <div style={{ padding:'14px 24px', borderTop:`1px solid ${G.border}`, display:'flex', justifyContent:'flex-end', alignItems:'center', gap:8, flexWrap:'wrap' }}>
-          {!buton.activ && buton.motiv && arhiva && <span style={{ fontSize:12, color:G.muted, marginRight:'auto' }}>{buton.motiv}</span>}
+          {!buton.activ && buton.motiv && arhiva && <span style={{ fontSize:12, color:G.muted, marginRight:'auto' }}>{buton.motiv}{arhiva.eroareAmprenta && arhiva.drept?.export === true ? ` (${arhiva.eroareAmprenta})` : ''}</span>}
           <button onClick={onClose} disabled={exporting} style={{...S.btnS, padding:'9px 18px'}}>Anulează</button>
           <button
             onClick={confirma}
