@@ -15,6 +15,7 @@ export default function CtcIzometriiProiect({ proiectId }) {
   const [busy, setBusy] = useState(null)
   const [toate, setToate] = useState(false)   // false = doar ultima revizie pe document
   const gen = useRef(0)   // generația: alt proiect / demontarea invalidează o descărcare în curs (L24)
+  const oprire = useRef(null)   // AbortController-ul descărcării în curs: oprit la demontare / alt proiect (nu mai transferă)
 
   useEffect(() => {
     let anulat = false
@@ -45,14 +46,21 @@ export default function CtcIzometriiProiect({ proiectId }) {
         if (!anulat) setLoading(false)
       }
     })()
-    return () => { anulat = true; if (gen.current === g) gen.current++ }
+    return () => {
+      anulat = true
+      if (gen.current === g) gen.current++
+      oprire.current?.abort(); oprire.current = null
+    }
   }, [proiectId])
 
   const descarca = async (r) => {
     const g = gen.current
+    const c = new AbortController()
+    oprire.current?.abort(); oprire.current = c
     setBusy(r.id); setEroare(''); setInfo('')
-    const res = await descarcaIzometrie(supabase, r, proiectId)
-    if (g !== gen.current) return
+    const res = await descarcaIzometrie(supabase, r, proiectId, undefined, c.signal)
+    if (g !== gen.current || c.signal.aborted) return
+    oprire.current = null
     setBusy(null)
     if (!res.ok) { setEroare(`${r.fisier_nume}: ${res.eroare}`); return }
     if (res.url) { window.open(res.url, '_blank', 'noopener'); return }

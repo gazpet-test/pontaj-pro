@@ -113,6 +113,48 @@ describe('izometrii generate în CTC — exportul livrat în fișiere separate',
     }
   })
 
+  it('oprită în timpul transferului (Jakarinos r1 P2, L24) → transferul se întrerupe, restul fișierelor nu se mai cer, fără ZIP', async () => {
+    const f = fixturaSeparat()
+    let pornit
+    const primul = new Promise(r => { pornit = r })
+    const { sb, jurnal, fetchFals } = clientFals({ tabele: f.tabele, obiecte: f.obiecte, poarta: () => { pornit(); return new Promise(() => {}) } })
+    const c = new AbortController()
+    const p = descarcaIzometrie(sb, rand(f, 61), 1, fetchFals, c.signal)
+    await primul   // primul fișier e în transfer
+    c.abort()
+    const d = await p
+    expect(d).toEqual({ ok: false, anulat: true, eroare: 'Descărcarea a fost oprită.' })
+    expect(jurnal.fetch).toHaveLength(1)
+    expect(jurnal.semnat).toHaveLength(1)
+  })
+
+  it('fetch care ignoră semnalul: după oprire, următorul fișier tot nu se mai cere', async () => {
+    const f = fixturaSeparat()
+    const { sb, fetchFals } = clientFals({ tabele: f.tabele, obiecte: f.obiecte })
+    const cereri = []
+    let pornit, elibereaza
+    const primul = new Promise(r => { pornit = r })
+    const liber = new Promise(r => { elibereaza = r })
+    const fetchSurd = async url => { cereri.push(url); if (cereri.length === 1) { pornit(); await liber } return fetchFals(url) }   // fără signal
+    const c = new AbortController()
+    const p = descarcaIzometrie(sb, rand(f, 61), 1, fetchSurd, c.signal)
+    await primul
+    c.abort()
+    elibereaza()   // primul transfer se termină normal
+    expect(await p).toMatchObject({ ok: false, anulat: true })
+    expect(cereri).toHaveLength(1)
+  })
+
+  it('oprită înainte de transfer → niciun fișier cerut', async () => {
+    const f = fixturaSeparat()
+    const { sb, jurnal, fetchFals } = clientFals({ tabele: f.tabele, obiecte: f.obiecte })
+    const c = new AbortController()
+    c.abort()
+    expect(await descarcaIzometrie(sb, rand(f, 61), 1, fetchFals, c.signal)).toMatchObject({ ok: false, anulat: true })
+    expect(jurnal.fetch).toEqual([])
+    expect(jurnal.semnat).toEqual([])
+  })
+
   it('proiect necunoscut → refuz înainte de orice citire', async () => {
     const f = fixturaSeparat()
     const { sb, jurnal } = clientFals({ tabele: f.tabele, obiecte: f.obiecte })

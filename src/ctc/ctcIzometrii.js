@@ -50,9 +50,12 @@ async function dreptCitireNdt(sb, proiectId) {
  * Livrare separată → întâi dreptul de citire pe arhiva de buletine NDT a proiectului (lista fișierelor stă în sud_exporturi,
  * vizibilă doar cu el); refuzat / neverificat = mesaj clar, nimic descărcat. Apoi TOATE fișierele exportului într-un ZIP local
  * cu structura arhivei originale (descarcaExportIstoric); listă nevalidabilă / fișier lipsă = eroare, fără ZIP parțial.
- * @returns {Promise<{ok:true, url:string} | {ok:true, bytes:Uint8Array, nume:string, numar:number} | {ok:false, eroare:string}>}
+ * `semnal` (AbortSignal, L24): ecranul îl oprește la demontare / alt proiect → transferul în curs se întrerupe, următoarele
+ * fișiere nu se mai cer și ZIP-ul nu se mai construiește (oprirea trece prin fetch, singura intrare a descărcării din istoric).
+ * @returns {Promise<{ok:true, url:string} | {ok:true, bytes:Uint8Array, nume:string, numar:number} | {ok:false, eroare:string, anulat?:true}>}
  */
-export async function descarcaIzometrie(sb, r, proiectId, fetchImpl) {
+export async function descarcaIzometrie(sb, r, proiectId, fetchImpl, semnal) {
+  const oprit = { ok: false, anulat: true, eroare: 'Descărcarea a fost oprită.' }
   if (!r?.separat) {
     try {
       const { data, error } = await sb.storage.from(BUCKET_PACHETE).createSignedUrl(r.fisier_path, 120, { download: r.fisier_nume || true })
@@ -67,7 +70,15 @@ export async function descarcaIzometrie(sb, r, proiectId, fetchImpl) {
     return { ok: false, eroare: `Exportul are Excel-ul și PDF-urile buletinelor în fișiere separate, iar lista lor se vede doar cu dreptul de citire pe arhiva de buletine NDT a proiectului, pe care nu îl ai: ${nimic}` }
   }
   if (dr !== true) return { ok: false, eroare: `Dreptul de citire pe arhiva de buletine NDT nu s-a putut verifica: ${nimic} Reîncearcă.` }
+  if (semnal?.aborted) return oprit
+  const f = fetchImpl ?? globalThis.fetch
+  const fetchOpribil = (url, opt) => {
+    if (semnal?.aborted) return Promise.reject(new Error('descărcare oprită'))
+    return f(url, semnal ? { ...(opt || {}), signal: semnal } : opt)
+  }
+  let res
   try {
-    return await descarcaExportIstoric(sb, { id: r.id, pachet_id: r.pachet_id, fisier_path: r.fisier_path, fisier_nume: r.fisier_nume }, fetchImpl)
-  } catch (e) { return { ok: false, eroare: `${mesaj(e)} — ${nimic}` } }
+    res = await descarcaExportIstoric(sb, { id: r.id, pachet_id: r.pachet_id, fisier_path: r.fisier_path, fisier_nume: r.fisier_nume }, fetchOpribil)
+  } catch (e) { res = { ok: false, eroare: `${mesaj(e)} — ${nimic}` } }
+  return semnal?.aborted ? oprit : res
 }

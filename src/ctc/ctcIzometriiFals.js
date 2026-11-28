@@ -1,6 +1,7 @@
 // DOAR pentru teste: client Supabase fals pentru „Izometrii generate” din CTC (tabele în memorie, RPC-ul fn_sud_drept,
 // link-uri semnate din Storage) + fetch-ul care citește obiectele din Storage-ul fals. Fără rețea.
-export function clientFals({ tabele = {}, obiecte = new Map(), drept = true, dreptEroare = null, semnatEroare = null } = {}) {
+// `poarta(url)` (opțional): promisiune așteptată înaintea răspunsului fetch — transfer „lent”; un `signal` oprit îl întrerupe ca fetch-ul real.
+export function clientFals({ tabele = {}, obiecte = new Map(), drept = true, dreptEroare = null, semnatEroare = null, poarta = null } = {}) {
   const jurnal = { rpc: [], from: [], semnat: [], fetch: [] }
   const sb = {
     async rpc(nume, args) {
@@ -36,8 +37,13 @@ export function clientFals({ tabele = {}, obiecte = new Map(), drept = true, dre
       }),
     },
   }
-  const fetchFals = async url => {
+  const fetchFals = async (url, opt) => {
     jurnal.fetch.push(url)
+    const s = opt?.signal
+    if (s?.aborted) throw new Error('AbortError')
+    if (poarta) {
+      await Promise.race([poarta(url), new Promise((_, rej) => s?.addEventListener('abort', () => rej(new Error('AbortError'))))])
+    }
     const k = String(url).replace('https://fals/', '')
     if (!obiecte.has(k)) return { ok: false, status: 404 }
     const o = obiecte.get(k)

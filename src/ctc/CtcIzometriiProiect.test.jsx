@@ -44,7 +44,10 @@ async function monteaza(o = {}) {
   const asteapta = async () => { await act(async () => { for (let i = 0; i < 60; i++) await Promise.resolve() }) }
   await act(async () => { root.render(<CtcIzometriiProiect proiectId={1} />) })
   await asteapta()
-  curata.push(() => { act(() => root.unmount()); Object.assign(globalThis, vechi); client.sb = null })
+  const inchide = () => { act(() => root.unmount()); Object.assign(globalThis, vechi); client.sb = null }
+  curata.push(inchide)
+  const demonteaza = () => { curata = curata.filter(x => x !== inchide); inchide() }
+  const clic = async el => { await act(async () => { el.dispatchEvent(new j.window.MouseEvent('click', { bubbles: true })) }) }
   const randDe = nume => [...d.querySelectorAll('b')].find(b => b.textContent === nume)?.parentElement?.parentElement
   // după click: până nu mai e niciun buton „Se descarcă...” (JSZip lucrează cu timere reale, nu doar microtask-uri)
   const apasa = async el => {
@@ -55,7 +58,7 @@ async function monteaza(o = {}) {
     expect([...d.querySelectorAll('button')].some(b => b.textContent === 'Se descarcă...')).toBe(false)
     await asteapta()
   }
-  return { d, f, c, blobs, clicuri, deschise, randDe, apasa, asteapta }
+  return { d, f, c, blobs, clicuri, deschise, randDe, apasa, asteapta, clic, demonteaza }
 }
 
 dom(numeDom('CtcIzometriiProiect — livrare separată (jsdom + react-dom)'), () => {
@@ -83,6 +86,24 @@ dom(numeDom('CtcIzometriiProiect — livrare separată (jsdom + react-dom)'), ()
     expect(m.clicuri).toEqual([])
     expect(m.deschise).toEqual([])
     expect(m.c.jurnal.semnat).toEqual([])
+  })
+
+  it('ecranul închis în timpul transferului (Jakarinos r1 P2, L24) → transferul se oprește, restul nu se mai cere, nicio descărcare locală', async () => {
+    // primul transfer stă până după închidere, apoi se termină: fără oprire, descărcarea ar continua cu celelalte fișiere
+    let pornit, elibereaza
+    const primul = new Promise(r => { pornit = r })
+    const liber = new Promise(r => { elibereaza = r })
+    const m = await monteaza({ poarta: () => { pornit(); return liber } })
+    const r = m.randDe('99_GAZ_X_DWG_00001_rev0_Centralizator.xlsx')
+    await m.clic([...r.querySelectorAll('button')].find(b => b.textContent.includes('Descarcă')))
+    await primul   // primul fișier e în transfer
+    m.demonteaza()
+    elibereaza()
+    await new Promise(res => setTimeout(res, 100))
+    expect(m.c.jurnal.fetch).toHaveLength(1)
+    expect(m.c.jurnal.semnat).toHaveLength(1)
+    expect(m.blobs).toEqual([])
+    expect(m.clicuri).toEqual([])
   })
 
   it('fișier lipsă → mesaj cu numele lui, fără ZIP parțial', async () => {
