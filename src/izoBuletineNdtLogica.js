@@ -200,6 +200,12 @@ export function mapeazaRaspunsEdge({ data = null, error = null, status = null, c
   const st = Number(status ?? error?.context?.status ?? 0)
   const codB = String(b?.cod ?? b?.code ?? b?.eroare ?? '')
   const msgB = txt(b?.mesaj ?? b?.message ?? b?.error ?? '')
+  // cererea de citire păstrată pe server (20270115b): stările cererii, înaintea oricărei potriviri pe text
+  if (codB === 'citire_in_curs') return { tip: 'in_curs', mesaj: `${msgB || 'O citire a acestui buletin e deja în lucru.'} Apasă din nou peste câteva secunde: aceeași cerere nu se plătește de două ori.` }
+  if (codB === 'citire_necunoscuta') return { tip: 'necunoscuta', mesaj: msgB || 'Citirea pornită anterior nu s-a încheiat; rezultatul și costul sunt necunoscute.' }
+  if (codB === 'citire_esuata') return { tip: 'esuata', mesaj: msgB || 'Această cerere de citire s-a încheiat cu eroare. Pornește o citire nouă.' }
+  if (codB === 'prea_multe_citiri') return { tip: 'limita', mesaj: msgB || 'Buletinul a atins numărul maxim de citiri cu AI. Completează rândurile manual.' }
+  if (codB === 'cheie_alta_cerere') return { tip: 'eroare', mesaj: msgB || 'Cheia cererii a fost folosită pentru altă citire. Reîncarcă pagina.' }
   if (/plafon/i.test(codB) || /plafon/i.test(msgB)) {
     return { tip: 'plafon', mesaj: `Citirea cu AI nu e disponibilă acum (plafon AI atins sau neconfigurat). ${msgB}`.trim() + ' Introdu rândurile manual.' }
   }
@@ -215,7 +221,28 @@ export function mapeazaRaspunsEdge({ data = null, error = null, status = null, c
     return { tip: 'eroare', mesaj: msgB || txt(error?.message) || 'Citirea a eșuat.' }
   }
   const n = normalizeazaCitire(data)
-  return n.ok ? { tip: 'ok', citire: n.citire } : { tip: 'invalid', mesaj: n.mesaj }
+  if (!n.ok) return { tip: 'invalid', mesaj: n.mesaj }
+  // salvată = serverul a confirmat salvarea în sud_citiri (20270115b); orice altceva = nesalvată (avertismentul rămâne, L18)
+  const salvata = data?.salvata === true && Number.isSafeInteger(data?.citire_id) && data.citire_id > 0
+  return { tip: 'ok', citire: n.citire, salvata, citireId: salvata ? data.citire_id : null, idempotent: data?.idempotent === true }
+}
+
+/** Semnătura rândurilor editabile (doar valorile coloanelor, fără id-urile locale): rândurile neschimbate față de citirea salvată = nimic nesalvat. */
+export function semnaturaRanduri(randuri) {
+  return JSON.stringify((randuri || []).map(r => COLOANE_LIPIRE.map(k => (r?.[k] === null || r?.[k] === undefined ? '' : String(r[k])))))
+}
+
+/**
+ * Citirile salvate ale unui buletin (sud_citiri, stare „gata”) → ce se încarcă la deschidere: ultima citire principală și, dacă există,
+ * o citire alternativă MAI NOUĂ decât ea (pentru comparația existentă). Ordinea = id-ul (serverul îl dă crescător). Fără principală = nimic.
+ * @returns {{principal: object|null, alternativ: object|null}}
+ */
+export function alegeCitiriSalvate(lista) {
+  const gata = (Array.isArray(lista) ? lista : []).filter(x => x && x.stare === 'gata' && x.citire && typeof x.citire === 'object')
+  const desc = [...gata].sort((a, b) => Number(b.id) - Number(a.id))
+  const principal = desc.find(x => x.tip === 'principal') || null
+  const alternativ = principal ? desc.find(x => x.tip === 'alternativ' && Number(x.id) > Number(principal.id)) || null : null
+  return { principal, alternativ }
 }
 
 // ── rândurile editabile ──────────────────────────────────────────────────

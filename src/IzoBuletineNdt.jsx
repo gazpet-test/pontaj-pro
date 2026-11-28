@@ -14,8 +14,9 @@ import { comparaCitiri, normalizeazaRezultat } from './lib/izoNdt.js'
 import {
   BUCKET_NDT, METODE, METODE_OBLIGABILE, STARI_BULETIN, ETICHETA_STARE, CAMPURI_INDICATII, VARIANTE_ALEGERE,
   tronsonNrDinCod, codDinCheie, fmtMoment, fmtData, valideazaFisier, sha256Hex, caleFisier, valideazaIncarcare,
-  mapeazaEroareRpc, mapeazaRaspunsEdge, randGol, randuriDinCitire, parseazaLipire, pregatesteRanduriConfirmare,
+  mapeazaEroareRpc, mapeazaRaspunsEdge, normalizeazaCitire, randGol, randuriDinCitire, parseazaLipire, pregatesteRanduriConfirmare,
   combinaCitiri, combinaSemnaleCitiri, randArhivaPentruStare, calculeazaVerificari, filtreazaBuletine, coduriDinPachete, valideazaEliminare,
+  semnaturaRanduri, alegeCitiriSalvate,
 } from './izoBuletineNdtLogica.js'
 
 const G = {
@@ -84,9 +85,9 @@ export default function IzoBuletineNdt({ proiectId, tronsoane, initialTronsonId,
   const tronson = useMemo(() => (tronsoane || []).find(t => t.id === tronsonId) || null, [tronsoane, tronsonId])
   const reincarca = () => setReloadKey(k => k + 1)
   const anunta = (msg, c = G.green) => { setToast({ msg, c }); setTimeout(() => setToast(null), 4000) }
-  // TODO(PR #1218 r1, P1 :291/:523): citirea AI și corecturile stau doar în ecran până la confirmare; păstrarea lor pe
-  // server cere un tabel nou (decizia proprietarului). Până atunci: avertisment vizibil + confirmare la închidere.
-  const poatePleca = () => !nesalvat.current || window.confirm('Citirea și rândurile din tabel nu sunt salvate (se salvează doar la confirmare). Dacă închizi, se pierd. Închizi oricum?')
+  // Citirea AI se păstrează pe server (sud_citiri, migrarea 20270115b; PR #1218 r1 P1 :291/:523) și se reîncarcă la deschidere.
+  // Ce rămâne doar în ecran până la confirmare: corecturile manuale (și o citire pe care serverul n-a confirmat-o) → avertisment + confirmare.
+  const poatePleca = () => !nesalvat.current || window.confirm('Rândurile din tabel (corecturile tale) nu sunt salvate: se salvează doar la confirmare. Dacă închizi, se pierd. Închizi oricum?')
   // navigarea internă (alt tab din Izometrie) trece prin aceeași confirmare (Jak r2 P1); la demontare garda se scoate
   useEffect(() => { if (!onGarda) return; onGarda(poatePleca); return () => onGarda(null) }, [onGarda])
   useEffect(() => {
@@ -509,15 +510,60 @@ function Confirmare({ buletin, tronson, buletineTronson, eliminate, onSchimbat, 
   const [mesaj, setMesaj] = useState(null)
   const [lucru, setLucru] = useState(null)            // 'citire' | 'citire2' | 'confirmare'
   const [verificat, setVerificat] = useState(false)
+  // citirea principală e salvată pe server (sud_citiri) și semnătura rândurilor ei: rândurile egale cu ea = nimic nesalvat (20270115b)
+  const [bazaSalvata, setBazaSalvata] = useState(null)   // semnaturaRanduri(...) a citirii salvate; null = nicio citire salvată în tabel
+  const [salvate, setSalvate] = useState({ gata: false, eroare: null, info: null })   // încărcarea citirilor salvate la deschidere
+  // cheia cererii (UUID) pe tip de citire: una pe intenție, păstrată DOAR după un răspuns necunoscut (rețea / 5xx / în lucru), ca o
+  // apăsare nouă să reia aceeași cerere fără a doua plată (L04 / L05); un rezultat cert o scoate
+  const chei = useRef({})
   const tok = useRef(0)
   const tNr = tronsonNrDinCod(tronson.cod)
   useEffect(() => () => { tok.current++ }, [])
-  // munca nesalvată (citire AI / rânduri în tabel) se anunță părintelui: închiderea panoului cere confirmare
-  const areNesalvat = !!citire || randuri.length > 0
+  // munca nesalvată se anunță părintelui: închiderea panoului cere confirmare. Citirea salvată pe server nu mai e „nesalvată”;
+  // rămân corecturile manuale (rânduri diferite de citirea salvată) și o citire pe care serverul n-a confirmat-o.
+  const corecturi = bazaSalvata !== null && semnaturaRanduri(randuri) !== bazaSalvata
+  const areNesalvat = bazaSalvata !== null ? corecturi : (!!citire || randuri.length > 0)
   useEffect(() => { onNesalvat?.(areNesalvat) }, [areNesalvat]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => { onNesalvat?.(false) }, []) // eslint-disable-line react-hooks/exhaustive-deps
   // pe durata unei cereri (citire / confirmare) tabelul e blocat: ce se trimite = ce se vede (L24, Jakarinos #1218 r1)
   const blocat = !!lucru
+  const randuriRef = useRef(randuri)
+  randuriRef.current = randuri
+
+  // la deschiderea ciornei: ultima citire principală salvată (+ alternativa mai nouă, pentru comparație). Se aplică doar dacă între timp
+  // nu s-a pornit nimic (token) și tabelul e încă gol (L24); eroarea de citire se arată, nu înseamnă „nicio citire” (L18).
+  useEffect(() => {
+    let g = true
+    const t0 = tok.current
+    const viu = () => { if (!g) throw new Error('citire anulată') }
+    ;(async () => {
+      try {
+        const lista = await tot(() => supabase.from('sud_citiri').select('id, tip, model, stare, citire, creat_la').eq('buletin_id', buletin.id).eq('stare', 'gata'), viu)
+        if (!g) return
+        const { principal: p, alternativ: a } = alegeCitiriSalvate(lista)
+        if (!p) { setSalvate({ gata: true, eroare: null, info: null }); return }
+        if (t0 !== tok.current || randuriRef.current.length) {
+          setSalvate({ gata: true, eroare: null, info: `Există o citire AI salvată (${p.model}, ${fmtMoment(p.creat_la)}); tabelul are deja rânduri, deci nu a fost încărcată.` })
+          return
+        }
+        const np = normalizeazaCitire({ citire: p.citire, model: p.model })
+        if (!np.ok) { setSalvate({ gata: true, eroare: `citirea salvată #${p.id} are alt format: ${np.mesaj}`, info: null }); return }
+        const rows = randuriDinCitire(np.citire)
+        setCitire(np.citire); setRanduri(rows); setBazaSalvata(semnaturaRanduri(rows)); setVerificat(false)
+        let info = `Citirea AI salvată (${p.model}, ${fmtMoment(p.creat_la)}) e încărcată în tabel.`
+        if (a) {
+          const na = normalizeazaCitire({ citire: a.citire, model: a.model })
+          const cmp = na.ok ? comparaCitiri(np.citire, na.citire, { tronson: tNr }) : null
+          if (cmp?.ok) { setComparatie(cmp); setCitire2(na.citire); setAlegeri({}); info += ' A doua citire salvată e deschisă pentru comparație.' }
+          else info += ` A doua citire salvată nu se poate compara (${na.ok ? cmp.erori.join(', ') : na.mesaj}).`
+        }
+        setSalvate({ gata: true, eroare: null, info })
+      } catch (e) {
+        if (g) setSalvate({ gata: true, eroare: mapeazaEroareRpc(e)?.mesaj || e?.message || String(e), info: null })
+      }
+    })()
+    return () => { g = false }
+  }, [buletin.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // sursele verificărilor: sudurile din pachetele tronsonului + rândurile buletinelor confirmate (necitite = null, L18)
   const idsConfirmate = useMemo(() => buletineTronson.filter(b => b.stare === 'confirmat').map(b => b.id).join(','), [buletineTronson])
@@ -559,20 +605,31 @@ function Confirmare({ buletin, tronson, buletineTronson, eliminate, onSchimbat, 
     if (model === 'principal' && randuri.length && !window.confirm('Tabelul are deja rânduri. Citirea cu AI le înlocuiește. Continui?')) return
     const t = ++tok.current
     setLucru(model === 'principal' ? 'citire' : 'citire2'); setMesaj(null)
+    // cheia intenției: nouă la o apăsare nouă, aceeași după un răspuns necunoscut (reluarea întoarce citirea salvată, fără a doua plată)
+    const cheie = chei.current[model] || (chei.current[model] = crypto.randomUUID())
     try {
-      const { data, error } = await supabase.functions.invoke('izo-ndt-citeste', { body: { buletin_id: buletin.id, model } })
+      const { data, error } = await supabase.functions.invoke('izo-ndt-citeste', { body: { buletin_id: buletin.id, model, cerere: cheie } })
       const corp = error ? await corpEroareEdge(error) : null
       if (t !== tok.current) return
       const r = mapeazaRaspunsEdge({ data, error, corp })
-      if (r.tip !== 'ok') { setMesaj({ c: r.tip === 'necunoscut' || r.tip === 'nepublicat' ? G.yellow : G.red, t: r.mesaj }); return }
+      // rezultat cert (citire, refuz de reguli) = intenția s-a încheiat; necunoscut / în lucru = cheia rămâne pentru reluare (L05)
+      if (r.tip !== 'necunoscut' && r.tip !== 'in_curs' && chei.current[model] === cheie) delete chei.current[model]
+      if (r.tip !== 'ok') {
+        const reluare = r.tip === 'necunoscut' ? ' Apasă din nou mai târziu: se reia ACEEAȘI cerere (nu se plătește de două ori).' : ''
+        setMesaj({ c: ['necunoscut', 'nepublicat', 'in_curs', 'necunoscuta'].includes(r.tip) ? G.yellow : G.red, t: r.mesaj + reluare })
+        return
+      }
+      const nesalv = r.salvata ? '' : ' ATENȚIE: serverul nu a confirmat salvarea citirii — dacă închizi panoul, se pierde.'
       if (model === 'principal') {
-        setCitire(r.citire); setRanduri(randuriDinCitire(r.citire)); setComparatie(null); setCitire2(null); setCitire2Aplicata(null); setAlegeri({}); setVerificat(false)
-        setMesaj({ c: G.green, t: `Citite ${r.citire.randuri.length} rânduri${r.citire.model ? ` (${r.citire.model})` : ''}. Verifică-le pe PDF înainte de confirmare.` })
+        const rows = randuriDinCitire(r.citire)
+        setCitire(r.citire); setRanduri(rows); setComparatie(null); setCitire2(null); setCitire2Aplicata(null); setAlegeri({}); setVerificat(false)
+        setBazaSalvata(r.salvata ? semnaturaRanduri(rows) : null)
+        setMesaj({ c: r.salvata ? G.green : G.yellow, t: `Citite ${r.citire.randuri.length} rânduri${r.citire.model ? ` (${r.citire.model})` : ''}${r.idempotent ? ' (citirea salvată deja, fără o nouă plată)' : ''}. Verifică-le pe PDF înainte de confirmare.${nesalv}` })
       } else {
         const cmp = comparaCitiri(citire, r.citire, { tronson: tNr })
         if (!cmp.ok) { setMesaj({ c: G.red, t: `Citirile nu se pot compara: ${cmp.erori.join(', ')}` }); return }
         setComparatie(cmp); setCitire2(r.citire); setAlegeri({})
-        setMesaj({ c: G.blue, t: `A doua citire: ${cmp.rezumat.potrivit} rânduri potrivite, ${cmp.randuri.length - cmp.rezumat.potrivit} de ales.` })
+        setMesaj({ c: r.salvata ? G.blue : G.yellow, t: `A doua citire: ${cmp.rezumat.potrivit} rânduri potrivite, ${cmp.randuri.length - cmp.rezumat.potrivit} de ales.${nesalv}` })
       }
     } catch (e) {
       if (t === tok.current) setMesaj({ c: G.red, t: e?.message || String(e) })
@@ -631,7 +688,12 @@ function Confirmare({ buletin, tronson, buletineTronson, eliminate, onSchimbat, 
         <button style={S.btnS} onClick={() => setLipire(lipire === null ? '' : null)} disabled={!!lucru}>📋 Lipește din Excel</button>
       </div>
       {mesaj && <Mesaj c={mesaj.c}>{mesaj.t}</Mesaj>}
-      {areNesalvat && <Mesaj c={G.yellow}>⚠ {citire ? 'Citirea AI și rândurile' : 'Rândurile'} din tabel nu sunt salvate: se salvează doar la confirmare. Dacă închizi panoul înainte, se pierd{citire ? ' (iar citirea cu AI trebuie refăcută)' : ''}.</Mesaj>}
+      {salvate.eroare && <Mesaj c={G.red}>Citirile AI salvate nu s-au putut citi: {salvate.eroare}</Mesaj>}
+      {salvate.info && <Mesaj c={G.muted}>{salvate.info}</Mesaj>}
+      {areNesalvat && (bazaSalvata !== null
+        ? <Mesaj c={G.yellow}>⚠ Corecturile tale din tabel nu sunt salvate: se salvează doar la confirmare. Citirea AI rămâne salvată pe server; dacă închizi panoul, se pierd doar corecturile.</Mesaj>
+        : <Mesaj c={G.yellow}>⚠ {citire ? 'Citirea AI și rândurile' : 'Rândurile'} din tabel nu sunt salvate: se salvează doar la confirmare. Dacă închizi panoul înainte, se pierd{citire ? ' (citirea nu a fost confirmată ca salvată pe server)' : ''}.</Mesaj>)}
+      {!areNesalvat && bazaSalvata !== null && <Mesaj c={G.green}>✓ Citirea AI e salvată pe server; nicio corectură nesalvată.</Mesaj>}
       {lipire !== null && (
         <div style={{ margin:'8px 0' }}>
           <div style={{ fontSize:12, color:G.muted }}>Coloanele, în ordine: cod, rezultat, dată, start, end, lungime, înălțime, adâncime, observații.</div>

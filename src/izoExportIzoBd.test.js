@@ -12,8 +12,11 @@ const PDF = n => new TextEncoder().encode(`%PDF-1.4 buletin ${n}`)
 const sha = b => createHash('sha256').update(b).digest('hex')
 
 // ── clientul fals: tabele în memorie, filtrele PostgREST folosite de cod, plafon max-rows ──
-function clientFals({ tabele = {}, rpc = {}, maxRows = 1000, storage = {}, drept = { citire: true, scriere: true, export: true } } = {}) {
-  const jurnal = { rpc: [], upload: [], remove: [], insert: [], select: [] }
+// amprenta pachetului de pe server (fn_sud_amprenta_pachet, 20270115b): jurnal SEPARAT (jurnal.amprenta), ca listele exacte de RPC-uri
+// ale testelor vechi să rămână neschimbate; `amprenta` = funcție (apelul n, args) → răspunsul
+const AMP = '0123456789abcdef0123456789abcdef', AMP2 = 'fedcba9876543210fedcba9876543210'
+function clientFals({ tabele = {}, rpc = {}, maxRows = 1000, storage = {}, drept = { citire: true, scriere: true, export: true }, amprenta = () => ({ data: AMP, error: null }) } = {}) {
+  const jurnal = { rpc: [], upload: [], remove: [], insert: [], select: [], amprenta: [] }
   const filtru = (rows, f) => rows.filter(r => f.every(([op, c, v]) => {
     if (op === 'eq') return String(r[c]) === String(v)
     if (op === 'neq') return String(r[c]) !== String(v)
@@ -53,6 +56,7 @@ function clientFals({ tabele = {}, rpc = {}, maxRows = 1000, storage = {}, drept
     jurnal,
     from,
     rpc: async (n, a) => {
+      if (n === 'fn_sud_amprenta_pachet') { jurnal.amprenta.push(a); return amprenta(jurnal.amprenta.length, a) }
       jurnal.rpc.push([n, a])
       if (n === 'fn_sud_drept') return { data: drept[a.p_nivel], error: null }
       const h = rpc[n]
@@ -162,7 +166,7 @@ describe('citesteArhivaNdt — fotografia citită o dată', () => {
 
 async function pregateste(o = {}) {
   const t = { ...tabeleBaza(), ...(o.tabele || {}) }
-  const sb = clientFals({ tabele: t, rpc: o.rpc || { fn_sud_export_inregistreaza: async () => ({ data: 501, error: null }) }, storage: o.storage })
+  const sb = clientFals({ tabele: t, rpc: o.rpc || { fn_sud_export_inregistreaza: async () => ({ data: 501, error: null }) }, storage: o.storage, ...(o.amprenta ? { amprenta: o.amprenta } : {}) })
   const arhiva = await citesteArhivaNdt(sb, { proiectId: 1, tronsonId: 5, pachetId: 9, kmStart: 1000 })
   const evaluare = evalueazaExportIzo({ pachet, tronson, tevi: o.tevi || tevi, arhiva })
   return { sb, arhiva, evaluare }
@@ -519,5 +523,61 @@ describe('construiesteZip', () => {
   it('refuză un nume dublat (nu suprascrie un PDF cu altul)', async () => {
     await expect(construiesteZip({ numeXlsx: 'a.xlsx', xlsx: new Uint8Array([1]), pdfuri: [{ fisierZip: 'buletine/X.pdf', bytes: PDF(1) }, { fisierZip: 'buletine/x.pdf', bytes: PDF(2) }] }))
       .rejects.toThrow(/dublat/)
+  })
+})
+
+// 20270115b (Jakarinos #1219 r2): amprenta pachetului calculată de SERVER — citită la deschiderea ferestrei, în fotografie, reverificată
+// înainte de generare și de înregistrare; serverul o recalculează și el (40001 = „redeschide fereastra”)
+describe('executaExportIzo — amprenta pachetului de pe server (20270115b)', () => {
+  const ruleaza = (sb, arhiva, evaluare) => executaExportIzo(sb, { pachet, tronson, proiect: {}, tevi, evaluare, arhiva, incomplet: false, genereazaXlsx: genereazaXlsxFals, fetchImpl: fetchFals(pdfuri), uniq: 'ua' })
+  it('citită o dată la deschidere (pe pachet), pusă în fotografie și trimisă la înregistrare; reverificată de 2 ori', async () => {
+    const { sb, arhiva, evaluare } = await pregateste()
+    expect(arhiva.amprentaServer).toBe(AMP)
+    expect(sb.jurnal.amprenta).toEqual([{ p_pachet: 9 }])
+    expect(evaluare.fotografie.amprenta_pachet).toBe(AMP)
+    const r = await ruleaza(sb, arhiva, evaluare)
+    expect(r.ok).toBe(true)
+    expect(sb.jurnal.amprenta).toHaveLength(3)   // deschiderea + înainte de generare + înainte de înregistrare
+    expect(sb.jurnal.rpc.find(x => x[0] === 'fn_sud_export_inregistreaza')[1].p_fotografie.amprenta_pachet).toBe(AMP)
+  })
+  it('fără drept de export amprenta nu se cere (butonul e oricum oprit); eroarea ei = amprentă lipsă, export oprit înainte de orice scriere', async () => {
+    const f = clientFals({ tabele: tabeleBaza(), drept: { citire: true, scriere: false, export: false } })
+    const a = await citesteArhivaNdt(f, { proiectId: 1, tronsonId: 5, pachetId: 9, kmStart: 1000 })
+    expect(f.jurnal.amprenta).toEqual([]); expect(a.amprentaServer).toBe(null); expect(a.eroareAmprenta).toMatch(/fără drept de export/)
+    for (const amprenta of [() => ({ data: null, error: { code: 'PGRST202', message: 'functia lipseste' } }), () => ({ data: AMP.toUpperCase(), error: null }), () => ({ data: 42, error: null }), () => { throw new Error('retea') }]) {
+      const { sb, arhiva, evaluare } = await pregateste({ amprenta })
+      expect(arhiva.amprentaServer).toBe(null); expect(arhiva.eroareAmprenta).toBeTruthy()
+      expect(evaluare.fotografie.amprenta_pachet).toBe(null)
+      const r = await ruleaza(sb, arhiva, evaluare)
+      expect(r.ok).toBe(false); expect(r.eroare).toMatch(/amprenta pachetului de pe server/)
+      expect(sb.jurnal.upload).toEqual([]); expect(sb.jurnal.rpc.filter(x => x[0] !== 'fn_sud_drept')).toEqual([])
+    }
+  })
+  it('amprenta serverului schimbată după deschidere (chiar cu rândurile clientului neschimbate — ex. un rând pe care nu-l vede) → refuz înainte de generare, nimic scris', async () => {
+    const { sb, arhiva, evaluare } = await pregateste({ amprenta: n => ({ data: n === 1 ? AMP : AMP2, error: null }) })
+    const r = await ruleaza(sb, arhiva, evaluare)
+    expect(r).toMatchObject({ ok: false, surseSchimbate: true, pachetSchimbat: true })
+    expect(r.eroare).toMatch(/s-au schimbat pe server/)
+    expect(sb.jurnal.upload).toEqual([]); expect(sb.jurnal.rpc.filter(x => x[0] !== 'fn_sud_drept')).toEqual([])
+  })
+  it('schimbată între încărcare și înregistrare → fișierul încărcat se scoate, înregistrarea NU se cere', async () => {
+    const { sb, arhiva, evaluare } = await pregateste({ amprenta: n => ({ data: n <= 2 ? AMP : AMP2, error: null }) })
+    const r = await ruleaza(sb, arhiva, evaluare)
+    expect(r).toMatchObject({ ok: false, surseSchimbate: true })
+    expect(sb.jurnal.upload).toHaveLength(1)
+    expect(sb.jurnal.remove).toEqual([{ b: 'executie-pachete-pdf', l: [sb.jurnal.upload[0].p] }])
+    expect(sb.jurnal.rpc.some(x => x[0] === 'fn_sud_export_inregistreaza')).toBe(false)
+  })
+  it('reverificarea amprentei eșuată (rețea) → export oprit cu eroare, NU „neschimbat” (L18)', async () => {
+    const { sb, arhiva, evaluare } = await pregateste({ amprenta: n => (n === 1 ? { data: AMP, error: null } : { data: null, error: { message: 'timeout' } }) })
+    const r = await ruleaza(sb, arhiva, evaluare)
+    expect(r.ok).toBe(false); expect(r.eroare).toMatch(/nu s-a putut reciti \(timeout\)/)
+    expect(sb.jurnal.upload).toEqual([])
+  })
+  it('40001 de la server pe „pachet” → „redeschide fereastra”, fișierul se scoate', async () => {
+    const { sb, arhiva, evaluare } = await pregateste({ rpc: { fn_sud_export_inregistreaza: async () => ({ data: null, error: { code: '40001', message: 'sud: sursele s-au schimbat intre verificare si export (pachet); reincarca fereastra' } }) } })
+    const r = await ruleaza(sb, arhiva, evaluare)
+    expect(r).toMatchObject({ ok: false, surseSchimbate: true })
+    expect(sb.jurnal.remove).toHaveLength(1)
   })
 })

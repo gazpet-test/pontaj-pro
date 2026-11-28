@@ -8,7 +8,7 @@ import { createRequire } from 'node:module'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 
-const st = vi.hoisted(() => ({ tabele: {}, cereri: [], rpc: [], rpcRaspuns: {}, urcari: [], edge: null, edgeApeluri: [] }))
+const st = vi.hoisted(() => ({ tabele: {}, erori: {}, cereri: [], rpc: [], rpcRaspuns: {}, urcari: [], edge: null, edgeApeluri: [] }))
 vi.mock('./lib/supabase.js', () => {
   const potriveste = (r, f) => f.eq.every(([c, v]) => r[c] === v) && f.neq.every(([c, v]) => r[c] !== v)
     && (!f.in || f.in[1].includes(r[f.in[0]])) && (f.gt == null || r.id > f.gt)
@@ -18,6 +18,7 @@ vi.mock('./lib/supabase.js', () => {
         const f = { eq: [], neq: [], in: null, gt: null, lim: Infinity, head: false, single: false }
         const rezultat = () => {
           st.cereri.push(tabel)
+          if (st.erori[tabel]) return { data: null, error: st.erori[tabel] }
           const rows = (st.tabele[tabel] || []).filter(r => potriveste(r, f)).sort((a, b) => a.id - b.id).slice(0, Math.min(f.lim, 1000)).map(r => ({ ...r }))
           if (f.head) return { count: rows.length, data: null, error: null }
           if (f.single) return { data: rows[0] || null, error: null }
@@ -82,8 +83,8 @@ const TABELE = () => ({
 const curata = []
 afterEach(() => { while (curata.length) curata.pop()() })
 
-async function monteaza({ scriere = true, rpc = {}, edge = null, tronsoane = [TRONSON], tabele = null, onGarda } = {}) {
-  st.tabele = tabele ? tabele(TABELE()) : TABELE(); st.cereri = []; st.rpc = []; st.urcari = []; st.edgeApeluri = []; st.edge = edge
+async function monteaza({ scriere = true, rpc = {}, edge = null, tronsoane = [TRONSON], tabele = null, onGarda, erori = {} } = {}) {
+  st.tabele = tabele ? tabele(TABELE()) : TABELE(); st.cereri = []; st.rpc = []; st.urcari = []; st.edgeApeluri = []; st.edge = edge; st.erori = erori
   st.rpcRaspuns = { fn_sud_drept: { data: scriere, error: null }, ...rpc }
   const j = new JSDOM('<!doctype html><div id="r"></div>')
   j.window.confirm = vi.fn(() => true)   // jsdom nu are confirm(); testele îl schimbă unde contează
@@ -120,6 +121,7 @@ async function monteaza({ scriere = true, rpc = {}, edge = null, tronsoane = [TR
 }
 // o promisiune pe care testul o rezolvă când vrea (răspunsul serverului „în drum”)
 const amanat = () => { let rezolva; const p = new Promise(r => { rezolva = r }); return { p, rezolva } }
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
 dom(numeDom('IzoBuletineNdt — lista și drepturile'), () => {
   it('lista buletinelor tronsonului, cu stare, rânduri și cine a încărcat; fără drept nu apare „Încarcă”', async () => {
@@ -180,7 +182,7 @@ dom(numeDom('IzoBuletineNdt — confirmarea'), () => {
     const e = await monteaza()
     await e.click(e.randBuletin('401'))
     await e.click(e.buton('Citește cu AI'))
-    expect(st.edgeApeluri).toEqual([['izo-ndt-citeste', { buletin_id: 1, model: 'principal' }]])
+    expect(st.edgeApeluri).toEqual([['izo-ndt-citeste', { buletin_id: 1, model: 'principal', cerere: expect.stringMatching(UUID) }]])
     expect(e.text()).toContain('nu e publicată încă')
     expect(e.buton('+ Rând')).toBeTruthy()
   })
@@ -192,7 +194,9 @@ dom(numeDom('IzoBuletineNdt — confirmarea'), () => {
     expect(e.d.querySelectorAll('input[aria-label$="rând 1"]')[0].value).toBe('T12S126')
     st.edge = citire('REJECTED')
     await e.click(e.buton('Citește din nou cu alt model'))
-    expect(st.edgeApeluri[1]).toEqual(['izo-ndt-citeste', { buletin_id: 1, model: 'alternativ' }])
+    expect(st.edgeApeluri[1]).toEqual(['izo-ndt-citeste', { buletin_id: 1, model: 'alternativ', cerere: expect.stringMatching(UUID) }])
+    // două intenții (principal, alternativ) = două chei diferite
+    expect(st.edgeApeluri[1][1].cerere).not.toBe(st.edgeApeluri[0][1].cerere)
     expect(e.text()).toContain('alege varianta corectă')
     expect(e.buton('Confirmă 1 rânduri').disabled).toBe(true)
     const radio = [...e.d.querySelectorAll('input[type="radio"]')]
@@ -383,5 +387,105 @@ dom(numeDom('IzoBuletineNdt — runda 2: încărcarea'), () => {
     expect(e.d.querySelector('iframe').getAttribute('src')).toContain('1/51/')
     expect(e.text()).toContain('PM 405')
     expect(e.text()).not.toContain('Buletin nou pe')
+  })
+})
+
+// ── 20270115b: citirea păstrată pe server (sud_citiri) + cheia cererii ───────────────────────────────
+const SALVAT = (cod, rez = 'acceptat') => ({ antet: { firma: null, metoda: 'PA-UT', numar: '401', data: '2026-10-28', tronson: 'T12', nr_randuri_tiparit: 1, partial: false, pagini_necitite: [] },
+  randuri: [{ cod_raw: cod, rezultat: rez, data_inspectie: '2026-10-28', start_mm: null, end_mm: null, lungime_mm: null, inaltime_mm: null, adancime_mm: null, observatii: null }],
+  incerte: [], partial: false, pagini_necitite: [] })
+const CIT = (id, tip, citire, o = {}) => ({ id, buletin_id: 1, proiect_id: 1, tip, model: tip === 'principal' ? 'claude-sonnet-5-5' : 'claude-opus-5-5', stare: 'gata', citire, creat_la: '2026-11-28T09:00:00Z', ...o })
+const EDGE_OK = (citire, o = {}) => ({ data: { success: true, salvata: true, citire_id: 31, idempotent: false, model: 'claude-sonnet-5-5', citire, ...o }, error: null })
+const EDGE_ERR = (status, eroare, mesaj = 'm') => () => ({ data: null, error: { name: status ? 'FunctionsHttpError' : 'FunctionsFetchError', message: 'x', context: status ? { status, clone: () => ({ json: () => Promise.resolve({ success: false, eroare, mesaj }) }), json: () => Promise.resolve({}) } : undefined } })
+
+dom(numeDom('IzoBuletineNdt — 20270115b: citirile salvate pe server'), () => {
+  it('la deschiderea ciornei se încarcă ultima citire principală salvată; fără corecturi nu e nimic „nesalvat” (închiderea nu întreabă)', async () => {
+    const e = await monteaza({ tabele: t => ({ ...t, sud_citiri: [CIT(3, 'principal', SALVAT('T12S125')), CIT(4, 'principal', SALVAT('T12S126')), CIT(5, 'principal', SALVAT('T12S127'), { stare: 'in_curs', citire: null })] }) })
+    await e.click(e.randBuletin('401'))
+    expect(e.d.querySelectorAll('input[aria-label$="rând 1"]')[0].value).toBe('T12S126')
+    expect(e.text()).toContain('Citirea AI salvată (claude-sonnet-5-5')
+    expect(e.text()).toContain('nicio corectură nesalvată')
+    expect(e.text()).not.toContain('nu sunt salvate')
+    expect(st.edgeApeluri).toEqual([])   // nicio citire nouă, nicio plată
+    await e.click(e.buton('Închide'))
+    expect(e.j.window.confirm).not.toHaveBeenCalled()
+    expect(e.d.querySelector('iframe')).toBeNull()
+  })
+
+  it('o corectură manuală peste citirea salvată = avertisment „corecturile nu sunt salvate” + confirmare la închidere; refăcută = fără', async () => {
+    const e = await monteaza({ tabele: t => ({ ...t, sud_citiri: [CIT(3, 'principal', SALVAT('T12S126'))] }) })
+    await e.click(e.randBuletin('401'))
+    const rez = () => e.d.querySelectorAll('input[aria-label$="rând 1"]')[1]
+    await e.scrie(rez(), 'respins')
+    expect(e.text()).toContain('Corecturile tale din tabel nu sunt salvate')
+    e.j.window.confirm.mockReturnValue(false)
+    await e.click(e.buton('Închide'))
+    expect(e.j.window.confirm).toHaveBeenCalledTimes(1)
+    expect(e.d.querySelector('iframe')).toBeTruthy()
+    await e.scrie(rez(), 'acceptat')
+    expect(e.text()).not.toContain('nu sunt salvate')
+    await e.click(e.buton('Închide'))
+    expect(e.j.window.confirm).toHaveBeenCalledTimes(1)
+    expect(e.d.querySelector('iframe')).toBeNull()
+  })
+
+  it('a doua citire salvată, mai nouă decât principala, redeschide comparația; una mai veche nu', async () => {
+    const e = await monteaza({ tabele: t => ({ ...t, sud_citiri: [CIT(3, 'principal', SALVAT('T12S126')), CIT(6, 'alternativ', SALVAT('T12S126', 'respins'))] }) })
+    await e.click(e.randBuletin('401'))
+    expect(e.text()).toContain('A doua citire salvată e deschisă pentru comparație')
+    expect(e.buton('Aplică alegerile')).toBeTruthy()
+    const v = await monteaza({ tabele: t => ({ ...t, sud_citiri: [CIT(2, 'alternativ', SALVAT('T12S126', 'respins')), CIT(3, 'principal', SALVAT('T12S126'))] }) })
+    await v.click(v.randBuletin('401'))
+    expect(v.buton('Aplică alegerile')).toBeUndefined()
+    expect(v.d.querySelectorAll('input[aria-label$="rând 1"]')[1].value).toBe('acceptat')
+  })
+
+  it('citirea salvărilor eșuată = eroare vizibilă (nu „nicio citire”); introducerea manuală rămâne', async () => {
+    const e = await monteaza({ erori: { sud_citiri: { code: '42P01', message: 'relation "public.sud_citiri" does not exist' } } })
+    await e.click(e.randBuletin('401'))
+    expect(e.text()).toContain('Citirile AI salvate nu s-au putut citi')
+    expect(e.buton('+ Rând')).toBeTruthy()
+  })
+
+  it('citire nouă salvată de server: fără avertisment; nesalvată (salvata ≠ true): avertismentul rămâne și închiderea întreabă', async () => {
+    const e = await monteaza({ edge: EDGE_OK(SALVAT('T12S126')) })
+    await e.click(e.randBuletin('401'))
+    await e.click(e.buton('Citește cu AI'))
+    expect(e.d.querySelectorAll('input[aria-label$="rând 1"]')[0].value).toBe('T12S126')
+    expect(e.text()).toContain('nicio corectură nesalvată')
+    await e.click(e.buton('Închide'))
+    expect(e.j.window.confirm).not.toHaveBeenCalled()
+    const n = await monteaza({ edge: EDGE_OK(SALVAT('T12S126'), { salvata: false, citire_id: null, avertisment: 'salvare_neconfirmata' }) })
+    await n.click(n.randBuletin('401'))
+    await n.click(n.buton('Citește cu AI'))
+    expect(n.text()).toContain('serverul nu a confirmat salvarea')
+    expect(n.text()).toContain('nu sunt salvate')
+    n.j.window.confirm.mockReturnValue(false)
+    await n.click(n.buton('Închide'))
+    expect(n.j.window.confirm).toHaveBeenCalledTimes(1)
+  })
+
+  it('L05: după un răspuns necunoscut (rețea / 5xx / în lucru) apăsarea următoare trimite ACEEAȘI cheie; după un rezultat cert, cheie nouă', async () => {
+    const e = await monteaza({ edge: EDGE_ERR(0) })
+    await e.click(e.randBuletin('401'))
+    await e.click(e.buton('Citește cu AI'))
+    expect(e.text()).toContain('se reia ACEEAȘI cerere')
+    st.edge = EDGE_ERR(409, 'citire_in_curs', 'O citire e în lucru.')
+    await e.click(e.buton('Citește cu AI'))
+    expect(e.text()).toContain('nu se plătește de două ori')
+    st.edge = EDGE_OK(SALVAT('T12S126'), { idempotent: true })
+    await e.click(e.buton('Citește cu AI'))
+    expect(e.text()).toContain('fără o nouă plată')
+    const k = st.edgeApeluri.map(a => a[1].cerere)
+    expect(k[0]).toMatch(UUID); expect(k[1]).toBe(k[0]); expect(k[2]).toBe(k[0])
+    // după citirea certă: o apăsare nouă = intenție nouă
+    st.edge = EDGE_ERR(429, 'prea_multe_citiri', 'maxim 5')
+    await e.click(e.buton('Citește cu AI'))
+    expect(st.edgeApeluri[3][1].cerere).not.toBe(k[0])
+    expect(e.text()).toContain('maxim 5')
+    // refuzul cert scoate și el cheia
+    st.edge = EDGE_OK(SALVAT('T12S126'))
+    await e.click(e.buton('Citește cu AI'))
+    expect(st.edgeApeluri[4][1].cerere).not.toBe(st.edgeApeluri[3][1].cerere)
   })
 })

@@ -7,7 +7,7 @@
 
 import JSZip from 'jszip'
 import { paginareKeyset } from './hrDeciziiUtil.js'
-import { TIP_EXPORT_IZO, numeExportIzo, planBuletineZip, amprentaPachet, amprentaRanduri, diferentePachet } from './lib/izoExportIzo.js'
+import { TIP_EXPORT_IZO, numeExportIzo, planBuletineZip, amprentaPachet, amprentaRanduri, diferentePachet, amprentaServerValida } from './lib/izoExportIzo.js'
 
 const BUCKET_NDT = 'izo-ndt'
 const BUCKET_PACHETE = 'executie-pachete-pdf'
@@ -33,15 +33,34 @@ async function drept(sb, proiectId, nivel) {
 }
 
 /**
- * Fotografia surselor exportului, citită O DATĂ (R6): buletinele confirmate ale tronsonului, rândurile lor, sudurile
- * eliminate active, metodele obligatorii ale proiectului, dreptul, pachetul anterior de pe tronson și ultimul export izo.
- * Toate listele = keyset până la pagina goală (plafonul de 1000 rânduri, L23). O eroare pe o sursă obligatorie = ok:false.
+ * Amprenta pachetului calculată de server (fn_sud_amprenta_pachet, migrarea 20270115b): md5 pe pachet + rândurile lui.
+ * { amprenta } sau { amprenta: null, eroare } (eroare / formă necunoscută / migrare neaplicată = necunoscut, nu „neschimbat”, L18).
+ */
+export async function amprentaPachetServer(sb, pachetId) {
+  try {
+    const { data, error } = await sb.rpc('fn_sud_amprenta_pachet', { p_pachet: pachetId })
+    if (error) return { amprenta: null, eroare: mesaj(error) }
+    return amprentaServerValida(data) ? { amprenta: data } : { amprenta: null, eroare: 'răspuns în alt format' }
+  } catch (e) { return { amprenta: null, eroare: mesaj(e) } }
+}
+
+/**
+ * Fotografia surselor exportului, citită O DATĂ (R6): amprenta pachetului de pe server (doar cu drept de export), buletinele
+ * confirmate ale tronsonului, rândurile lor, sudurile eliminate active, metodele obligatorii ale proiectului, dreptul, pachetul
+ * anterior de pe tronson și ultimul export izo. Toate listele = keyset până la pagina goală (plafonul de 1000 rânduri, L23).
+ * O eroare pe o sursă obligatorie = ok:false; amprenta lipsă = amprentaServer null + eroareAmprenta (butonul rămâne oprit).
  * @returns {Promise<{ok:boolean, eroare?:string, buletine, randuri, eliminate, metode:string[]|null, drept, pachetAnterior,
- *   eroareAnterior?:string, ultimExport:object|null, eroareUltimExport?:string}>}
+ *   eroareAnterior?:string, ultimExport:object|null, eroareUltimExport?:string, amprentaServer:string|null, eroareAmprenta?:string}>}
  */
 export async function citesteArhivaNdt(sb, { proiectId, tronsonId, pachetId, kmStart }) {
   const dr = { citire: await drept(sb, proiectId, 'citire'), scriere: await drept(sb, proiectId, 'scriere'), export: await drept(sb, proiectId, 'export') }
-  const baza = { drept: dr, buletine: [], randuri: [], eliminate: [], metode: null, pachetAnterior: null, ultimExport: null }
+  const baza = { drept: dr, buletine: [], randuri: [], eliminate: [], metode: null, pachetAnterior: null, ultimExport: null, amprentaServer: null }
+  // amprenta serverului ÎNAINTEA celorlalte surse: o schimbare a pachetului după ea apare la reverificarea dinaintea generării
+  if (dr.export === true) {
+    const a = await amprentaPachetServer(sb, pachetId)
+    baza.amprentaServer = a.amprenta
+    if (a.eroare) baza.eroareAmprenta = a.eroare
+  } else baza.eroareAmprenta = dr.export === false ? 'fără drept de export' : 'dreptul de export nu s-a putut verifica'
   if (dr.citire === false) return { ...baza, ok: false, eroare: 'nu ai drept de citire pe arhiva de buletine a proiectului' }
   if (dr.citire !== true) return { ...baza, ok: false, eroare: 'dreptul de citire pe arhiva de buletine nu s-a putut verifica' }
   try {
@@ -102,15 +121,22 @@ export async function citesteUltimExport(sb, pachetId) {
 }
 
 /**
- * Recitește pachetul + TOATE rândurile lui din BD și le compară cu amprenta din fotografie (Jakarinos #1219 r1 P1).
- * Serverul nu verifică pachetul la înregistrare, deci verificarea e aici, chemată imediat înainte de generare și din nou
- * înainte de fn_sud_export_inregistreaza. Citire eșuată = eroare (necunoscut), nu „neschimbat” (L18).
+ * Recitește pachetul + TOATE rândurile lui din BD și le compară cu amprenta din fotografie (Jakarinos #1219 r1 P1), plus
+ * amprenta calculată de SERVER (20270115b) față de cea din fotografie. Chemată imediat înainte de generare și din nou înainte de
+ * fn_sud_export_inregistreaza (care o recalculează și el, sub lock). Citire eșuată = eroare (necunoscut), nu „neschimbat” (L18).
  * @returns {Promise<{ok:true} | {ok:false, eroare:string, surseSchimbate?:true, pachetSchimbat?:true, dif?:string[]}>}
  */
 export async function verificaPachetNeschimbat(sb, fotografie) {
   const id = fotografie?.pachet?.id
   if (!fotografie?.pachet || !fotografie?.randuri) return { ok: false, eroare: 'Fotografia nu are amprenta pachetului: redeschide fereastra.' }
+  if (!amprentaServerValida(fotografie.amprenta_pachet)) return { ok: false, eroare: 'Fotografia nu are amprenta pachetului de pe server: reîncarcă pagina și redeschide fereastra.' }
   try {
+    const a = await amprentaPachetServer(sb, id)
+    if (!a.amprenta) return { ok: false, eroare: `Amprenta pachetului de pe server nu s-a putut reciti (${a.eroare}): exportul s-a oprit, reîncearcă.` }
+    if (a.amprenta !== fotografie.amprenta_pachet) {
+      const dif = ['Pachetul sau rândurile lui s-au schimbat pe server de la deschiderea ferestrei.']
+      return { ok: false, surseSchimbate: true, pachetSchimbat: true, dif, eroare: `Pachetul s-a schimbat — redeschide fereastra. ${dif[0]}` }
+    }
     const p = await sb.from('executie_pachete_lansare').select('*').eq('id', id).maybeSingle()
     if (p.error) throw p.error
     if (!p.data) return { ok: false, surseSchimbate: true, pachetSchimbat: true, eroare: 'Pachetul nu mai există — închide fereastra.' }

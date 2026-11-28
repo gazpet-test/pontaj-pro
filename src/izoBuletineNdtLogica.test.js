@@ -5,7 +5,7 @@ import {
   tronsonNrDinCod, cheieDinServer, codDinCheie, aziBucuresti, valideazaFisier, sha256Hex, caleFisier, valideazaIncarcare,
   mapeazaEroareRpc, normalizeazaCitire, mapeazaRaspunsEdge, randuriDinCitire, parseazaLipire, pregatesteRanduriConfirmare,
   combinaCitiri, randArhivaPentruStare, calculeazaVerificari, filtreazaBuletine, coduriDinPachete, valideazaEliminare,
-  MAX_PDF_OCTETI, combinaSemnaleCitiri,
+  MAX_PDF_OCTETI, combinaSemnaleCitiri, semnaturaRanduri, alegeCitiriSalvate,
 } from './izoBuletineNdtLogica.js'
 import { comparaCitiri } from './lib/izoNdt.js'
 import { createHash, webcrypto } from 'node:crypto'
@@ -160,6 +160,51 @@ describe('normalizeazaCitire / mapeazaRaspunsEdge', () => {
     expect(r.tip).toBe('necunoscut')
     expect(r.mesaj).toMatch(/nu se reîncearcă automat/)
     expect(mapeazaRaspunsEdge({ error: { name: 'FunctionsHttpError', context: { status: 502 } } }).tip).toBe('necunoscut')
+  })
+  // 20270115b: răspunsul edge-ului cu citirea păstrată pe server (contractul handler.ts: salvata / citire_id / idempotent; codurile cererii)
+  it('salvată doar cu salvata: true ȘI citire_id întreg pozitiv; altfel nesalvată (L18)', () => {
+    expect(mapeazaRaspunsEdge({ data: { ...citireEdge, salvata: true, citire_id: 12, idempotent: true } })).toMatchObject({ tip: 'ok', salvata: true, citireId: 12, idempotent: true })
+    for (const extra of [{}, { salvata: true }, { salvata: true, citire_id: null }, { salvata: true, citire_id: '12' }, { salvata: 'true', citire_id: 12 }, { salvata: false, citire_id: 12 }, { salvata: true, citire_id: 0 }]) {
+      const r = mapeazaRaspunsEdge({ data: { ...citireEdge, ...extra } })
+      expect(r.tip).toBe('ok'); expect(r.salvata).toBe(false); expect(r.citireId).toBeNull()
+    }
+  })
+  it('codurile cererii de citire: în lucru / necunoscută / eșuată / limita / cheie refolosită — fiecare cu tipul lui, nu „plafon” sau „invalid”', () => {
+    const cu = cod => mapeazaRaspunsEdge({ error: { name: 'FunctionsHttpError', context: { status: 409 } }, corp: { success: false, eroare: cod, mesaj: 'm' } })
+    expect(cu('citire_in_curs').tip).toBe('in_curs')
+    expect(cu('citire_in_curs').mesaj).toMatch(/nu se plătește de două ori/)
+    expect(cu('citire_necunoscuta').tip).toBe('necunoscuta')
+    expect(cu('citire_esuata').tip).toBe('esuata')
+    expect(mapeazaRaspunsEdge({ error: { name: 'FunctionsHttpError', context: { status: 429 } }, corp: { eroare: 'prea_multe_citiri', mesaj: 'maxim 5' } }).tip).toBe('limita')
+    expect(cu('cheie_alta_cerere').tip).toBe('eroare')
+    // cererea indisponibilă (503) rămâne „necunoscut”: nu se știe dacă a pornit ceva
+    expect(mapeazaRaspunsEdge({ error: { name: 'FunctionsHttpError', context: { status: 503 } }, corp: { eroare: 'cerere_indisponibila', mesaj: 'x' } }).tip).toBe('necunoscut')
+  })
+})
+
+describe('citirile salvate (20270115b): alegerea la deschidere și semnătura rândurilor', () => {
+  const C = (id, tip, stare = 'gata') => ({ id, tip, stare, citire: { randuri: [] }, model: 'claude-sonnet-5-5' })
+  it('ultima principală; alternativa doar dacă e MAI NOUĂ decât ea; „in_curs” / „esuat” / fără citire nu se aleg', () => {
+    expect(alegeCitiriSalvate([])).toEqual({ principal: null, alternativ: null })
+    expect(alegeCitiriSalvate(null)).toEqual({ principal: null, alternativ: null })
+    expect(alegeCitiriSalvate([C(1, 'alternativ')])).toEqual({ principal: null, alternativ: null })
+    const a = alegeCitiriSalvate([C(1, 'principal'), C(2, 'alternativ'), C(3, 'principal'), C(4, 'alternativ', 'esuat'), C(5, 'principal', 'in_curs')])
+    expect(a.principal.id).toBe(3); expect(a.alternativ).toBeNull()
+    const b = alegeCitiriSalvate([C(3, 'principal'), C(1, 'principal'), C(6, 'alternativ'), C(4, 'alternativ')])
+    expect(b.principal.id).toBe(3); expect(b.alternativ.id).toBe(6)
+    expect(alegeCitiriSalvate([{ ...C(2, 'principal'), citire: null }]).principal).toBeNull()
+  })
+  it('semnătura: aceleași valori = aceeași semnătură, oricare ar fi id-urile locale; o valoare schimbată / un rând în plus = alta', () => {
+    const r = randuriDinCitire({ randuri: [{ cod_raw: 'T12S1', rezultat: 'acceptat', start_mm: 1.5 }] })
+    const r2 = randuriDinCitire({ randuri: [{ cod_raw: 'T12S1', rezultat: 'acceptat', start_mm: 1.5 }] })
+    expect(r[0]._id).not.toBe(r2[0]._id)
+    expect(semnaturaRanduri(r)).toBe(semnaturaRanduri(r2))
+    expect(semnaturaRanduri([{ ...r[0], rezultat: 'respins' }])).not.toBe(semnaturaRanduri(r))
+    expect(semnaturaRanduri([...r, ...r2])).not.toBe(semnaturaRanduri(r))
+    expect(semnaturaRanduri([])).toBe('[]')
+    // null / '' sunt același gol (celula goală din tabel); 1.5 și '1.5' aceeași valoare afișată
+    expect(semnaturaRanduri([{ cod_raw: 'X', start_mm: null }])).toBe(semnaturaRanduri([{ cod_raw: 'X', start_mm: '' }]))
+    expect(semnaturaRanduri([{ cod_raw: 'X', start_mm: 1.5 }])).toBe(semnaturaRanduri([{ cod_raw: 'X', start_mm: '1.5' }]))
   })
 })
 

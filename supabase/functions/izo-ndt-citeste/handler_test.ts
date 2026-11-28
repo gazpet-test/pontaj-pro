@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert'
 import {
   CHEIE_PLAFON, MAX_INPUT_NDT, MAX_RANDURI, MAX_TOKENS_NDT, OPUS_55, PROMPT_NDT, REZULTATE, TERMENE_NDT, citesteBuletinNdt, citireSigura,
-  costMaximNdt, cuTermenBd, modeleNdt, rezervaNdt, valideazaCitireNdt,
+  clasificaRezervareCerere, costMaximNdt, cuTermenBd, modeleNdt, rezervaNdt, valideazaCitireNdt,
 } from './handler.ts'
 import { sha256Hex } from '../_shared/ocrLocal.ts'
 
@@ -28,11 +28,26 @@ type Opt = {
   // r2: decontarea / citirile informative care se blochează (nu răspund niciodată), aruncă sau întorc eroare; transportul care pică
   decontare?: 'blocata' | 'arunca'; informativ?: 'blocat' | 'arunca' | 'eroare'; rezervaId?: unknown
   countArunca?: boolean; apelStatus?: number; apelArunca?: boolean; apelCorp?: string
+  // 20270115b: răspunsul fn_sud_citire_rezerva / fn_sud_citire_salveaza (salvarea citirii; închiderea cererii are răspunsul ei)
+  cerereRez?: RaspunsRpc; salvare?: RaspunsRpc; inchidere?: RaspunsRpc
 }
+type RaspunsRpc = { data?: unknown; error?: { code?: string; message?: string } | null } | 'blocata' | 'arunca'
+const CERERE = '0b8f7a32-5c1d-4e2f-9a6b-1c2d3e4f5a6b'
 const NICIODATA = () => new Promise<never>(() => {})
 async function scenariu(o: Opt = {}) {
   const ev: string[] = [], decontari: unknown[] = [], rezervari: Record<string, unknown>[] = [], apeluri: Record<string, unknown>[] = []
+  const cereri: Record<string, unknown>[] = [], salvari: Record<string, unknown>[] = [], inchideri: Record<string, unknown>[] = []
   const semnale: Record<string, AbortSignal> = {}
+  // builder-ul RPC real: thenable cu `.abortSignal(s)` (termenul se pune pe el)
+  const rpcBuilder = (raspuns: RaspunsRpc | undefined, implicit: unknown, nume: string) => {
+    const b = {
+      abortSignal: (s: AbortSignal) => { semnale[nume] = s; return b },
+      then: (ok: (v: unknown) => unknown, nu: (e: unknown) => unknown) => (raspuns === 'blocata' ? NICIODATA()
+        : raspuns === 'arunca' ? Promise.reject(new TypeError('rețea'))
+        : Promise.resolve(raspuns === undefined ? { data: implicit, error: null } : { data: raspuns.data ?? null, error: raspuns.error ?? null })).then(ok, nu),
+    }
+    return b
+  }
   const buletin = o.buletin === undefined
     ? { id: 55, proiect_id: 7, tronson_id: 9, stare: 'ciorna', versiune: 1, fisier_path: '7/9/buletin.pdf', fisier_sha256: SHA } : o.buletin
   // Lanțul PostgREST fals; `abortSignal` reține semnalul (ca builder-ul real, trebuie chemat înaintea lui .single / .maybeSingle).
@@ -54,6 +69,16 @@ async function scenariu(o: Opt = {}) {
     },
     rpc: (fn: string, args: Record<string, unknown>) => {
       ev.push(`caller:${fn}`)
+      if (fn === 'fn_sud_citire_rezerva') {
+        assert.ok(!ev.includes('fn_ai_plafon_rezerva'), 'cererea se rezervă înaintea plafonului')
+        cereri.push(args)
+        return rpcBuilder(o.cerereRez, { rezultat: 'nou', id: 501 }, 'cerere:rezerva')
+      }
+      if (fn === 'fn_sud_citire_salveaza') {
+        if (args.p_citire === null) { inchideri.push(args); return rpcBuilder(o.inchidere, 501, 'cerere:inchide') }
+        salvari.push(args)
+        return rpcBuilder(o.salvare, 501, 'cerere:salveaza')
+      }
       assert.equal(fn, 'fn_sud_drept')
       assert.deepEqual(args, { p_proiect: 7, p_nivel: 'scriere' })
       return Promise.resolve(o.dreptEroare ? { data: null, error: { message: 'x' } } : { data: o.drept === undefined ? true : o.drept, error: null })
@@ -125,11 +150,11 @@ async function scenariu(o: Opt = {}) {
   const antete: Record<string, string> = { 'content-type': 'application/json' }
   const auth = o.auth === undefined ? 'Bearer jwt-utilizator' : o.auth
   if (auth !== null) antete.Authorization = auth
-  const corp = o.corp !== undefined ? o.corp : { buletin_id: 55, ...(o.model !== undefined ? { model: o.model } : {}) }
+  const corp = o.corp !== undefined ? o.corp : { buletin_id: 55, cerere: CERERE, ...(o.model !== undefined ? { model: o.model } : {}) }
   const req = new Request('https://local.test/izo-ndt-citeste', { method: 'POST', headers: antete, body: typeof corp === 'string' ? corp : JSON.stringify(corp) })
   const r = await citesteBuletinNdt(req, caller as never, ledger as never,
     { apiKey: 'apiKey' in o ? o.apiKey : 'cheie-test', modele: modeleNdt(undefined, undefined) }, {}, { transport, ...(o.deps || {}) })
-  return { status: r.status, body: await r.json(), ev, decontari, rezervari, apeluri, semnale }
+  return { status: r.status, body: await r.json(), ev, decontari, rezervari, apeluri, semnale, cereri, salvari, inchideri }
 }
 const faraCost = (r: Awaited<ReturnType<typeof scenariu>>) => {
   assert.equal(r.ev.includes('fn_ai_plafon_rezerva'), false)
@@ -324,16 +349,19 @@ Deno.test('numărarea: peste limită / respinsă / căzută → fără apel plă
     assert.equal(r.ev.filter(e => e.endsWith('/messages')).length, 0); assert.deepEqual(r.decontari, [0])
   }
   assert.equal((await scenariu({ count: MAX_INPUT_NDT })).status, 200)   // limita e inclusivă
-  // termenul global: ceasul sare 50 s la fiecare citire → la apel rămân 135 − 10 − 100 = 25 s < 30 s → apelul plătit nu pornește
+  // termenul global: ceasul sare 50 s la fiecare citire → la apel rămân 135 − 20 − 100 = 15 s < 30 s → apelul plătit nu pornește
   let ceas = 0
   const tarziu = await scenariu({ deps: { acum: () => (ceas += 50000) } })
   assert.equal(tarziu.status, 504); assert.equal(tarziu.body.eroare, 'termen_depasit')
   assert.equal(tarziu.ev.filter(e => e.endsWith('/messages')).length, 0); assert.deepEqual(tarziu.decontari, [0])
 })
 
-Deno.test('cererea: doar { buletin_id, model? } cu valorile permise → 400 înainte de orice', async () => {
-  for (const corp of [{ buletin_id: '55' }, { buletin_id: 0 }, { buletin_id: 1.5 }, { buletin_id: 55, model: 'opus' }, { buletin_id: 55, model: SONNET },
-    { buletin_id: 55, bucket: 'x' }, [], 'nu-json', null]) {
+Deno.test('cererea: doar { buletin_id, cerere: UUID, model? } cu valorile permise → 400 înainte de orice', async () => {
+  for (const corp of [{ buletin_id: '55', cerere: CERERE }, { buletin_id: 0, cerere: CERERE }, { buletin_id: 1.5, cerere: CERERE },
+    { buletin_id: 55, cerere: CERERE, model: 'opus' }, { buletin_id: 55, cerere: CERERE, model: SONNET }, { buletin_id: 55, cerere: CERERE, bucket: 'x' },
+    { buletin_id: 55 }, { buletin_id: 55, cerere: '' }, { buletin_id: 55, cerere: 'x' }, { buletin_id: 55, cerere: 123 }, { buletin_id: 55, cerere: null },
+    { buletin_id: 55, cerere: CERERE.replace(/-/g, '') }, { buletin_id: 55, cerere: ` ${CERERE}` }, { buletin_id: 55, cerere: CERERE + '0' },
+    [], 'nu-json', null]) {
     const r = await scenariu({ corp })
     assert.equal(r.status, 400, JSON.stringify(corp)); assert.equal(r.body.eroare, 'cerere_invalida'); assert.deepEqual(r.ev, [])
   }
@@ -466,4 +494,155 @@ Deno.test('r2 P2: cuTermenBd — rezultatul la timp trece, întârzierea = Timeo
   await assert.rejects(cuTermenBd(20, s => { semnal = s; return NICIODATA() }), (e: DOMException) => e.name === 'TimeoutError')
   assert.equal(semnal!.aborted, true)
   await assert.rejects(cuTermenBd(50, () => { throw new Error('sincron') }), /sincron/)
+})
+
+// ── 20270115b: citirea păstrată pe server + idempotența (review PR #1217 r1 P1, PR #1218 r1 P1; L04 / L05 / L22) ─────────────
+const CITIT = (r: Awaited<ReturnType<typeof scenariu>>) => r.ev.some(e => e.startsWith('caller:download'))
+
+Deno.test('20270115b: cererea rezervată ÎNAINTEA plafonului; citirea validă salvată cu costul decontat; aceeași cheie, în minuscule', async () => {
+  const r = await scenariu({ corp: { buletin_id: 55, cerere: CERERE.toUpperCase() } })
+  assert.equal(r.status, 200)
+  assert.equal(r.body.salvata, true); assert.equal(r.body.citire_id, 501); assert.equal(r.body.idempotent, false); assert.equal(r.body.avertisment, undefined)
+  assert.deepEqual(r.cereri, [{ p_buletin: 55, p_tip: 'principal', p_model: SONNET, p_cheie: CERERE }])
+  assert.equal(r.salvari.length, 1); assert.deepEqual(r.inchideri, [])
+  assert.equal(r.salvari[0].p_cheie, CERERE); assert.equal(r.salvari[0].p_eroare, null); assert.equal(r.salvari[0].p_cost_cunoscut, true)
+  aprox(r.salvari[0].p_cost_usd, COST_SONNET)
+  // citirea salvată = cea întoarsă (aceeași formă validată)
+  assert.deepEqual(r.salvari[0].p_citire, r.body.citire)
+  // ordinea: drept → cerere → fișier → plafon → apel → decontare → salvare; fiecare RPC al cererii cu termen
+  const i = (e: string) => r.ev.indexOf(e)
+  assert.ok(i('caller:fn_sud_drept') < i('caller:fn_sud_citire_rezerva'))
+  assert.ok(i('caller:fn_sud_citire_rezerva') < i('caller:download:7/9/buletin.pdf'))
+  assert.ok(i('caller:download:7/9/buletin.pdf') < i('fn_ai_plafon_rezerva'))
+  assert.ok(i('fn_ai_plafon_deconteaza') < i('caller:fn_sud_citire_salveaza'))
+  assert.ok(r.semnale['cerere:rezerva'] && r.semnale['cerere:salveaza'])
+  // alternativul: tipul și modelul lui în cerere
+  const a = await scenariu({ model: 'alternativ' })
+  assert.deepEqual(a.cereri, [{ p_buletin: 55, p_tip: 'alternativ', p_model: OPUS_55, p_cheie: CERERE }])
+  // costul necunoscut (usage lipsă): salvată cu rezerva, marcată necunoscut
+  const u = await scenariu({ usage: false })
+  assert.equal(u.status, 200); assert.equal(u.salvari[0].p_cost_usd, REZ_SONNET); assert.equal(u.salvari[0].p_cost_cunoscut, false)
+})
+
+Deno.test('20270115b: aceeași cheie, citirea deja salvată → 200 idempotent, fără fișier, fără plafon, fără apel AI', async () => {
+  const salvat = valideazaCitireNdt(JSON.stringify(CITIRE))
+  const r = await scenariu({ cerereRez: { data: { rezultat: 'gata', id: 77, citire: salvat, cost_usd: '0.0030', cost_cunoscut: true, tip: 'principal', model: SONNET } } })
+  assert.equal(r.status, 200)
+  assert.equal(r.body.idempotent, true); assert.equal(r.body.salvata, true); assert.equal(r.body.citire_id, 77)
+  assert.deepEqual(r.body.citire, salvat); assert.equal(r.body.nr_randuri, 2)
+  aprox(r.body.cost_usd, 0.003); assert.equal(r.body.cost_cunoscut, true)
+  assert.equal(CITIT(r), false); faraCost(r)
+  assert.equal(r.ev.some(e => e.startsWith('ledger:')), false, 'nici citirea plafonului')
+  assert.deepEqual(r.salvari, []); assert.deepEqual(r.inchideri, [])
+})
+
+Deno.test('20270115b: cererea în lucru / necunoscută / eșuată / refuzată de reguli → fără fișier, fără cost, fără închidere', async () => {
+  const cazuri: [RaspunsRpc, number, string][] = [
+    [{ data: { rezultat: 'in_curs', id: 9 } }, 409, 'citire_in_curs'],
+    [{ data: { rezultat: 'necunoscut', id: 9 } }, 409, 'citire_necunoscuta'],
+    [{ data: { rezultat: 'esuat', id: 9, eroare_cod: 'apel_ai_esuat' } }, 409, 'citire_esuata'],
+    [{ error: { code: '55006', message: 'sud: alta citire a buletinului e in curs' } }, 409, 'citire_in_curs'],
+    [{ error: { code: '54000', message: 'sud: limita' } }, 429, 'prea_multe_citiri'],
+    [{ error: { code: '42501', message: 'sud: doar managerul de proiect' } }, 403, 'fara_drept'],
+    [{ error: { code: '55000', message: 'sud: buletinul nu e ciorna (confirmat)' } }, 409, 'buletin_nu_e_ciorna'],
+    [{ error: { code: '22023', message: 'sud: cheie_alta_cerere' } }, 409, 'cheie_alta_cerere'],
+    [{ error: { code: '22023', message: 'sud: cerere de citire invalida' } }, 503, 'cerere_indisponibila'],
+    [{ error: { code: 'PGRST202', message: 'fn lipsă (migrarea neaplicată)' } }, 503, 'cerere_indisponibila'],
+    [{ data: { rezultat: 'altceva', id: 9 } }, 503, 'cerere_indisponibila'],
+    [{ data: { rezultat: 'nou', id: 0 } }, 503, 'cerere_indisponibila'],
+    [{ data: { rezultat: 'gata', id: 9, citire: null } }, 503, 'cerere_indisponibila'],
+    [{ data: null }, 503, 'cerere_indisponibila'],
+    ['arunca', 503, 'cerere_indisponibila'],
+  ]
+  for (const [cerereRez, status, cod] of cazuri) {
+    const r = await scenariu({ cerereRez })
+    const et = JSON.stringify(cerereRez)
+    assert.equal(r.status, status, et); assert.equal(r.body.eroare, cod, et); assert.equal(r.body.citire, undefined, et)
+    assert.equal(CITIT(r), false, et); faraCost(r); assert.deepEqual(r.inchideri, [], et); assert.deepEqual(r.salvari, [], et)
+  }
+  assert.equal((await scenariu({ cerereRez: { data: { rezultat: 'esuat', id: 9, eroare_cod: 'apel_ai_esuat' } } })).body.eroare_initiala, 'apel_ai_esuat')
+  // rezervarea blocată se oprește la termenul ei: nimic consumat
+  const t0 = Date.now()
+  const b = await scenariuInTermen({ cerereRez: 'blocata', deps: { termene: { ...TERMENE_NDT, salvare: 40 } } })
+  assert.ok(Date.now() - t0 < 2000); assert.equal(b.status, 503); assert.equal(b.body.eroare, 'cerere_indisponibila')
+  assert.equal(b.semnale['cerere:rezerva'].aborted, true); faraCost(b)
+})
+
+Deno.test('20270115b: fiecare ieșire de după rezervarea cererii o închide O dată, cu codul și costul corect (0 / decontat / rezerva necunoscută)', async () => {
+  // [opțiuni, codul închiderii, costul, cunoscut]
+  const cazuri: [Opt, string, number, boolean][] = [
+    [{ fisier: null }, 'fisier_inaccesibil', 0, true],
+    [{ fisier: new TextEncoder().encode('<html>') }, 'pdf_invalid', 0, true],
+    [{ fisier: new TextEncoder().encode('%PDF-1.7 alt continut') }, 'amprenta_diferita', 0, true],
+    [{ refuzPlafon: 5 }, 'plafon_depasit', 0, true],
+    [{ rezervaEroare: true }, 'rezervare_indisponibila', 0, true],
+    [{ rezervaId: null }, 'rezervare_indisponibila', 0, true],
+    [{ countStatus: 400 }, 'pdf_neacceptat', 0, true],
+    [{ apelStatus: 500 }, 'apel_ai_esuat', REZ_SONNET, false],
+    [{ timeout: true }, 'termen_depasit', REZ_SONNET, false],
+    [{ stop: 'max_tokens' }, 'raspuns_ai_incomplet', COST_SONNET, true],
+    [{ stop: 'refusal' }, 'refuz_ai', COST_SONNET, true],
+    [{ text: 'nu e json' }, 'raspuns_ai_invalid', COST_SONNET, true],
+    [{ text: 'nu e json', usage: false }, 'raspuns_ai_invalid', REZ_SONNET, false],
+    [{ deconteazaEroare: true }, 'decontare_indisponibila', REZ_SONNET, false],
+    [{ countStatus: 400, deconteazaEroare: true }, 'decontare_indisponibila', REZ_SONNET, false],
+  ]
+  for (const [o, cod, cost, cunoscut] of cazuri) {
+    const r = await scenariu(o)
+    const et = JSON.stringify(o)
+    assert.equal(r.inchideri.length, 1, et); assert.deepEqual(r.salvari, [], et)
+    const c = r.inchideri[0]
+    assert.equal(c.p_cheie, CERERE, et); assert.equal(c.p_eroare, cod, et); assert.equal(c.p_cost_cunoscut, cunoscut, et); aprox(c.p_cost_usd, cost)
+    assert.ok(r.semnale['cerere:inchide'], `închiderea are termen: ${et}`)
+  }
+  // închiderea picată nu schimbă răspunsul (cererea rămâne în lucru și expiră ca „necunoscut”)
+  for (const inchidere of [{ error: { code: '57014', message: 'timeout' } }, 'arunca'] as RaspunsRpc[]) {
+    const r = await scenariu({ fisier: null, inchidere })
+    assert.equal(r.status, 404); assert.equal(r.body.eroare, 'fisier_inaccesibil'); assert.equal(r.inchideri.length, 1)
+  }
+  // închiderea blocată se oprește la termenul ei
+  const t0 = Date.now()
+  const b = await scenariuInTermen({ fisier: null, inchidere: 'blocata', deps: { termene: { ...TERMENE_NDT, salvare: 40 } } })
+  assert.ok(Date.now() - t0 < 2000); assert.equal(b.status, 404); assert.equal(b.semnale['cerere:inchide'].aborted, true)
+})
+
+Deno.test('20270115b: salvarea — buletin confirmat între timp = 409 (închisă cu costul); refuz de reguli = livrată nesalvată + închisă; rețea / termen = nesalvată, neatinsă (L05)', async () => {
+  const c = await scenariu({ salvare: { error: { code: '55000', message: 'sud: buletinul nu e ciorna (confirmat)' } } })
+  assert.equal(c.status, 409); assert.equal(c.body.eroare, 'buletin_nu_e_ciorna'); assert.equal(c.body.citire, undefined)
+  assert.equal(c.inchideri.length, 1); assert.equal(c.inchideri[0].p_eroare, 'buletin_nu_e_ciorna'); aprox(c.inchideri[0].p_cost_usd, COST_SONNET)
+  for (const code of ['22023', '42501']) {
+    const r = await scenariu({ salvare: { error: { code, message: 'sud: refuz' } } })
+    assert.equal(r.status, 200, code); assert.equal(r.body.salvata, false); assert.equal(r.body.citire_id, null); assert.equal(r.body.avertisment, 'salvare_refuzata')
+    assert.equal(r.body.nr_randuri, 2); assert.equal(r.inchideri.length, 1); assert.equal(r.inchideri[0].p_eroare, 'salvare_refuzata')
+  }
+  for (const salvare of ['arunca', { error: { code: '57014', message: 'timeout' } }, { data: null }] as RaspunsRpc[]) {
+    const r = await scenariu({ salvare })
+    const et = JSON.stringify(salvare)
+    assert.equal(r.status, 200, et); assert.equal(r.body.salvata, false, et); assert.equal(r.body.avertisment, 'salvare_neconfirmata', et)
+    assert.deepEqual(r.inchideri, [], `cererea nu se închide pe un rezultat necunoscut: ${et}`); assert.equal(r.decontari.length, 1)
+  }
+  const t0 = Date.now()
+  const b = await scenariuInTermen({ salvare: 'blocata', deps: { termene: { ...RAPID, salvare: 40 } } })
+  assert.ok(Date.now() - t0 < 2000); assert.equal(b.status, 200); assert.equal(b.body.salvata, false); assert.equal(b.semnale['cerere:salveaza'].aborted, true)
+})
+
+Deno.test('20270115b: termenele de după apel încap în marjă (decontare + salvare + informativ < marja)', () => {
+  assert.ok(TERMENE_NDT.decontare + TERMENE_NDT.salvare + TERMENE_NDT.informativ < TERMENE_NDT.marja)
+  assert.ok(TERMENE_NDT.total - TERMENE_NDT.marja >= TERMENE_NDT.minApel + TERMENE_NDT.numarare)
+  // clasificarea răspunsului rezervării: doar formele cunoscute trec
+  assert.deepEqual(clasificaRezervareCerere({ rezultat: 'nou', id: 3 }, null), { tip: 'nou', id: 3 })
+  for (const d of [[], 'nou', { rezultat: 'nou' }, { rezultat: 'nou', id: '3x' }, { rezultat: 'gata', id: 3, citire: [] }]) {
+    assert.equal(clasificaRezervareCerere(d, null).tip, 'refuz', JSON.stringify(d))
+  }
+})
+
+Deno.test('20270115b: paritatea formei salvate — cazurile comune cu fn_sud_citire_valida (supabase/tests/20270115b_citiri_cazuri.json)', async () => {
+  const cazuri = JSON.parse(await Deno.readTextFile(new URL('../../tests/20270115b_citiri_cazuri.json', import.meta.url)))
+  assert.ok(cazuri.valide.length >= 3)
+  for (const c of cazuri.valide) assert.deepEqual(valideazaCitireNdt(JSON.stringify(c.brut)), c.salvat, c.nume)
+  // forma salvată conține EXACT cheile pe care le cere fn_sud_citire_valida (toate prezente, nimic în plus)
+  const v = valideazaCitireNdt(JSON.stringify(CITIRE))
+  assert.deepEqual(Object.keys(v).sort(), ['antet', 'incerte', 'pagini_necitite', 'partial', 'randuri'])
+  assert.deepEqual(Object.keys(v.antet).sort(), ['data', 'firma', 'metoda', 'nr_randuri_tiparit', 'numar', 'pagini_necitite', 'partial', 'tronson'])
+  for (const r of v.randuri) assert.deepEqual(Object.keys(r).sort(), ['adancime_mm', 'cod_raw', 'data_inspectie', 'end_mm', 'inaltime_mm', 'lungime_mm', 'observatii', 'rezultat', 'start_mm'])
 })

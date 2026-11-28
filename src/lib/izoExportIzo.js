@@ -106,8 +106,10 @@ export function evalueazaExportIzo({ pachet, tronson, tevi, arhiva }) {
  * lipsurile blocante (= cele deblocate de MP; la exportul complet []) și avertismentele. Ordonate, ca două citiri egale
  * să dea aceeași fotografie.
  * În plus (Jakarinos #1219 r1 P1): amprenta PACHETULUI (pachet) și a RÂNDURILOR lui (randuri), din exact copia folosită la
- * generare. Serverul NU le compară (fn_sud_export_inregistreaza verifică doar buletine / eliminate / metode / lipsuri); le
- * compară clientul: imediat înainte de generare și din nou înainte de înregistrare (verificaPachetNeschimbat) + „export depășit”.
+ * generare, comparată de client imediat înainte de generare și din nou înainte de înregistrare (verificaPachetNeschimbat) + „export
+ * depășit” (lista de diferențe din UI). Și (20270115b, Jakarinos #1219 r2): amprenta_pachet = amprenta calculată de SERVER
+ * (fn_sud_amprenta_pachet), citită la deschiderea ferestrei; fn_sud_export_inregistreaza o recalculează sub lock și dă 40001 dacă
+ * diferă. Lipsă (eroare / migrare neaplicată) = null → butonul rămâne oprit (fail-closed, L18).
  */
 export function construiesteFotografie({ arhiva, verificare, pachet, tevi }) {
   const buletine = (arhiva.buletine || []).map(b => ({ id: Number(b.id), versiune: Number(b.versiune), eticheta: eticheta(b) }))
@@ -121,8 +123,14 @@ export function construiesteFotografie({ arhiva, verificare, pachet, tevi }) {
     avertismente: scurt(verificare.avertismente),
     pachet: amprentaPachet(pachet),
     randuri: amprentaRanduri(tevi),
+    amprenta_pachet: amprentaServerValida(arhiva?.amprentaServer) ? arhiva.amprentaServer : null,
   }
 }
+
+// amprenta serverului: md5 în hex minuscul (forma întoarsă de fn_sud_amprenta_pachet și cerută de fn_sud_export_inregistreaza)
+export const AMPRENTA_SERVER_RE = /^[0-9a-f]{32}$/
+export const amprentaServerValida = a => typeof a === 'string' && AMPRENTA_SERVER_RE.test(a)
+export const MOTIV_FARA_AMPRENTA = 'Amprenta pachetului de pe server nu s-a putut citi: exportul nu pornește. Reîncarcă pagina și redeschide fereastra.'
 
 // ── 4b. amprenta pachetului și a rândurilor (R6 pe pachet) ───────────────
 // Câmpurile rândului care intră în Excel (exportCentralizatorXlsx) sau în verificare; id-ul prinde și rândurile înlocuite.
@@ -195,6 +203,11 @@ export function diferentePachet(veche, curenta, cand = 'după export') {
   if (vr.numar !== cr.numar) dif.push(`Numărul de rânduri s-a schimbat ${cand}: ${vr.numar} → ${cr.numar}.`)
   else if (vr.amprenta !== cr.amprenta) dif.push(`Rândurile pachetului s-au schimbat ${cand} (serie, sudură, lungime, tip, dimensiune, șarjă sau PM / PA-UT / UT).`)
   if (vp.updated_at !== cp.updated_at && !dif.length) dif.push(`Pachetul a fost salvat ${cand}.`)
+  // amprenta serverului (vede și rândurile pe care clientul nu le vede): comparată doar când ambele părți o au (exporturile dinaintea
+  // 20270115b nu o au; o citire eșuată acum rămâne acoperită de comparația clientului de mai sus și de refuzul serverului la înregistrare)
+  if (amprentaServerValida(veche?.amprenta_pachet) && amprentaServerValida(curenta?.amprenta_pachet) && veche.amprenta_pachet !== curenta.amprenta_pachet && !dif.length) {
+    dif.push(`Pachetul sau rândurile lui s-au schimbat ${cand} (amprenta calculată de server).`)
+  }
   return dif
 }
 
@@ -230,9 +243,11 @@ export function stareButonExport({ evaluare, drept = {}, bifa = false, motiv = '
     if (drept.scriere !== true) return { activ: false, incomplet: true, motiv: 'Lipsesc documente: doar managerul de proiect (sau owner-ul) poate debloca exportul.' }
     if (!bifa) return { activ: false, incomplet: true, motiv: 'Bifează „Export cu documente lipsă” ca să continui.' }
     if (txt(motiv).length < MOTIV_DEBLOCARE_MIN) return { activ: false, incomplet: true, motiv: `Scrie motivul deblocării (cel puțin ${MOTIV_DEBLOCARE_MIN} caractere).` }
+    if (!amprentaServerValida(evaluare.fotografie.amprenta_pachet)) return { activ: false, incomplet: true, motiv: MOTIV_FARA_AMPRENTA }
     return { activ: true, incomplet: true, motiv: null }
   }
   if (drept.export === false) return { activ: false, incomplet: false, motiv: 'Nu ai drept de export pe acest proiect.' }
+  if (!amprentaServerValida(evaluare.fotografie.amprenta_pachet)) return { activ: false, incomplet: false, motiv: MOTIV_FARA_AMPRENTA }
   return { activ: true, incomplet: false, motiv: null }
 }
 
