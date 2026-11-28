@@ -1,0 +1,12 @@
+# L15 v2 - manifestul diferentelor pentru 20270115a_ofertare_clarificari_puncte_citire (AMPRENTA_GLOBALA v2); familie TAB eticheta TAB operatie TAB amprenta
+# generat pe clona cu scripts/livrare_l15_manifest.sh (ROLLBACK, nimic comis); migrarea sha256 e1f1e29f1f38b104263539b0009207ed2ba88ba572a58743f6e0e43e839a27fe
+# clona: server_version_num 170006, rol postgres
+# clona: GLOBAL inainte a320320ce48f0cd0d7e3a42194b8b5a8 (27562 randuri), dupa 3ca7099baeef6fd12c1313e124492010 (27567 randuri); 8 obiecte
+functie	functie public.fn_ofertare_clar_are_puncte(bigint)	creat	21fdab70eaad9862f55e969b422e74b1
+functie	functie public.fn_ofertare_clar_parinte_puncte_garda()	creat	d1442b840a2c5dab60c177477ac7d425
+functie	functie public.fn_ofertare_clar_puncte_poarta(bigint)	creat	fe606a3e54a570b77f3aa5d8138b487b
+functie	functie public.fn_ofertare_lic_puncte_poarta(bigint)	creat	20c5e80e11c91c135f1dff67525be998
+functie	functie public.ofertare_clarificari_export(bigint)	schimbat	50a086f5488431979576deb4d8a3f4cb
+politica	politica public.ofertare_clarificari_puncte.clar_puncte_rw	schimbat	86d120205ec11429649d284e5a14b689
+politica	politica public.ofertare_clarificari_puncte.clar_puncte_sel	schimbat	637bb335f1816d70642ce6bc186b836f
+trigger	trigger public.ofertare_clarificari.trg_ofertare_clar_parinte_puncte	creat	f6144078a95e8124f4dc7d4703315bed
