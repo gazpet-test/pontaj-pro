@@ -1,7 +1,8 @@
 // R9b: starea review-ului textului exact pe baza curentă. Cifra scrisă de om nu este
 // validată automat. Exportul efectiv folosește RPC-ul ofertare_clarificari_export;
 // funcțiile pure de aici păstrează afișarea și filtrarea fail-closed.
-export const eCiornaAutomata = q => /^auto_planse_/.test(String(q?.cheie || ''))
+// TKT-2026-0329 A (spec §3.5, inventar #1): ciornele automate = planșe (auto_planse_*) ȘI semnalele de cantități între documente (auto_surse_*)
+export const eCiornaAutomata = q => /^auto_(planse|surse)_/.test(String(q?.cheie || ''))
 export const MESAJ_SCHIMBATA = 'baza s-a schimbat — de reverificat'
 
 // q = rândul clarificării; bazaPeId = Map(id → rândul din v_ofertare_clarificari_baza); eroare = mesajul citirii view-ului (sau null)
@@ -24,6 +25,8 @@ export function stareBazaCiorna(q, bazaPeId, eroare) {
     text: r.text || 'Identitate limitată: acceptă explicit excepția și reconfirmă textul pe baza curentă.', rand: r }
   if (r.stare === 'luat_act') return { nivel: 'luat_act', blocheaza: true, text: r.text || 'baza s-a schimbat după transmitere — luat act', rand: r }
   if (r.stare === 'schimbata' || r.stare === 'indisponibila' || r.stare === 'necesita_review') return { nivel: r.stare, blocheaza: true, text: r.text || MESAJ_SCHIMBATA, rand: r }
+  // auto_surse_* (ofertare_semnal_baza_stare, 20270112a): reevaluare în curs / verdictul nu mai e „diferență” / semnal rezolvat prin răspuns → blocat, textul serverului
+  if (r.stare === 'evaluare_in_curs' || r.stare === 'fara_diferenta' || r.stare === 'rezolvata_de_raspuns') return { nivel: r.stare, blocheaza: true, text: r.text || MESAJ_SCHIMBATA, rand: r }
   return { nivel: 'nu_putem_verifica', blocheaza: true, text: `stare necunoscută a bazei („${r.stare}”) — nu putem verifica`, rand: r }
 }
 

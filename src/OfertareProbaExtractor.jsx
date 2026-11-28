@@ -7,6 +7,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
 import { consumBuget, cerereActiva, cereriPeLot, ruleazaPanaLaCapat, totalPasi } from './ofertareProbaExtractor.js'
+import { textRezumatSemnale } from './ofertareSemnale.js'
 
 const G = { surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D', text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
   ofertare:'#3FB6E2', green:'#3FB950', orange:'#F0883E', yellow:'#E3B341', red:'#F85149' }
@@ -18,7 +19,8 @@ const S = {
 }
 const SCOP = 'cant_extragere'
 
-export default function OfertareProbaExtractor({ licitatie: l }) {
+// onRulare: chemat după fiecare rulare încheiată (gata / oprit / eroare), pe licitația pe care a pornit — cardul semnalelor se recitește (review r2 P2)
+export default function OfertareProbaExtractor({ licitatie: l, onRulare = null }) {
   const [deschis, setDeschis] = useState(false)
   const [st, setSt] = useState(null)        // { buget, consum, cerere }
   const [err, setErr] = useState(null)
@@ -27,12 +29,13 @@ export default function OfertareProbaExtractor({ licitatie: l }) {
   const [jurnal, setJurnal] = useState([])
   const opreste = useRef(false)
   const licCurenta = useRef(l.id)   // review Copilot / Gemini #797 r1 (P2): rezultatul unei încărcări vechi nu suprascrie altă licitație
+  const genCtx = useRef(0)          // review Jakarinos #1207 r4 (P2): generația contextului — A → B → A sau demontarea invalidează rularea veche, nu doar id-ul
 
   // altă licitație (sau închiderea secțiunii): starea veche se golește, iar o rulare în curs se oprește după pasul curent
   useEffect(() => {
-    licCurenta.current = l.id
+    licCurenta.current = l.id; genCtx.current++
     setSt(null); setJurnal([]); setErr(null)
-    return () => { opreste.current = true }
+    return () => { opreste.current = true; genCtx.current++ }
   }, [l.id])
 
   const load = async () => {
@@ -73,8 +76,8 @@ export default function OfertareProbaExtractor({ licitatie: l }) {
     if (!window.confirm(`Pornesc extragerea cu extractorul ${extractor} pe ${l.nr_anunt}? E plătită (rămas din plafon: ${st.buget ? (st.buget.plafon_usd - st.consum).toFixed(2) : '—'} USD); se oprește singură la plafon.`)) return
     opreste.current = false; setBusy(true); setErr(null)
     // review Copilot #797 r2 (P2): callback-urile rulării scriu DOAR dacă panoul arată încă licitația pe care a pornit rularea
-    const idRulare = l.id
-    const aici = () => licCurenta.current === idRulare
+    const idRulare = l.id, ctx = genCtx.current
+    const aici = () => licCurenta.current === idRulare && genCtx.current === ctx
     const jurnalAici = (x) => { if (aici()) setJurnal(j => [...j, { t: new Date().toLocaleTimeString('ro-RO'), x }]) }
     jurnalAici(`▶ extractor ${extractor}`)
     try {
@@ -82,13 +85,18 @@ export default function OfertareProbaExtractor({ licitatie: l }) {
       (body) => supabase.functions.invoke('ofertare-cantitati-extrage', { body }),
       { mod: 'structurat', licitatie_id: l.id, cerere_id: st.cerere.id, extractor },
       { laPas: (i, p) => { jurnalAici(p.eroare ? `pas ${i + 1}: eroare — ${p.eroare}`
-          : `pas ${i + 1}: ${p.felii_apelate} felii · ${p.cost_usd.toFixed(4)} USD${p.felii_cu_deficit_b1 != null ? ` · deficit B1 ${p.felii_cu_deficit_b1}` : ''}${p.felii_escaladate != null ? ` · escaladate ${p.felii_escaladate}` : ''}${p.erori ? ` · ${p.erori} cu erori` : ''}${p.oprit ? ` · ${p.oprit}` : ''}`); (p.probleme || []).forEach(x => jurnalAici(`   ⚠ ${x}`)) },
+          : `pas ${i + 1}: ${p.felii_apelate} felii · ${p.cost_usd.toFixed(4)} USD${p.felii_cu_deficit_b1 != null ? ` · deficit B1 ${p.felii_cu_deficit_b1}` : ''}${p.felii_escaladate != null ? ` · escaladate ${p.felii_escaladate}` : ''}${p.erori ? ` · ${p.erori} cu erori` : ''}${p.oprit ? ` · ${p.oprit}` : ''}`); (p.probleme || []).forEach(x => jurnalAici(`   ⚠ ${x}`))
+          // TKT-2026-0329 A: comparația cantităților între documente rulează la finalul fiecărui pas (PR-extragere) — rezumatul ei, sau de ce n-a rulat
+          const sem = textRezumatSemnale(p.masuratori); if (sem) jurnalAici(`   📏 ${sem}`) },
         trebuieOprit: () => opreste.current })
     const tot = totalPasi(r.pasi)
     jurnalAici(`■ ${extractor}: ${r.motiv} — ${tot.felii} felii, ${tot.cost.toFixed(4)} USD, deficit B1 ${tot.deficit}, escaladate ${tot.escaladate}, erori ${tot.erori}${r.pasi.find(p => p.extractor)?.extractor ? ` (${r.pasi.find(p => p.extractor).extractor})` : ''}`)
     } catch (e) { if (aici()) setErr('Rulare întreruptă: ' + (e?.message || String(e))) }
     finally { setBusy(false) }
-    if (aici()) await load()
+    // review r3 P2: contextul se reverifică și DUPĂ recitirea bugetului (omul poate trece pe altă licitație cât timp ea durează), iar
+    // notificarea semnalelor nu depinde de reușita tehnică a recitirii (serverul a publicat evaluarea indiferent de ea)
+    if (aici()) { try { await load() } catch (e) { if (aici()) setErr('Recitirea bugetului a eșuat: ' + (e?.message || String(e))) } }
+    if (aici() && typeof onRulare === 'function') onRulare(idRulare)
   }
 
   return (

@@ -34,7 +34,9 @@ export async function ruleazaPanaLaCapat(invoke, body, { maxPasi = 20, laPas = (
     if (error || data?.error) { const e = { pas: i, eroare: data?.error || error?.message || String(error) }; pasi.push(e); laPas(i, e); return { pasi, motiv: 'eroare' } }
     const p = { pas: i, oprit: data?.oprit ?? null, felii_apelate: data?.felii_apelate ?? 0, cost_usd: Number(data?.cost_usd || 0),
       felii_cu_deficit_b1: data?.felii_cu_deficit_b1 ?? null, felii_escaladate: data?.felii_escaladate ?? null, extractor: data?.extractor ?? null,
-      erori: (data?.raport || []).filter(x => x.eroare || x.refuz || x.refuz_rezervare).length, probleme: problemeRaport(data?.raport) }
+      erori: (data?.raport || []).filter(x => x.eroare || x.refuz || x.refuz_rezervare).length, probleme: problemeRaport(data?.raport),
+      // TKT-2026-0329 A: raportul comparației cantităților între documente (PR-extragere: masuratori.ok / rezumat / eroare), afișat ca linie în jurnal
+      masuratori: data?.masuratori && typeof data.masuratori === 'object' ? data.masuratori : null }
     pasi.push(p); laPas(i, p)
     if (p.oprit !== 'buget_timp') return { pasi, motiv: p.oprit ? String(p.oprit) : 'gata' }
     // review Gemini #797 r1 (P2): un pas oprit pe timp FĂRĂ nicio felie apelată nu avansează — nu se repetă în gol

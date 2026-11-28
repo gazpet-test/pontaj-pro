@@ -37,6 +37,14 @@ describe('ruleazaPanaLaCapat', () => {
     expect((await ruleazaPanaLaCapat(async () => ({ data: { oprit: 'buget_timp' } }), {}, { trebuieOprit: () => true })).motiv).toBe('oprit_de_om')
     expect((await ruleazaPanaLaCapat(async () => ({ data: { oprit: 'buget_timp', felii_apelate: 1 } }), {}, { maxPasi: 3 })).pasi.length).toBe(3)
   })
+  // TKT-2026-0329 A (PR-UI Task 9): raportul comparației cantităților din răspunsul edge-ului ajunge pe pas, ca obiect; lipsă / străin = null
+  it('masuratori din răspuns e păstrat pe pas (ok + rezumat, sau eroarea), lipsă = null', async () => {
+    const m = { ok: true, rezumat: { diferente: 2, de_verificat: 1, neverificate: 3, in_regula: 5, altele: 0, total: 11 }, felii: 4 }
+    expect((await ruleazaPanaLaCapat(async () => ({ data: { oprit: null, masuratori: m } }), {})).pasi[0].masuratori).toEqual(m)
+    expect((await ruleazaPanaLaCapat(async () => ({ data: { oprit: null, masuratori: { ok: false, eroare: 'fotografie: x', felii: 0 } } }), {})).pasi[0].masuratori.eroare).toBe('fotografie: x')
+    expect((await ruleazaPanaLaCapat(async () => ({ data: { oprit: null } }), {})).pasi[0].masuratori).toBe(null)
+    expect((await ruleazaPanaLaCapat(async () => ({ data: { oprit: null, masuratori: 'text' } }), {})).pasi[0].masuratori).toBe(null)
+  })
 })
 
 describe('review r1 (#797)', () => {

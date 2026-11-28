@@ -1,5 +1,50 @@
 import { describe, it, expect } from 'vitest'
-import { stareBazaCiorna, deExportat, poateAcceptaExceptieIdentitate } from './ofertareClarificariBaza.js'
+import { stareBazaCiorna, deExportat, poateAcceptaExceptieIdentitate, eCiornaAutomata, MESAJ_SCHIMBATA } from './ofertareClarificariBaza.js'
+
+// TKT-2026-0329 A (PR-UI Task 10, inventar #1): circuitul ciornelor automate se extinde EXPLICIT la auto_surse_* (spec §3.5)
+describe('eCiornaAutomata — auto_planse_* și auto_surse_*', () => {
+  it('auto_surse_x și auto_planse_x sunt automate; auto_sursex, manual, fără cheie nu', () => {
+    expect(eCiornaAutomata({ cheie: 'auto_surse_x' })).toBe(true)
+    expect(eCiornaAutomata({ cheie: 'auto_surse_0123456789abcdef' })).toBe(true)
+    expect(eCiornaAutomata({ cheie: 'auto_planse_1' })).toBe(true)
+    expect(eCiornaAutomata({ cheie: 'auto_sursex' })).toBe(false)
+    expect(eCiornaAutomata({ cheie: 'manual' })).toBe(false)
+    expect(eCiornaAutomata({ cheie: 'xauto_surse_1' })).toBe(false)
+    expect(eCiornaAutomata({ cheie: null })).toBe(false)
+    expect(eCiornaAutomata(null)).toBe(false)
+  })
+})
+
+describe('stările bazei pentru auto_surse_* (ofertare_semnal_baza_stare, 20270112a §9a)', () => {
+  const qs = { id: 2, cheie: 'auto_surse_0123456789abcdef', status: 'de_trimis', intrebare: 'Text verificat' }
+  const rs = (stare, text, extra = {}) => ({ id: 2, stare, text, amprenta_curenta: 'tok', marcaj_planse: false, detalii: { evaluare: 'surse_v1', mod_ciorna: 'surse' }, ...extra })
+  const st = r => stareBazaCiorna(qs, new Map([[2, r]]), null)
+  it('evaluare_in_curs blochează cu textul serverului', () => {
+    const r = rs('evaluare_in_curs', 'baza s-a schimbat — de reverificat')
+    expect(st(r)).toMatchObject({ nivel: 'evaluare_in_curs', blocheaza: true, text: 'baza s-a schimbat — de reverificat', rand: r })
+    expect(deExportat([qs], [r], null)).toEqual({ incluse: [], excluse: [{ q: qs, motiv: 'baza s-a schimbat — de reverificat' }] })
+  })
+  it('fara_diferenta blochează (verdictul nu mai e „diferență” — nu mai e nimic de întrebat)', () => {
+    const r = rs('fara_diferenta', 'baza s-a schimbat — de reverificat')
+    expect(st(r)).toMatchObject({ nivel: 'fara_diferenta', blocheaza: true, text: 'baza s-a schimbat — de reverificat' })
+    expect(deExportat([qs], [r], null).incluse).toEqual([])
+  })
+  it('rezolvata_de_raspuns blochează cu textul serverului', () => {
+    const txt = 'semnal rezolvat prin răspunsul Autorității — ciorna nu mai e necesară'
+    expect(st(rs('rezolvata_de_raspuns', txt))).toMatchObject({ nivel: 'rezolvata_de_raspuns', blocheaza: true, text: txt })
+    expect(deExportat([qs], [rs('rezolvata_de_raspuns', txt)], null).excluse[0].motiv).toBe(txt)
+  })
+  it('fără text de la server → mesajul unic „baza s-a schimbat”', () => {
+    for (const s of ['evaluare_in_curs', 'fara_diferenta', 'rezolvata_de_raspuns']) expect(st(rs(s, null)).text).toBe(MESAJ_SCHIMBATA)
+  })
+  it('ok pe o ciornă de surse (marcaj_planse e mereu false) → nu blochează; necesita_review / schimbata / indisponibila blochează ca la planșe', () => {
+    expect(st(rs('ok', 'Text aprobat de om pe evaluarea publicată, actuală.'))).toMatchObject({ nivel: 'ok', blocheaza: false, text: '' })
+    for (const s of ['necesita_review', 'schimbata', 'indisponibila']) expect(st(rs(s, 'x')).blocheaza, s).toBe(true)
+  })
+  it('o ciornă auto_surse_* retrasă nu are stare de bază (na)', () => {
+    expect(stareBazaCiorna({ ...qs, status: 'retrasa' }, new Map(), null)).toEqual({ nivel: 'na', blocheaza: false, text: '' })
+  })
+})
 
 const q = { id: 1, cheie: 'auto_planse_test', status: 'de_trimis', intrebare: 'Text verificat' }
 const avertisment = 'Identitate limitată: nu putem detecta înlocuirea fișierului cu alt conținut la aceeași cale și aceeași mărime (documente: #8 F3.pdf).'
