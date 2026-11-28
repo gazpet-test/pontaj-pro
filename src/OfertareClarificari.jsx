@@ -14,7 +14,7 @@ import { poatePorniProcesarea, MOTIV_POARTA } from './OfertareTriere.jsx'
 import { imageToPdf } from './CitesteOricePanel.jsx'
 import PuncteClarificare from './OfertareClarificariPuncte.jsx'
 import TemeiuriClarificare from './OfertareTemeiuri.jsx'
-import { formatCitare, tabelLipsa, motivNeexportabil } from './ofertareTemeiuri.js'
+import { citesteRaspunsExport, practicaDinExport } from './ofertareClarificariExport.js'
 import { mesajFaraText, citesteCuAi, avertismentCitire } from './ofertareCitireDoc.js'
 // R5 runda 9: baza cifrelor ciornelor automate (amprenta de la generare vs acum) — afișare, reconfirmare, export verificat în backend
 import { eCiornaAutomata, stareBazaCiorna, textDiferente, poateAcceptaExceptieIdentitate } from './ofertareClarificariBaza.js'
@@ -234,37 +234,22 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
     // #63: întrebările marcate „revizie_*” în sursa NU intră în adresă (rămân vizibile în listă cu badge)
     // R5 runda 9 (ADDENDUM 3, C): starea bazei se RECITEȘTE din server chiar acum (nu din ecranul încărcat mai demult): o ciornă automată cu cifrele
     // schimbate / nereconfirmate sau necontrolabilă (view indisponibil) NU intră în adresă
-    const { data: deTrimis, error: eExport } = await supabase.rpc('ofertare_clarificari_export', { p_licitatie_id: licId })
-    if (eExport || !Array.isArray(deTrimis)) { showToast('Export blocat: ' + (eExport?.message || 'verificare indisponibilă'), 'err'); return }
+    // 20270115a (varianta B, Răzvan 27.11.2026): RPC-ul cere PE SERVER poarta punctelor (owner / responsabil al licitației; 42501 altfel) și întoarce
+    // în ACELAȘI răspuns { clarificari, temeiuri } — temeiurile bifate „include în adresă” de pe întrebări ȘI de pe PUNCTELE lor. UI-ul nu le mai
+    // citește separat: pentru un cont fără poartă join-ul cu punctele ar fi întors 0 rânduri și adresa ar fi părut completă (review Jakarinos #1210
+    // r1 P1 #3, r3 P1 #1 / #2). Forma veche a răspunsului (tablou = migrarea neaplicată), eroare sau răspuns neașteptat = refuz explicit (fail-closed).
+    const r = await supabase.rpc('ofertare_clarificari_export', { p_licitatie_id: licId })
+    const ex = citesteRaspunsExport(r.data, r.error)
+    if (!ex.ok) { showToast(ex.mesaj, 'err'); return }
+    const deTrimis = ex.clarificari
     const excluse = 0
     if (!deTrimis.length) { showToast('Nicio întrebare aprobată de exportat.', 'warn'); return }
-    // Pasul B: practica CNSC invocată — DOAR temeiurile confirmate și bifate „include în adresă”, cu pagină și link (formatul unic §4).
-    // Tabelul poate lipsi până la aplicarea migrării 20261014b → secțiunea pur și simplu nu apare.
-    const nrExport = new Set(deTrimis.map(q => q.nr))
-    const practica = []
-    {
-      // temeiurile de pe întrebări + cele de pe PUNCTELE întrebărilor (punct → întrebare) — B4 Jakarinos
-      const SEL = 'citat_idx, citat_text, citat_loc, decizie:cnsc_decizii(id, nr_decizie, buletin_oficial, data, link_sursa, control_judiciar, verificat)'
-      // fără filtru pe tip: un tipar/o cerință bifată prin API trebuie să BLOCHEZE exportul (motivNeexportabil), nu să dispară — Jakarinos r3
-      const baza = sel => sel.eq('include_in_adresa', true).eq('confirmat', true).order('id')
-      const [rQ, rP] = await Promise.all([
-        baza(supabase.from('ofertare_clarificari_temeiuri').select(SEL + ', clarificare:ofertare_clarificari!inner(nr, licitatie_id)').eq('clarificare.licitatie_id', licId)),
-        baza(supabase.from('ofertare_clarificari_temeiuri').select(SEL + ', punct:ofertare_clarificari_puncte!inner(nr, clarificare:ofertare_clarificari!inner(nr, licitatie_id))').eq('punct.clarificare.licitatie_id', licId)),
-      ])
-      const err = [rQ.error, rP.error].find(e => e && !tabelLipsa(e))   // doar 42P01 / PGRST205 = tabel neaplicat; o eroare de relație/coloană blochează
-      // tabelul neaplicat = fără secțiune (ok); orice altă eroare = NU exportăm un PDF care pare complet (B7)
-      if (err) { showToast('Export blocat: temeiurile nu s-au putut verifica (' + err.message + ')', 'err'); return }
-      const randuri = [...(rQ.data || []).map(t => ({ ...t, nr: t.clarificare?.nr })), ...(rP.data || []).map(t => ({ ...t, nr: t.punct?.clarificare?.nr }))]
-      // Fail-closed (Copilot r2, P1): un temei bifat „adresă” pe o întrebare exportată care NU poate ieși în formatul unic
-      // (decizie neverificată/modificată, doar referință fără citat, fără pagină/link) BLOCHEAZĂ exportul — nu dispare tăcut din PDF.
-      for (const t of randuri) {
-        if (!nrExport.has(t.nr)) continue
-        const motiv = motivNeexportabil(t)
-        if (motiv) { showToast(`Export blocat: temeiul bifat „adresă” la întrebarea ${t.nr} nu poate ieși în adresă (${motiv}) — debifează-l sau corectează-l.`, 'err'); return }
-        practica.push({ nr: t.nr, ...formatCitare(t.decizie, { loc: t.citat_loc, text: t.citat_text }) })
-      }
-      practica.sort((a, b) => a.nr - b.nr)
-    }
+    // Pasul B: practica CNSC invocată — DOAR temeiurile confirmate și bifate „include în adresă”, cu pagină și link (formatul unic §4), din răspunsul
+    // serverului. Fail-closed (Copilot r2 P1, Jakarinos r3): un temei bifat care NU poate ieși în formatul unic (decizie neverificată / modificată,
+    // doar referință, fără pagină / link, tipar sau cerință bifată prin API) BLOCHEAZĂ exportul — nu dispare tăcut din PDF.
+    const pr = practicaDinExport(deTrimis, ex.temeiuri)
+    if (!pr.ok) { showToast(pr.mesaj, 'err'); return }
+    const practica = pr.practica
     setBusy('PDF...')
     try {
       // HTML pe antet → html2canvas → A4 (fontul standard jsPDF nu are diacritice)
