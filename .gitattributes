@@ -21,3 +21,7 @@ supabase/migrations/20270115b_izometrie_ndt_citiri.sql text eol=lf
 supabase/revenire/20270115b_izometrie_ndt_citiri_ROLLBACK.sql text eol=lf
 supabase/tests/20270115b_* text eol=lf
 scripts/pglite/test_izometrie_ndt_citiri_local.mjs text eol=lf
+supabase/migrations/20270116a_izometrie_coordonate_clase_subcontr.sql text eol=lf
+supabase/revenire/20270116a_izometrie_coordonate_clase_subcontr_ROLLBACK.sql text eol=lf
+supabase/tests/20270116a_* text eol=lf
+scripts/pglite/test_izometrie_coordonate_clase_local.mjs text eol=lf

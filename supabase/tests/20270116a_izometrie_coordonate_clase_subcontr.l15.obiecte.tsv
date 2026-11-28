@@ -1,0 +1,200 @@
+# 20270116a: obiectele din manifestul L15 v2 (familie TAB eticheta TAB operatie), fara amprente; PG17 (constrangerile NOT NULL ale PG18 scoase)
+coloana	coloana public.sud_clase_interval.anulat	creat
+coloana	coloana public.sud_clase_interval.clasa	creat
+coloana	coloana public.sud_clase_interval.id	creat
+coloana	coloana public.sud_clase_interval.km_de	creat
+coloana	coloana public.sud_clase_interval.km_pana	creat
+coloana	coloana public.sud_clase_interval.ordine	creat
+coloana	coloana public.sud_clase_interval.proiect_id	creat
+coloana	coloana public.sud_clase_interval.sursa_id	creat
+coloana	coloana public.sud_clase_interval.tronson_id	creat
+coloana	coloana public.sud_clase_surse.anulat_de	creat
+coloana	coloana public.sud_clase_surse.anulat_la	creat
+coloana	coloana public.sud_clase_surse.anulat_motiv	creat
+coloana	coloana public.sud_clase_surse.citire	creat
+coloana	coloana public.sud_clase_surse.confirmat_de	creat
+coloana	coloana public.sud_clase_surse.confirmat_la	creat
+coloana	coloana public.sud_clase_surse.fisier_nume	creat
+coloana	coloana public.sud_clase_surse.fisier_path	creat
+coloana	coloana public.sud_clase_surse.fisier_sha256	creat
+coloana	coloana public.sud_clase_surse.id	creat
+coloana	coloana public.sud_clase_surse.incarcat_de	creat
+coloana	coloana public.sud_clase_surse.incarcat_la	creat
+coloana	coloana public.sud_clase_surse.proiect_id	creat
+coloana	coloana public.sud_clase_surse.stare	creat
+coloana	coloana public.sud_clase_surse.tronson_id	creat
+coloana	coloana public.sud_clase_surse.versiune	creat
+coloana	coloana public.sud_coordonate.cheie	creat
+coloana	coloana public.sud_coordonate.cod	creat
+coloana	coloana public.sud_coordonate.cod_corectat	creat
+coloana	coloana public.sud_coordonate.cod_raw	creat
+coloana	coloana public.sud_coordonate.id	creat
+coloana	coloana public.sud_coordonate.incarcare_id	creat
+coloana	coloana public.sud_coordonate.inlocuit_de	creat
+coloana	coloana public.sud_coordonate.inlocuit_la	creat
+coloana	coloana public.sud_coordonate.linie	creat
+coloana	coloana public.sud_coordonate.proiect_id	creat
+coloana	coloana public.sud_coordonate.stare	creat
+coloana	coloana public.sud_coordonate.tronson_id	creat
+coloana	coloana public.sud_coordonate.x	creat
+coloana	coloana public.sud_coordonate.y	creat
+coloana	coloana public.sud_coordonate.z	creat
+coloana	coloana public.sud_coordonate_incarcari.anulat_de	creat
+coloana	coloana public.sud_coordonate_incarcari.anulat_la	creat
+coloana	coloana public.sud_coordonate_incarcari.anulat_motiv	creat
+coloana	coloana public.sud_coordonate_incarcari.confirmat_de	creat
+coloana	coloana public.sud_coordonate_incarcari.confirmat_la	creat
+coloana	coloana public.sud_coordonate_incarcari.fisier_nume	creat
+coloana	coloana public.sud_coordonate_incarcari.fisier_path	creat
+coloana	coloana public.sud_coordonate_incarcari.fisier_sha256	creat
+coloana	coloana public.sud_coordonate_incarcari.id	creat
+coloana	coloana public.sud_coordonate_incarcari.incarcat_de	creat
+coloana	coloana public.sud_coordonate_incarcari.incarcat_la	creat
+coloana	coloana public.sud_coordonate_incarcari.nr_randuri	creat
+coloana	coloana public.sud_coordonate_incarcari.proiect_id	creat
+coloana	coloana public.sud_coordonate_incarcari.rezumat	creat
+coloana	coloana public.sud_coordonate_incarcari.stare	creat
+coloana	coloana public.sud_coordonate_incarcari.tronson_id	creat
+coloana	coloana public.sud_coordonate_incarcari.versiune	creat
+coloana	coloana public.sud_pachete_subcontractor.activ	creat
+coloana	coloana public.sud_pachete_subcontractor.cod_document	creat
+coloana	coloana public.sud_pachete_subcontractor.cod_document_cheie	creat
+coloana	coloana public.sud_pachete_subcontractor.creat_de	creat
+coloana	coloana public.sud_pachete_subcontractor.creat_la	creat
+coloana	coloana public.sud_pachete_subcontractor.excel_lipsa_motiv	creat
+coloana	coloana public.sud_pachete_subcontractor.excel_nume	creat
+coloana	coloana public.sud_pachete_subcontractor.excel_path	creat
+coloana	coloana public.sud_pachete_subcontractor.excel_sha256	creat
+coloana	coloana public.sud_pachete_subcontractor.id	creat
+coloana	coloana public.sud_pachete_subcontractor.pachet_id	creat
+coloana	coloana public.sud_pachete_subcontractor.pdf_nume	creat
+coloana	coloana public.sud_pachete_subcontractor.pdf_path	creat
+coloana	coloana public.sud_pachete_subcontractor.pdf_sha256	creat
+coloana	coloana public.sud_pachete_subcontractor.proiect_id	creat
+coloana	coloana public.sud_pachete_subcontractor.retras_de	creat
+coloana	coloana public.sud_pachete_subcontractor.retras_la	creat
+coloana	coloana public.sud_pachete_subcontractor.retras_motiv	creat
+coloana	coloana public.sud_pachete_subcontractor.revizie	creat
+coloana	coloana public.sud_pachete_subcontractor.subcontractor	creat
+coloana	coloana public.sud_pachete_subcontractor.sursa_randuri	creat
+coloana	coloana public.sud_pachete_subcontractor.tronson_id	creat
+coloana	coloana public.sud_pachete_subcontractor.versiune	creat
+constrangere	constrangere tabel public.sud_clase_interval.sud_clase_interval_clasa_check	creat
+constrangere	constrangere tabel public.sud_clase_interval.sud_clase_interval_fara_suprapuneri	creat
+constrangere	constrangere tabel public.sud_clase_interval.sud_clase_interval_km_ck	creat
+constrangere	constrangere tabel public.sud_clase_interval.sud_clase_interval_pkey	creat
+constrangere	constrangere tabel public.sud_clase_interval.sud_clase_interval_sursa_id_fkey	creat
+constrangere	constrangere tabel public.sud_clase_interval.sud_clase_interval_sursa_id_ordine_key	creat
+constrangere	constrangere tabel public.sud_clase_surse.sud_clase_surse_citire_check	creat
+constrangere	constrangere tabel public.sud_clase_surse.sud_clase_surse_fisier_nume_check	creat
+constrangere	constrangere tabel public.sud_clase_surse.sud_clase_surse_fisier_path_check	creat
+constrangere	constrangere tabel public.sud_clase_surse.sud_clase_surse_fisier_sha256_check	creat
+constrangere	constrangere tabel public.sud_clase_surse.sud_clase_surse_pkey	creat
+constrangere	constrangere tabel public.sud_clase_surse.sud_clase_surse_stare_check	creat
+constrangere	constrangere tabel public.sud_clase_surse.sud_clase_surse_stare_ck	creat
+constrangere	constrangere tabel public.sud_coordonate.sud_coordonate_cheie_check	creat
+constrangere	constrangere tabel public.sud_coordonate.sud_coordonate_cod_check	creat
+constrangere	constrangere tabel public.sud_coordonate.sud_coordonate_cod_raw_check	creat
+constrangere	constrangere tabel public.sud_coordonate.sud_coordonate_incarcare_id_cheie_key	creat
+constrangere	constrangere tabel public.sud_coordonate.sud_coordonate_incarcare_id_fkey	creat
+constrangere	constrangere tabel public.sud_coordonate.sud_coordonate_incarcare_id_linie_key	creat
+constrangere	constrangere tabel public.sud_coordonate.sud_coordonate_inlocuit_ck	creat
+constrangere	constrangere tabel public.sud_coordonate.sud_coordonate_inlocuit_de_fkey	creat
+constrangere	constrangere tabel public.sud_coordonate.sud_coordonate_linie_check	creat
+constrangere	constrangere tabel public.sud_coordonate.sud_coordonate_pkey	creat
+constrangere	constrangere tabel public.sud_coordonate.sud_coordonate_stare_check	creat
+constrangere	constrangere tabel public.sud_coordonate.sud_coordonate_valori_ck	creat
+constrangere	constrangere tabel public.sud_coordonate_incarcari.sud_coordonate_incarcari_fisier_nume_check	creat
+constrangere	constrangere tabel public.sud_coordonate_incarcari.sud_coordonate_incarcari_fisier_path_check	creat
+constrangere	constrangere tabel public.sud_coordonate_incarcari.sud_coordonate_incarcari_fisier_sha256_check	creat
+constrangere	constrangere tabel public.sud_coordonate_incarcari.sud_coordonate_incarcari_nr_randuri_check	creat
+constrangere	constrangere tabel public.sud_coordonate_incarcari.sud_coordonate_incarcari_pkey	creat
+constrangere	constrangere tabel public.sud_coordonate_incarcari.sud_coordonate_incarcari_rezumat_check	creat
+constrangere	constrangere tabel public.sud_coordonate_incarcari.sud_coordonate_incarcari_stare_check	creat
+constrangere	constrangere tabel public.sud_coordonate_incarcari.sud_coordonate_incarcari_stare_ck	creat
+constrangere	constrangere tabel public.sud_pachete_subcontractor.sud_pachete_subcontractor_cod_document_check	creat
+constrangere	constrangere tabel public.sud_pachete_subcontractor.sud_pachete_subcontractor_excel_nume_check	creat
+constrangere	constrangere tabel public.sud_pachete_subcontractor.sud_pachete_subcontractor_excel_path_check	creat
+constrangere	constrangere tabel public.sud_pachete_subcontractor.sud_pachete_subcontractor_excel_sha256_check	creat
+constrangere	constrangere tabel public.sud_pachete_subcontractor.sud_pachete_subcontractor_pdf_nume_check	creat
+constrangere	constrangere tabel public.sud_pachete_subcontractor.sud_pachete_subcontractor_pdf_path_check	creat
+constrangere	constrangere tabel public.sud_pachete_subcontractor.sud_pachete_subcontractor_pdf_sha256_check	creat
+constrangere	constrangere tabel public.sud_pachete_subcontractor.sud_pachete_subcontractor_pkey	creat
+constrangere	constrangere tabel public.sud_pachete_subcontractor.sud_pachete_subcontractor_retras_ck	creat
+constrangere	constrangere tabel public.sud_pachete_subcontractor.sud_pachete_subcontractor_revizie_check	creat
+constrangere	constrangere tabel public.sud_pachete_subcontractor.sud_pachete_subcontractor_subcontractor_check	creat
+constrangere	constrangere tabel public.sud_pachete_subcontractor.sud_pachete_subcontractor_sursa_ck	creat
+constrangere	constrangere tabel public.sud_pachete_subcontractor.sud_pachete_subcontractor_sursa_randuri_check	creat
+functie	functie public.fn_sud_clasa_interval_valid(jsonb)	creat
+functie	functie public.fn_sud_clase_anuleaza(bigint,integer,text)	creat
+functie	functie public.fn_sud_clase_confirma(bigint,integer,jsonb)	creat
+functie	functie public.fn_sud_clase_incarca(bigint,text,text,text,jsonb)	creat
+functie	functie public.fn_sud_coord_anuleaza(bigint,integer,text)	creat
+functie	functie public.fn_sud_coord_confirma(bigint,integer,text[])	creat
+functie	functie public.fn_sud_coord_incarca(bigint,text,text,text,jsonb,jsonb)	creat
+functie	functie public.fn_sud_coord_rand_valid(jsonb)	creat
+functie	functie public.fn_sud_doc_fisier_ok(bigint,bigint,text)	creat
+functie	functie public.fn_sud_export_inregistreaza(bigint,text,jsonb,bigint,text)	schimbat
+functie	functie public.fn_sud_subcontr_marcheaza(bigint,text,integer,text,text,text,text,text,text,text,text)	creat
+functie	functie public.fn_sud_subcontr_retrage(bigint,integer,text)	creat
+politica	politica public.sud_clase_interval.sud_clase_interval_citire	creat
+politica	politica public.sud_clase_surse.sud_clase_surse_citire	creat
+politica	politica public.sud_coordonate.sud_coordonate_citire	creat
+politica	politica public.sud_coordonate_incarcari.sud_coordonate_incarcari_citire	creat
+politica	politica public.sud_pachete_subcontractor.sud_pachete_subcontractor_citire	creat
+politica	politica storage.objects.sud_doc_citire	creat
+politica	politica storage.objects.sud_doc_incarcare	creat
+politica	politica storage.objects.sud_doc_r_anon	creat
+politica	politica storage.objects.sud_doc_r_del	creat
+politica	politica storage.objects.sud_doc_r_ins	creat
+politica	politica storage.objects.sud_doc_r_sel	creat
+politica	politica storage.objects.sud_doc_r_upd	creat
+politica	politica storage.objects.sud_doc_sterge_orfan	creat
+relatie	relatie public.sud_clase_interval	creat
+relatie	relatie public.sud_clase_interval_fara_suprapuneri	creat
+relatie	relatie public.sud_clase_interval_id_seq	creat
+relatie	relatie public.sud_clase_interval_pkey	creat
+relatie	relatie public.sud_clase_interval_sursa_id_ordine_key	creat
+relatie	relatie public.sud_clase_surse	creat
+relatie	relatie public.sud_clase_surse_fisier_uq	creat
+relatie	relatie public.sud_clase_surse_id_seq	creat
+relatie	relatie public.sud_clase_surse_pkey	creat
+relatie	relatie public.sud_clase_surse_tronson_uq	creat
+relatie	relatie public.sud_coordonate	creat
+relatie	relatie public.sud_coordonate_activ_uq	creat
+relatie	relatie public.sud_coordonate_id_seq	creat
+relatie	relatie public.sud_coordonate_incarcare_id_cheie_key	creat
+relatie	relatie public.sud_coordonate_incarcare_id_linie_key	creat
+relatie	relatie public.sud_coordonate_incarcari	creat
+relatie	relatie public.sud_coordonate_incarcari_ciorna_uq	creat
+relatie	relatie public.sud_coordonate_incarcari_fisier_uq	creat
+relatie	relatie public.sud_coordonate_incarcari_id_seq	creat
+relatie	relatie public.sud_coordonate_incarcari_pkey	creat
+relatie	relatie public.sud_coordonate_pkey	creat
+relatie	relatie public.sud_coordonate_tronson_ix	creat
+relatie	relatie public.sud_pachete_subcontractor	creat
+relatie	relatie public.sud_pachete_subcontractor_id_seq	creat
+relatie	relatie public.sud_pachete_subcontractor_pkey	creat
+relatie	relatie public.sud_pachete_subcontractor_uq	creat
+tip	tip public.sud_clase_interval	creat
+tip	tip public.sud_clase_interval[]	creat
+tip	tip public.sud_clase_surse	creat
+tip	tip public.sud_clase_surse[]	creat
+tip	tip public.sud_coordonate	creat
+tip	tip public.sud_coordonate[]	creat
+tip	tip public.sud_coordonate_incarcari	creat
+tip	tip public.sud_coordonate_incarcari[]	creat
+tip	tip public.sud_pachete_subcontractor	creat
+tip	tip public.sud_pachete_subcontractor[]	creat
+trigger	trigger public.sud_clase_interval intern sud_clase_interval_sursa_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.sud_clase_interval intern sud_clase_interval_sursa_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.sud_clase_surse intern sud_clase_interval_sursa_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.sud_clase_surse intern sud_clase_interval_sursa_id_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.sud_coordonate intern sud_coordonate_incarcare_id_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.sud_coordonate intern sud_coordonate_incarcare_id_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.sud_coordonate intern sud_coordonate_inlocuit_de_fkey "RI_FKey_check_ins"() 5	creat
+trigger	trigger public.sud_coordonate intern sud_coordonate_inlocuit_de_fkey "RI_FKey_check_upd"() 17	creat
+trigger	trigger public.sud_coordonate intern sud_coordonate_inlocuit_de_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.sud_coordonate intern sud_coordonate_inlocuit_de_fkey "RI_FKey_noaction_upd"() 17	creat
+trigger	trigger public.sud_coordonate_incarcari intern sud_coordonate_incarcare_id_fkey "RI_FKey_noaction_del"() 9	creat
+trigger	trigger public.sud_coordonate_incarcari intern sud_coordonate_incarcare_id_fkey "RI_FKey_noaction_upd"() 17	creat
