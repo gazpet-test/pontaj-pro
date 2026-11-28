@@ -503,7 +503,7 @@ describe('runnerul — runda 18 (22.11.2026): plafonul EXTINS, doar cu --plafon-
     // + 20270114a (buletine NDT, decizia proprietarului 27.11.2026: proba pe producție a depășit 5000 ms) și 20270115b (citirile NDT,
     //   aceeași amprentă globală; PR izometrie/ndt-citiri) — 20270114a lipsea din listă pe main (testul era roșu)
     for (const m of ['20270105a_executie_rest_decontat', '20270105b_executie_proiect_configurare', '20270106a_executie_semnale', '20261224a_executie_revendicari',
-      '20270108a_executie_dcc_registru', '20270114a_izometrie_buletine_ndt', '20270115b_izometrie_ndt_citiri']) {
+      '20270108a_executie_dcc_registru', '20270114a_izometrie_buletine_ndt', '20270115b_izometrie_ndt_citiri']) {   // + 20270114a (buletine NDT, aplicată 27.11 cu plafonul extins)
       const t = citeste(`supabase/migrations/${m}.sql`)
       expect(t.split('\n')[0], m).toContain('--plafon-tranzactie-ms 15000 --plafon-extins --amprenta-globala')
       expect((t.match(/'15000\/session'/g) || []).length, m).toBe(1)

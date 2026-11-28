@@ -5,11 +5,14 @@
 // autorității și REZOLUȚIA, separată de „am primit răspuns" (deschis / rezolvat / parțial /
 // nerezolvat), cu documentul care a rezolvat efectiv problema. Scenariul auditului: autoritatea
 // răspunde la 2 din 3 puncte sau trimite ulterior o planșă — acum se vede exact ce rămâne deschis.
-// Tabel: ofertare_clarificari_puncte (RLS: citire autentificați, scriere cu modulul Ofertare).
+// Tabel: ofertare_clarificari_puncte. RLS (20270115a, decizia Răzvan 27.11.2026, după review-ul #1204): citirea ȘI scrierea punctelor doar pentru
+// cine are modulul Ofertare și e owner / responsabil al licitației clarificării (fn_ofertare_clar_puncte_poarta → fn_ofertare_poate_cheltui).
+// Serverul decide; UI-ul doar nu arată lista goală ca „fără puncte” celui care evident nu trece (poateCheltuiUI, din datele licitației din ecran).
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect } from 'react'
 import { supabase } from './lib/supabase.js'
 import TemeiuriClarificare from './OfertareTemeiuri.jsx'
+import { poateCheltuiUI } from './ofertareResponsabili.js'
 
 const G = { bg:'#0D1117', surface:'#161B22', border2:'#21262D', text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
   green:'#3FB950', orange:'#F0883E', yellow:'#E3B341', red:'#F85149', blue:'#58A6FF' }
@@ -26,16 +29,23 @@ export function rezumatPuncte(puncte = []) {
   return { n, rezolvate: rez, deschise, nerezolvate: nerez, inchisa: n > 0 && deschise === 0 }
 }
 
+export const MESAJ_PUNCTE_POARTA = 'Punctele clarificării le văd și le completează doar ownerul și responsabilii licitației (numiți de owner / un admin Ofertare).'
+// 42501 = politica RLS a refuzat scrierea (poarta de pe server); mesajul brut al Postgres nu spune omului nimic
+const mesajScriere = (error) => (error?.code === '42501' || /row-level security/i.test(error?.message || '')) ? MESAJ_PUNCTE_POARTA : error?.message
+
 export default function PuncteClarificare({ clarificareId, documente = [], showToast, licitatie = null, profile = null }) {
   const [puncte, setPuncte] = useState([])
   const [nou, setNou] = useState('')
   const [busy, setBusy] = useState(false)
+  // cine evident nu trece poarta nu primește lista (goală prin RLS) drept „fără puncte — răspunsul nu spune ce s-a rezolvat”, ci motivul
+  const poate = poateCheltuiUI(licitatie, profile)
   const load = async () => {
+    if (!poate) { setPuncte([]); return }
     const { data, error } = await supabase.from('ofertare_clarificari_puncte').select('*').eq('clarificare_id', clarificareId).order('nr')
     if (error) { showToast?.('Punctele nu s-au putut citi: ' + error.message, 'err'); return }
     setPuncte(data || [])
   }
-  useEffect(() => { load() }, [clarificareId])
+  useEffect(() => { load() }, [clarificareId, poate])
 
   const adauga = async () => {
     const t = nou.trim(); if (!t) return
@@ -43,17 +53,24 @@ export default function PuncteClarificare({ clarificareId, documente = [], showT
     const nr = (puncte.reduce((m, p) => Math.max(m, p.nr), 0) || 0) + 1
     const { error } = await supabase.from('ofertare_clarificari_puncte').insert({ clarificare_id: clarificareId, nr, text: t })
     setBusy(false)
-    if (error) { showToast?.('Punctul nu s-a salvat: ' + error.message, 'err'); return }
+    if (error) { showToast?.('Punctul nu s-a salvat: ' + mesajScriere(error), 'err'); return }
     setNou(''); load()
   }
   const salveaza = async (p, patch) => {
     setBusy(true)
-    const { error } = await supabase.from('ofertare_clarificari_puncte').update(patch).eq('id', p.id)
+    // CAS pe id: 0 rânduri (RLS a ascuns rândul între timp) nu e succes tăcut
+    const { data, error } = await supabase.from('ofertare_clarificari_puncte').update(patch).eq('id', p.id).select('id')
     setBusy(false)
-    if (error) { showToast?.('Nu s-a salvat: ' + error.message, 'err'); return }
+    if (error) { showToast?.('Nu s-a salvat: ' + mesajScriere(error), 'err'); return }
+    if (!data?.length) { showToast?.('Nu s-a salvat: punctul nu mai e accesibil (' + MESAJ_PUNCTE_POARTA + ')', 'err'); load(); return }
     load()
   }
 
+  if (!poate) return (
+    <div style={{ marginTop:6, padding:'6px 8px', borderRadius:6, border:`1px dashed ${G.border2}`, fontSize:11, color:G.muted }} title={MESAJ_PUNCTE_POARTA}>
+      Puncte · <span style={{ color:G.dim }}>{MESAJ_PUNCTE_POARTA}</span>
+    </div>
+  )
   const r = rezumatPuncte(puncte)
   return (
     <div style={{ marginTop:6, padding:'6px 8px', borderRadius:6, border:`1px dashed ${G.border2}` }}>
