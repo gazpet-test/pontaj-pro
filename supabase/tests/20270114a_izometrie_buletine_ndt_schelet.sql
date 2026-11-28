@@ -1,0 +1,228 @@
+-- Schelet LOCAL (PGlite) pentru 20270114a (Izometrie: buletine NDT). NU se rulează pe nicio bază reală.
+-- Reproduce DOAR ce citește / atinge migrarea: rolurile Supabase (service_role BYPASSRLS), privilegiile implicite periculoase (ALL pe obiecte noi),
+-- auth.uid() din cele două surse JWT, schema storage (buckets + objects cu owner / owner_id, RLS activ, garda protect_delete, drepturile clienților ca pe Supabase, politicile
+-- restrictive 20261209a pe bucket-urile Execuției + o politică permisivă a altui bucket), tabelele citite cu TIPURILE din producție (citite de chat
+-- pe 27.11.2026): executie_proiecte(id bigint, mp_employee_id integer), executie_tronsoane(id bigint, proiect_id bigint, cod text),
+-- executie_pachete_lansare(id bigint, proiect_id bigint, tronson_id bigint), profiles(id uuid, is_owner boolean, employee_id bigint — verificat pe producție și clona 176),
+-- user_module_access, employees, executie_acces_proiect (20261209a).
+-- Funcțiile de drept: blocul PARITATE_20261209A = copie VERBATIM din supabase/tests/20270105a_executie_rest_decontat_schelet.sql (proba verifică
+-- textual și md5 bd4320f76e9f36f492c7186c0a982155 pe fn_executie_proiect_permis); fn_executie_pachete_acces = corpul EXACT din
+-- 20261029a_executie_pachete_rls_strans.sql (= cel citit de chat pe producție 27.11.2026; proba verifică paritatea). Porțile Izometrie: stub-urile
+-- din scheletul 20270105a (verzi, cu ștampile), pentru că migrarea face ritualul din docs/izometrie/PORTI_REGULA.md.
+-- Proprietarul tabelelor storage aici e postgres (pe Supabase: supabase_storage_admin) — limită declarată în raport.
+DO $r$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN CREATE ROLE anon NOLOGIN NOINHERIT; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN CREATE ROLE authenticated NOLOGIN NOINHERIT; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN CREATE ROLE service_role NOLOGIN NOINHERIT BYPASSRLS; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticator') THEN CREATE ROLE authenticator NOLOGIN NOINHERIT; END IF;
+END $r$;
+CREATE SCHEMA auth;
+CREATE SCHEMA storage;
+GRANT USAGE ON SCHEMA public, auth, storage TO anon, authenticated, service_role;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO anon, authenticated, service_role;
+CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $function$
+  select coalesce(nullif(current_setting('request.jwt.claim.sub', true), ''), (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub'))::uuid
+$function$;
+GRANT EXECUTE ON FUNCTION auth.uid() TO anon, authenticated, service_role;
+
+-- ── storage (forma Supabase: coloanele folosite + owner; RLS activ; clienții au ALL, politicile decid) ──
+CREATE TABLE storage.buckets (id text PRIMARY KEY, name text NOT NULL, owner uuid, created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now(),
+  public boolean DEFAULT false, avif_autodetection boolean DEFAULT false, file_size_limit bigint, allowed_mime_types text[], owner_id text);
+CREATE UNIQUE INDEX bname ON storage.buckets (name);
+CREATE TABLE storage.objects (id uuid DEFAULT gen_random_uuid() PRIMARY KEY, bucket_id text REFERENCES storage.buckets(id), name text, owner uuid,
+  created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now(), last_accessed_at timestamptz DEFAULT now(), metadata jsonb,
+  path_tokens text[] GENERATED ALWAYS AS (string_to_array(name, '/')) STORED, version text, owner_id text, user_metadata jsonb);
+CREATE UNIQUE INDEX bucketid_objname ON storage.objects (bucket_id, name);
+ALTER TABLE storage.buckets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
+GRANT ALL ON storage.buckets, storage.objects TO anon, authenticated, service_role;
+-- garda Supabase de pe producție (protect_buckets_delete / protect_objects_delete, forma din supabase/tests/izometrie_aviz_schelet.sql):
+-- DELETE direct pe storage.* cere storage.allow_delete_query = true (Storage API o pune local la remove(), apoi RLS-ul decide)
+CREATE FUNCTION storage.protect_delete() RETURNS trigger LANGUAGE plpgsql AS $f$
+BEGIN
+ IF COALESCE(current_setting('storage.allow_delete_query', true), 'false') != 'true' THEN
+  RAISE EXCEPTION 'Direct deletion from storage tables is not allowed. Use the Storage API instead.' USING ERRCODE = '42501';
+ END IF;
+ RETURN OLD;
+END $f$;
+CREATE TRIGGER protect_buckets_delete BEFORE DELETE ON storage.buckets FOR EACH STATEMENT EXECUTE FUNCTION storage.protect_delete();
+CREATE TRIGGER protect_objects_delete BEFORE DELETE ON storage.objects FOR EACH STATEMENT EXECUTE FUNCTION storage.protect_delete();
+
+-- ── tabelele citite (tipurile din producție) ──
+CREATE TABLE public.employees (id integer GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, name text NOT NULL);
+CREATE TABLE public.profiles (id uuid PRIMARY KEY, name text, is_owner boolean DEFAULT false, employee_id bigint REFERENCES public.employees(id));
+CREATE TABLE public.user_module_access (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, profile_id uuid NOT NULL REFERENCES public.profiles(id),
+  module text NOT NULL, access_level text NOT NULL, UNIQUE (profile_id, module));
+CREATE TABLE public.executie_proiecte (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, cod_intern text, nume text, activ boolean DEFAULT true,
+  mp_employee_id integer REFERENCES public.employees(id));
+CREATE TABLE public.executie_tronsoane (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, proiect_id bigint NOT NULL REFERENCES public.executie_proiecte(id),
+  cod text NOT NULL);
+CREATE TABLE public.executie_pachete_lansare (id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, proiect_id bigint REFERENCES public.executie_proiecte(id),
+  tronson_id bigint REFERENCES public.executie_tronsoane(id), cod text);
+
+-- 20261209a (acces pe PROIECT): tabelul + funcțiile de drept (copie VERBATIM din scheletul 20270105a)
+CREATE TABLE public.executie_acces_proiect (
+  profile_id uuid NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  proiect_id bigint NOT NULL REFERENCES public.executie_proiecte(id) ON DELETE RESTRICT,
+  nivel text NOT NULL DEFAULT 'editor',
+  acordat_de uuid,
+  acordat_la timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT executie_acces_proiect_pk PRIMARY KEY (profile_id, proiect_id),
+  CONSTRAINT executie_acces_proiect_nivel_ck CHECK (nivel IN ('viewer', 'editor'))
+);
+-- PARITATE_20261209A_INCEPUT
+CREATE FUNCTION public.fn_executie_acces_nerestrans_cont(p_profile uuid) RETURNS boolean
+LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$
+  SELECT p_profile IS NOT NULL
+    AND (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = p_profile AND p.is_owner IS TRUE)
+         OR NOT EXISTS (SELECT 1 FROM public.executie_acces_proiect a WHERE a.profile_id = p_profile))
+$f$;
+CREATE FUNCTION public.fn_executie_acces_lista_cont(p_profile uuid, p_scriere boolean) RETURNS bigint[]
+LANGUAGE sql STABLE SET search_path = public, pg_temp AS $f$
+  SELECT coalesce(array_agg(a.proiect_id ORDER BY a.proiect_id), '{}'::bigint[])
+    FROM public.executie_acces_proiect a
+   WHERE p_profile IS NOT NULL AND p_scriere IS NOT NULL AND a.profile_id = p_profile
+     AND (p_scriere IS FALSE OR a.nivel = 'editor')
+$f$;
+CREATE FUNCTION public.fn_executie_acces_nerestrans() RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT coalesce(public.fn_executie_acces_nerestrans_cont(auth.uid()), false)
+$f$;
+CREATE FUNCTION public.fn_executie_acces_lista(p_scriere boolean) RETURNS bigint[]
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT public.fn_executie_acces_lista_cont(auth.uid(), p_scriere)
+$f$;
+CREATE FUNCTION public.fn_executie_proiect_permis(p_proiect bigint, p_scriere boolean DEFAULT false) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT p_scriere IS NOT NULL
+    AND (public.fn_executie_acces_nerestrans()
+         OR (p_proiect IS NOT NULL AND p_proiect = ANY (public.fn_executie_acces_lista(p_scriere))))
+$f$;
+-- PARITATE_20261209A_SFARSIT
+REVOKE ALL ON FUNCTION public.fn_executie_acces_nerestrans() FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.fn_executie_acces_lista(boolean) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.fn_executie_proiect_permis(bigint, boolean) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.fn_executie_acces_nerestrans_cont(uuid) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.fn_executie_acces_lista_cont(uuid, boolean) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_executie_acces_nerestrans() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.fn_executie_proiect_permis(bigint, boolean) TO authenticated;
+ALTER TABLE public.executie_acces_proiect ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.executie_acces_proiect FROM PUBLIC, anon, authenticated, service_role;
+GRANT SELECT ON public.executie_acces_proiect TO authenticated, service_role;
+
+-- 20261029a: accesul la pachetele Execuției (citire 'executie' / 'ctc', scriere 'executie'); PARITATE_20261029A = corpul exact din migrare
+-- PARITATE_20261029A_INCEPUT
+CREATE OR REPLACE FUNCTION public.fn_executie_pachete_acces(p_scriere boolean)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+  SELECT auth.uid() IS NOT NULL AND (
+    EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.is_owner = true)
+    OR EXISTS (SELECT 1 FROM public.user_module_access u
+               WHERE u.profile_id = auth.uid()
+                 AND u.module = ANY (CASE WHEN p_scriere THEN ARRAY['executie'] ELSE ARRAY['executie', 'ctc'] END))
+  )
+$$;
+-- PARITATE_20261029A_SFARSIT
+REVOKE EXECUTE ON FUNCTION public.fn_executie_pachete_acces(boolean) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.fn_executie_pachete_acces(boolean) TO authenticated, service_role;
+
+-- RLS-ul tabelelor citite: o politică permisivă de citire (forma celor de azi) + politica RESTRICTIVĂ pe proiect din 20261209a
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.user_module_access ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.employees ENABLE ROW LEVEL SECURITY;
+CREATE POLICY profiles_autentificat ON public.profiles FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL);
+CREATE POLICY user_module_access_autentificat ON public.user_module_access FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL);
+CREATE POLICY employees_autentificat ON public.employees FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL);
+ALTER TABLE public.executie_proiecte ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.executie_tronsoane ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.executie_pachete_lansare ENABLE ROW LEVEL SECURITY;
+CREATE POLICY executie_proiecte_autentificat ON public.executie_proiecte FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL);
+CREATE POLICY executie_tronsoane_autentificat ON public.executie_tronsoane FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL);
+CREATE POLICY executie_pachete_lansare_select ON public.executie_pachete_lansare FOR SELECT TO authenticated USING ((SELECT public.fn_executie_pachete_acces(false)));
+CREATE POLICY executie_acces_citire ON public.executie_proiecte AS RESTRICTIVE FOR SELECT TO authenticated USING (public.fn_executie_proiect_permis(id, false));
+CREATE POLICY executie_acces_citire ON public.executie_tronsoane AS RESTRICTIVE FOR SELECT TO authenticated USING (public.fn_executie_proiect_permis(proiect_id, false));
+CREATE POLICY executie_acces_citire ON public.executie_pachete_lansare AS RESTRICTIVE FOR SELECT TO authenticated USING (public.fn_executie_proiect_permis(proiect_id, false));
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon;
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.profiles, public.user_module_access, public.employees, public.executie_proiecte, public.executie_tronsoane,
+  public.executie_pachete_lansare FROM authenticated;
+
+-- storage: bucket-urile Execuției cu politica restrictivă 20261209a (alt bucket trece neatins: prima condiție); un bucket existent cu politica lui
+CREATE FUNCTION public.fn_executie_acces_obiect_permis(p_bucket text, p_nume text, p_scriere boolean) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$ SELECT false $f$;
+REVOKE ALL ON FUNCTION public.fn_executie_acces_obiect_permis(text, text, boolean) FROM PUBLIC, anon, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_executie_acces_obiect_permis(text, text, boolean) TO authenticated;
+CREATE POLICY executie_acces_obiect_citire ON storage.objects AS RESTRICTIVE FOR SELECT TO authenticated
+  USING (bucket_id <> ALL (ARRAY['ai-documente-inbox', 'documente-proiect', 'executie-borderouri', 'executie-contracte', 'executie-pachete-pdf']::text[])
+         OR (SELECT public.fn_executie_acces_nerestrans()) OR public.fn_executie_acces_obiect_permis(bucket_id, name, false));
+CREATE POLICY executie_acces_obiect_adauga ON storage.objects AS RESTRICTIVE FOR INSERT TO authenticated
+  WITH CHECK (bucket_id <> ALL (ARRAY['ai-documente-inbox', 'documente-proiect', 'executie-borderouri', 'executie-contracte', 'executie-pachete-pdf']::text[])
+              OR (SELECT public.fn_executie_acces_nerestrans()) OR public.fn_executie_acces_obiect_permis(bucket_id, name, true));
+INSERT INTO storage.buckets (id, name, public) VALUES ('executie-pachete-pdf', 'executie-pachete-pdf', false);
+CREATE POLICY pachete_pdf_citire ON storage.objects FOR SELECT TO authenticated
+  USING (bucket_id = 'executie-pachete-pdf' AND (SELECT public.fn_executie_pachete_acces(false)));
+CREATE POLICY pachete_pdf_incarcare ON storage.objects FOR INSERT TO authenticated
+  WITH CHECK (bucket_id = 'executie-pachete-pdf' AND (SELECT public.fn_executie_pachete_acces(true)));
+-- un obiect existent cu nume NENUMERIC (politicile noi nu trebuie să pice pe el la cast)
+INSERT INTO storage.objects (bucket_id, name, owner) VALUES ('executie-pachete-pdf', 'aprobare/abc-nenumeric.pdf', NULL);
+
+-- STUB-urile porților Izometrie = blocul din scheletul 20270105a (VERBATIM; forma celor reale: DEFINER, md5 pe catalog, ștampila în COMMENT;
+-- E4b = ACL / coloane / politici pe executie_proiecte / executie_tronsoane). Migrarea le cere verzi înainte, le reștampilează și le cere verzi după
+-- (docs/izometrie/PORTI_REGULA.md); proba înlocuiește fn_izo_porti_lipsa pentru „porți roșii”.
+-- PARITATE_PORTI_INCEPUT
+CREATE FUNCTION public.fn_izo_porti_definitii() RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT md5(coalesce((SELECT string_agg(p.polname, ',' ORDER BY p.polname) FROM pg_policy p WHERE p.polname LIKE 'izo\_%'), ''))
+$f$;
+CREATE FUNCTION public.fn_izo_porti_e3_definitii() RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT md5(coalesce((SELECT string_agg(c.relname, ',' ORDER BY c.relname) FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relname LIKE 'izo\_documente%'), ''))
+$f$;
+CREATE FUNCTION public.fn_izo_porti_e3b_definitii() RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT md5(coalesce((SELECT string_agg(c.relname, ',' ORDER BY c.relname) FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relname LIKE 'izo\_corectii%'), ''))
+$f$;
+CREATE FUNCTION public.fn_izo_porti_e4_definitii() RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT md5(coalesce((SELECT string_agg(pg_get_indexdef(i.indexrelid), ',' ORDER BY i.indexrelid::regclass::text) FROM pg_index i WHERE i.indrelid = 'public.profiles'::regclass), ''))
+$f$;
+CREATE FUNCTION public.fn_izo_porti_e4b_definitii() RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  SELECT md5(concat_ws('|',
+   (SELECT string_agg(format('%s:%s:%s:%s:%s:%s', p.oid::regprocedure, p.proowner, p.prosecdef, p.proconfig, p.proacl, md5(p.prosrc)), ',' ORDER BY p.oid::regprocedure::text)
+      FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_izo\_%'),
+   (SELECT string_agg(format('%s:%s:%s:%s:%s', c.relname, c.relowner, c.relrowsecurity, c.relacl, c.reloptions), ',' ORDER BY c.relname)
+      FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relname = ANY (ARRAY['executie_proiecte', 'executie_tronsoane', 'logistica_depozite']::text[])),
+   (SELECT string_agg(format('%s:%s:%s:%s:%s:%s', c.relname, a.attname, a.atttypid, a.attnotnull, a.attacl, pg_get_expr(d.adbin, d.adrelid)), ',' ORDER BY c.relname, a.attnum)
+      FROM pg_class c JOIN pg_attribute a ON a.attrelid = c.oid LEFT JOIN pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum
+     WHERE c.relnamespace = 'public'::regnamespace AND c.relname = ANY (ARRAY['executie_proiecte', 'executie_tronsoane', 'logistica_depozite']::text[]) AND a.attnum > 0 AND NOT a.attisdropped),
+   (SELECT string_agg(format('%s:%s:%s:%s:%s:%s:%s', c.relname, p.polname, p.polcmd, p.polpermissive, p.polroles, pg_get_expr(p.polqual, p.polrelid), pg_get_expr(p.polwithcheck, p.polrelid)), ',' ORDER BY c.relname, p.polname)
+      FROM pg_class c JOIN pg_policy p ON p.polrelid = c.oid WHERE c.relnamespace = 'public'::regnamespace AND c.relname = ANY (ARRAY['executie_proiecte', 'executie_tronsoane', 'logistica_depozite']::text[]))))
+$f$;
+CREATE FUNCTION public.fn_izo_porti_lipsa() RETURNS text[] LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v text[] := '{}'; r record;
+BEGIN
+  FOR r IN SELECT * FROM (VALUES ('fn_izo_porti_definitii', 'porti'), ('fn_izo_porti_e3_definitii', 'porti_e3'), ('fn_izo_porti_e3b_definitii', 'porti_e3b'),
+                                 ('fn_izo_porti_e4_definitii', 'porti_e4'), ('fn_izo_porti_e4b_definitii', 'porti_e4b')) x(f, p) LOOP
+    IF obj_description(to_regprocedure('public.' || r.f || '()'), 'pg_proc') IS DISTINCT FROM r.p || '=' || (SELECT CASE r.f
+         WHEN 'fn_izo_porti_definitii' THEN public.fn_izo_porti_definitii() WHEN 'fn_izo_porti_e3_definitii' THEN public.fn_izo_porti_e3_definitii()
+         WHEN 'fn_izo_porti_e3b_definitii' THEN public.fn_izo_porti_e3b_definitii() WHEN 'fn_izo_porti_e4_definitii' THEN public.fn_izo_porti_e4_definitii()
+         ELSE public.fn_izo_porti_e4b_definitii() END) THEN
+      v := array_append(v, r.f || ' definitii diferite');
+    END IF;
+  END LOOP;
+  RETURN v;
+END $f$;
+-- PARITATE_PORTI_SFARSIT
+REVOKE ALL ON FUNCTION public.fn_izo_porti_definitii(), public.fn_izo_porti_e3_definitii(), public.fn_izo_porti_e3b_definitii(), public.fn_izo_porti_e4_definitii(),
+  public.fn_izo_porti_e4b_definitii(), public.fn_izo_porti_lipsa() FROM PUBLIC, anon, authenticated, service_role;
+DO $stampile$
+BEGIN
+  EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_definitii() IS %L', 'porti=' || public.fn_izo_porti_definitii());
+  EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_e3_definitii() IS %L', 'porti_e3=' || public.fn_izo_porti_e3_definitii());
+  EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_e3b_definitii() IS %L', 'porti_e3b=' || public.fn_izo_porti_e3b_definitii());
+  EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_e4_definitii() IS %L', 'porti_e4=' || public.fn_izo_porti_e4_definitii());
+  EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_e4b_definitii() IS %L', 'porti_e4b=' || public.fn_izo_porti_e4b_definitii());
+END $stampile$;
