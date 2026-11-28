@@ -10,7 +10,11 @@
 // Idempotența (review PR #1217 r1 P1, L04 / L22): cererea poartă o cheie (UUID) generată de ecran pentru o intenție și refolosită la reluare.
 // Cheia se rezervă în BD ÎNAINTEA rezervării de plafon și a apelului plătit; aceeași cheie = aceeași cerere: citirea deja salvată se întoarce
 // fără al doilea apel AI și fără a doua rezervare, o cerere în lucru = 409. Fiecare ieșire de după rezervarea cheii o închide (esuat, cu
-// costul), iar citirea validă se salvează (gata). Răspuns pierdut / salvare neconfirmată = cererea rămâne în lucru (L05), nu se reia orbește.
+// costul), iar citirea validă se salvează (gata). Răspuns pierdut / salvare neconfirmată = cererea rămâne în lucru (L05), nu se reia orbește:
+// ecranul păstrează cheia și citirea primită (salvata: false) și reia DOAR salvarea, cu aceeași cheie (fn_sud_citire_salveaza e idempotentă),
+// fără al doilea apel AI și fără rezervare nouă de plafon (review PR #1222 r1 P1).
+// Ordinea livrării (review PR #1222 r1 P1): edge-ul acesta se publică ÎNAINTEA migrării 20270115b. Fără migrare, rezervarea cererii (primul
+// apel cu efect) dă „actualizare_in_curs” — nimic rezervat, niciun apel AI; ecranul vechi (fără cheie) primește „ecran_vechi”, tot fără cost.
 //
 // Identități: `caller` = clientul construit cu JWT-ul apelantului (citește buletinul sub RLS, verifică fn_sud_drept, rezervă și salvează
 // cererea de citire, descarcă fișierul sub RLS-ul Storage); `ledger` = service_role, folosit EXCLUSIV pentru ai_plafon_* (funcțiile de
@@ -73,6 +77,9 @@ export class EroareNdt extends EroareE3 {
 export const MESAJE: Record<string, string> = {
   metoda_invalida: 'Doar POST.',
   cerere_invalida: 'Cerere invalidă: { buletin_id, cerere: UUID, model?: "principal" | "alternativ" }.',
+  // review PR #1222 r1 P1 (ordinea livrării): ecranul vechi (fără cheia cererii) și baza fără migrarea 20270115b = refuz clar, nimic consumat
+  ecran_vechi: 'Pagina deschisă e o versiune veche a ERP-ului. Reîncarcă pagina (Ctrl+Shift+R), apoi pornește din nou citirea. Nimic consumat.',
+  actualizare_in_curs: 'Citirea cu AI e oprită cât se face actualizarea serverului. Nimic consumat; încearcă din nou peste câteva minute sau introdu rândurile manual.',
   cerere_indisponibila: 'Cererea de citire nu a putut fi înregistrată. Nimic consumat; reîncearcă.',
   citire_in_curs: 'O citire a acestui buletin e deja în lucru. Așteaptă câteva secunde și reîncarcă buletinul.',
   citire_necunoscuta: 'Citirea pornită anterior nu s-a încheiat (rezultat și cost necunoscute). Pornește o citire nouă doar dacă e nevoie.',
@@ -229,6 +236,9 @@ export function valideazaCerereNdt(b: unknown) {
   if (!obiect(b) || Object.keys(b).some(k => k !== 'buletin_id' && k !== 'model' && k !== 'cerere')) throw new EroareNdt('cerere_invalida', 400)
   if (typeof b.buletin_id !== 'number' || !Number.isSafeInteger(b.buletin_id) || b.buletin_id <= 0) throw new EroareNdt('cerere_invalida', 400)
   if (b.model !== undefined && b.model !== 'principal' && b.model !== 'alternativ') throw new EroareNdt('cerere_invalida', 400)
+  // Ecranul de dinainte de 20270115b trimite { buletin_id, model? } fără cheie: refuz explicit, înaintea identității și a oricărui cost
+  // (ordinea livrării: edge-ul nou se publică ÎNTÂI și închide calea veche; taburile vechi primesc „reîncarcă pagina”).
+  if (b.cerere === undefined) throw new EroareNdt('ecran_vechi', 409)
   if (typeof b.cerere !== 'string' || !CERERE_RE.test(b.cerere.toLowerCase())) throw new EroareNdt('cerere_invalida', 400)
   return { buletin_id: b.buletin_id, model_tip: (b.model ?? 'principal') as 'principal' | 'alternativ', cerere: b.cerere.toLowerCase() }
 }
@@ -244,6 +254,9 @@ export function clasificaRezervareCerere(data: unknown, error: { code?: string; 
     if (c === '55006') return { tip: 'refuz', status: 409, cod: 'citire_in_curs' }
     if (c === '54000') return { tip: 'refuz', status: 429, cod: 'prea_multe_citiri' }
     if (c === '22023' && m.includes('cheie_alta_cerere')) return { tip: 'refuz', status: 409, cod: 'cheie_alta_cerere' }
+    // funcția lipsește (migrarea 20270115b neaplicată / revenită, sau cache-ul de schemă încă vechi): PostgREST PGRST202, Postgres 42883.
+    // E PRIMUL apel cu efect al cererii, deci nimic nu e rezervat și niciun apel AI nu pornește (fail-closed, fără cost).
+    if (c === 'PGRST202' || c === '42883') return { tip: 'refuz', status: 503, cod: 'actualizare_in_curs' }
     return { tip: 'refuz', status: 503, cod: 'cerere_indisponibila' }
   }
   if (!obiect(data)) return { tip: 'refuz', status: 503, cod: 'cerere_indisponibila' }

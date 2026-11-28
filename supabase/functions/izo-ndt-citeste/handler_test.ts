@@ -359,11 +359,39 @@ Deno.test('numărarea: peste limită / respinsă / căzută → fără apel plă
 Deno.test('cererea: doar { buletin_id, cerere: UUID, model? } cu valorile permise → 400 înainte de orice', async () => {
   for (const corp of [{ buletin_id: '55', cerere: CERERE }, { buletin_id: 0, cerere: CERERE }, { buletin_id: 1.5, cerere: CERERE },
     { buletin_id: 55, cerere: CERERE, model: 'opus' }, { buletin_id: 55, cerere: CERERE, model: SONNET }, { buletin_id: 55, cerere: CERERE, bucket: 'x' },
-    { buletin_id: 55 }, { buletin_id: 55, cerere: '' }, { buletin_id: 55, cerere: 'x' }, { buletin_id: 55, cerere: 123 }, { buletin_id: 55, cerere: null },
+    { buletin_id: 55, cerere: '' }, { buletin_id: 55, cerere: 'x' }, { buletin_id: 55, cerere: 123 }, { buletin_id: 55, cerere: null },
     { buletin_id: 55, cerere: CERERE.replace(/-/g, '') }, { buletin_id: 55, cerere: ` ${CERERE}` }, { buletin_id: 55, cerere: CERERE + '0' },
     [], 'nu-json', null]) {
     const r = await scenariu({ corp })
     assert.equal(r.status, 400, JSON.stringify(corp)); assert.equal(r.body.eroare, 'cerere_invalida'); assert.deepEqual(r.ev, [])
+  }
+})
+
+// Review PR #1222 r1 P1 — ordinea livrării: (a) edge-ul nou, (b) migrarea, (c) ecranul. Între pași, combinațiile posibile trebuie să fie
+// fail-closed FĂRĂ COST: ecranul vechi (fără cheie) e refuzat înaintea identității; baza fără 20270115b oprește la rezervarea cererii.
+Deno.test('ordinea livrării: ecranul vechi (fără `cerere`) → 409 ecran_vechi, înaintea oricărei citiri / identități / costuri', async () => {
+  for (const corp of [{ buletin_id: 55 }, { buletin_id: 55, model: 'principal' }, { buletin_id: 55, model: 'alternativ' }]) {
+    const r = await scenariu({ corp })
+    assert.equal(r.status, 409, JSON.stringify(corp)); assert.equal(r.body.eroare, 'ecran_vechi')
+    assert.match(String(r.body.mesaj), /Reîncarcă pagina/); assert.match(String(r.body.mesaj), /Nimic consumat/)
+    assert.deepEqual(r.ev, []); assert.deepEqual(r.cereri, []); faraCost(r)
+  }
+  // și fără JWT (tab vechi cu sesiunea expirată): același refuz, fără nimic atins
+  const anon = await scenariu({ corp: { buletin_id: 55, model: 'principal' }, auth: null })
+  assert.equal(anon.body.eroare, 'ecran_vechi'); assert.deepEqual(anon.ev, [])
+})
+
+Deno.test('ordinea livrării: edge nou + bază fără 20270115b (fn_sud_citire_* lipsă) → 503 actualizare_in_curs, fără fișier, plafon, AI, închidere', async () => {
+  for (const err of [{ code: 'PGRST202', message: 'Could not find the function public.fn_sud_citire_rezerva(p_buletin, p_cheie, p_model, p_tip) in the schema cache' },
+    { code: '42883', message: 'function public.fn_sud_citire_rezerva(bigint, text, text, uuid) does not exist' }]) {
+    // inclusiv cu modelul alternativ (rezerva mai mare) și cu plafonul configurat: tot nimic consumat
+    for (const model of [undefined, 'alternativ']) {
+      const r = await scenariu({ cerereRez: { error: err }, model })
+      assert.equal(r.status, 503); assert.equal(r.body.eroare, 'actualizare_in_curs'); assert.match(String(r.body.mesaj), /Nimic consumat/)
+      assert.equal(r.body.citire, undefined)
+      assert.deepEqual(r.ev, ['caller:sud_buletine', 'caller:fn_sud_drept', 'caller:fn_sud_citire_rezerva'])
+      faraCost(r); assert.deepEqual(r.rezervari, []); assert.deepEqual(r.apeluri, []); assert.deepEqual(r.inchideri, []); assert.deepEqual(r.salvari, [])
+    }
   }
 })
 
@@ -547,7 +575,8 @@ Deno.test('20270115b: cererea în lucru / necunoscută / eșuată / refuzată de
     [{ error: { code: '55000', message: 'sud: buletinul nu e ciorna (confirmat)' } }, 409, 'buletin_nu_e_ciorna'],
     [{ error: { code: '22023', message: 'sud: cheie_alta_cerere' } }, 409, 'cheie_alta_cerere'],
     [{ error: { code: '22023', message: 'sud: cerere de citire invalida' } }, 503, 'cerere_indisponibila'],
-    [{ error: { code: 'PGRST202', message: 'fn lipsă (migrarea neaplicată)' } }, 503, 'cerere_indisponibila'],
+    [{ error: { code: 'PGRST202', message: 'fn lipsă (migrarea neaplicată)' } }, 503, 'actualizare_in_curs'],
+    [{ error: { code: '42883', message: 'function public.fn_sud_citire_rezerva does not exist' } }, 503, 'actualizare_in_curs'],
     [{ data: { rezultat: 'altceva', id: 9 } }, 503, 'cerere_indisponibila'],
     [{ data: { rezultat: 'nou', id: 0 } }, 503, 'cerere_indisponibila'],
     [{ data: { rezultat: 'gata', id: 9, citire: null } }, 503, 'cerere_indisponibila'],
