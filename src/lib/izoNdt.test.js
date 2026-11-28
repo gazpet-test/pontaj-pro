@@ -417,6 +417,14 @@ describe('verificaExport', () => {
     expect(r.blocajeDeblocabile).toEqual([])
     expect(r.avertismente.map(e => [e.cod, e.rand])).toEqual([['metoda_neobligatorie_lipsa', 1], ['metoda_neobligatorie_lipsa', 3]])
   })
+  it('pachet fără nicio sudură → avertisment pachet_fara_suduri (o dată), fără blocaj; cu o sudură → nu', () => {
+    const r = v({ randuri: [teava(1, 'X-001', null), { poz_in_pachet: 2, tip_rand: 'separator' }, teava(3, 'X-002', '  ')] })
+    expect(r.blocaje).toEqual([])
+    expect(r.avertismente.filter(e => e.cod === 'pachet_fara_suduri')).toEqual([{ cod: 'pachet_fara_suduri', rand: null, mesaj: 'Pachetul n-are nicio sudură: verifică dacă rândurile sunt complete.' }])
+    expect(coduri(v().avertismente)).not.toContain('pachet_fara_suduri')
+    // un cod nerecunoscut e tot o sudură (are alt semnal, nu „fără suduri”)
+    expect(coduri(v({ randuri: [teava(1, 'X-001', 'T12S.')] }).avertismente)).not.toContain('pachet_fara_suduri')
+  })
   it('km start lipsă → blocaj', () => {
     expect(coduri(v({ pachet: { ...pachet, km_start_m: null } }).blocaje)).toEqual(['km_start_lipsa'])
     expect(coduri(v({ pachet: { ...pachet, km_start_m: '' } }).blocaje)).toEqual(['km_start_lipsa'])
