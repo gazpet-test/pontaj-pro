@@ -3,13 +3,22 @@
 // Tiparul: ocr-packing-list/avizE3Handler.ts (poarta pe JWT-ul apelantului, rezervare atomică înaintea apelului plătit,
 // numărarea gratuită a tokenilor, termen global, decontare o singură dată, fără reîncercări).
 //
-// Ce NU face: nu confirmă, nu scrie rânduri, nu scrie nimic în sud_* (clientul nu are UPDATE pe sud_buletine). Întoarce citirea;
-// ecranul o arată, MP-ul o corectează și o confirmă prin fn_sud_buletin_confirma (care revalidează tot, cu dreptul în corp).
-// Singurele scrieri: registrul de cost AI (ai_plafon_*, prin fn_ai_plafon_rezerva / fn_ai_plafon_deconteaza).
+// Ce NU face: nu confirmă, nu scrie rânduri de buletin. Întoarce citirea; ecranul o arată, MP-ul o corectează și o confirmă prin
+// fn_sud_buletin_confirma (care revalidează tot, cu dreptul în corp).
+// Scrieri: registrul de cost AI (ai_plafon_*, prin fn_ai_plafon_rezerva / fn_ai_plafon_deconteaza) și cererea de citire din sud_citiri
+// (migrarea 20270115b), DOAR prin fn_sud_citire_rezerva / fn_sud_citire_salveaza, cu JWT-ul apelantului.
+// Idempotența (review PR #1217 r1 P1, L04 / L22): cererea poartă o cheie (UUID) generată de ecran pentru o intenție și refolosită la reluare.
+// Cheia se rezervă în BD ÎNAINTEA rezervării de plafon și a apelului plătit; aceeași cheie = aceeași cerere: citirea deja salvată se întoarce
+// fără al doilea apel AI și fără a doua rezervare, o cerere în lucru = 409. Fiecare ieșire de după rezervarea cheii o închide (esuat, cu
+// costul), iar citirea validă se salvează (gata). Răspuns pierdut / salvare neconfirmată = cererea rămâne în lucru (L05), nu se reia orbește:
+// ecranul păstrează cheia și citirea primită (salvata: false) și reia DOAR salvarea, cu aceeași cheie (fn_sud_citire_salveaza e idempotentă),
+// fără al doilea apel AI și fără rezervare nouă de plafon (review PR #1222 r1 P1).
+// Ordinea livrării (review PR #1222 r1 P1): edge-ul acesta se publică ÎNAINTEA migrării 20270115b. Fără migrare, rezervarea cererii (primul
+// apel cu efect) dă „actualizare_in_curs” — nimic rezervat, niciun apel AI; ecranul vechi (fără cheie) primește „ecran_vechi”, tot fără cost.
 //
-// Identități: `caller` = clientul construit cu JWT-ul apelantului (citește buletinul sub RLS, verifică fn_sud_drept, descarcă
-// fișierul sub RLS-ul Storage); `ledger` = service_role, folosit EXCLUSIV pentru ai_plafon_* (funcțiile de plafon au EXECUTE doar
-// pentru service_role, 20261105a). Nicio citire sud_* / Storage cu service_role.
+// Identități: `caller` = clientul construit cu JWT-ul apelantului (citește buletinul sub RLS, verifică fn_sud_drept, rezervă și salvează
+// cererea de citire, descarcă fișierul sub RLS-ul Storage); `ledger` = service_role, folosit EXCLUSIV pentru ai_plafon_* (funcțiile de
+// plafon au EXECUTE doar pentru service_role, 20261105a). Nicio citire / scriere sud_* / Storage cu service_role.
 import type { SupabaseClient } from 'jsr:@supabase/supabase-js@2'
 import { costApel, jsonDinText, mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
 import { faraGandire, SONNET_55 } from '../_shared/gandire.ts'
@@ -53,11 +62,12 @@ export const costMaximNdt = (model: string) => costNdt(model, { input_tokens: MA
 // (întâi la micro-dolar, ca zgomotul de virgulă mobilă să nu urce un cent: 0,91 rămâne 0,91, 0,364 devine 0,37)
 export const rezervaNdt = (model: string) =>
   Math.ceil(Math.round(costNdt(model, { input_tokens: MAX_INPUT_NDT + 2000, output_tokens: MAX_TOKENS_NDT }) * 1e6) / 1e4) / 100
-// Termen GLOBAL pe cerere (limita funcției ~150 s), ca la E3: apelul plătit primește doar timpul rămas minus marja de decontare.
-// decontare = termenul explicit al RPC-ului de decontare (încape în marjă); informativ = bugetul citirilor de plafon de după decontare
-// (cele două citiri împreună, tăiat și la termenul global). Niciun await de după rezervare nu rămâne fără termen.
-export type TermeneNdt = Readonly<Record<'total' | 'marja' | 'minApel' | 'numarare' | 'decontare' | 'informativ', number>>
-export const TERMENE_NDT: TermeneNdt = Object.freeze({ total: 135000, marja: 10000, minApel: 30000, numarare: 20000, decontare: 8000, informativ: 3000 })
+// Termen GLOBAL pe cerere (limita funcției ~150 s), ca la E3: apelul plătit primește doar timpul rămas minus marja de după apel.
+// decontare = termenul explicit al RPC-ului de decontare; salvare = termenul fiecărui RPC al cererii de citire (rezervare / închidere /
+// salvare); informativ = bugetul citirilor de plafon de după decontare (cele două citiri împreună, tăiat și la termenul global).
+// Marja acoperă decontare + salvare + informativ (8 + 6 + 3 = 17 s < 20 s). Niciun await de după rezervare nu rămâne fără termen.
+export type TermeneNdt = Readonly<Record<'total' | 'marja' | 'minApel' | 'numarare' | 'decontare' | 'salvare' | 'informativ', number>>
+export const TERMENE_NDT: TermeneNdt = Object.freeze({ total: 135000, marja: 20000, minApel: 30000, numarare: 20000, decontare: 8000, salvare: 6000, informativ: 3000 })
 
 // ── erori de business: răspuns JSON cu cod (nu throw în afara handlerului) ─────────────────────────────────────────────────
 export class EroareNdt extends EroareE3 {
@@ -66,7 +76,16 @@ export class EroareNdt extends EroareE3 {
 }
 export const MESAJE: Record<string, string> = {
   metoda_invalida: 'Doar POST.',
-  cerere_invalida: 'Cerere invalidă: { buletin_id, model?: "principal" | "alternativ" }.',
+  cerere_invalida: 'Cerere invalidă: { buletin_id, cerere: UUID, model?: "principal" | "alternativ" }.',
+  // review PR #1222 r1 P1 (ordinea livrării): ecranul vechi (fără cheia cererii) și baza fără migrarea 20270115b = refuz clar, nimic consumat
+  ecran_vechi: 'Pagina deschisă e o versiune veche a ERP-ului. Reîncarcă pagina (Ctrl+Shift+R), apoi pornește din nou citirea. Nimic consumat.',
+  actualizare_in_curs: 'Citirea cu AI e oprită cât se face actualizarea serverului. Nimic consumat; încearcă din nou peste câteva minute sau introdu rândurile manual.',
+  cerere_indisponibila: 'Cererea de citire nu a putut fi înregistrată. Nimic consumat; reîncearcă.',
+  citire_in_curs: 'O citire a acestui buletin e deja în lucru. Așteaptă câteva secunde și reîncarcă buletinul.',
+  citire_necunoscuta: 'Citirea pornită anterior nu s-a încheiat (rezultat și cost necunoscute). Pornește o citire nouă doar dacă e nevoie.',
+  citire_esuata: 'Această cerere de citire s-a încheiat deja cu eroare. Pornește o citire nouă.',
+  prea_multe_citiri: 'Buletinul a atins numărul maxim de citiri cu AI (5). Completează sau corectează rândurile manual.',
+  cheie_alta_cerere: 'Cheia cererii a fost folosită pentru altă citire. Reîncarcă pagina.',
   fara_drept: 'Doar managerul de proiect sau proprietarul pot citi buletinul cu AI.',
   drept_indisponibil: 'Dreptul nu a putut fi verificat acum. Reîncearcă.',
   citire_indisponibila: 'Buletinul nu a putut fi citit din baza de date. Reîncearcă.',
@@ -211,11 +230,47 @@ export function valideazaCitireNdt(raw: string) {
 }
 
 // ── cererea ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// cheia cererii: UUID (forma canonică 8-4-4-4-12 hex); se compară și se trimite în minuscule (L16: aceeași cheie, aceeași formă)
+export const CERERE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export function valideazaCerereNdt(b: unknown) {
-  if (!obiect(b) || Object.keys(b).some(k => k !== 'buletin_id' && k !== 'model')) throw new EroareNdt('cerere_invalida', 400)
+  if (!obiect(b) || Object.keys(b).some(k => k !== 'buletin_id' && k !== 'model' && k !== 'cerere')) throw new EroareNdt('cerere_invalida', 400)
   if (typeof b.buletin_id !== 'number' || !Number.isSafeInteger(b.buletin_id) || b.buletin_id <= 0) throw new EroareNdt('cerere_invalida', 400)
   if (b.model !== undefined && b.model !== 'principal' && b.model !== 'alternativ') throw new EroareNdt('cerere_invalida', 400)
-  return { buletin_id: b.buletin_id, model_tip: (b.model ?? 'principal') as 'principal' | 'alternativ' }
+  // Ecranul de dinainte de 20270115b trimite { buletin_id, model? } fără cheie: refuz explicit, înaintea identității și a oricărui cost
+  // (ordinea livrării: edge-ul nou se publică ÎNTÂI și închide calea veche; taburile vechi primesc „reîncarcă pagina”).
+  if (b.cerere === undefined) throw new EroareNdt('ecran_vechi', 409)
+  if (typeof b.cerere !== 'string' || !CERERE_RE.test(b.cerere.toLowerCase())) throw new EroareNdt('cerere_invalida', 400)
+  return { buletin_id: b.buletin_id, model_tip: (b.model ?? 'principal') as 'principal' | 'alternativ', cerere: b.cerere.toLowerCase() }
+}
+
+// Răspunsul fn_sud_citire_rezerva → acțiunea edge-ului. Orice altă formă = necunoscut (503, nimic consumat).
+// Eroarea RPC-ului: SQLSTATE-urile funcției (refuzuri de reguli); altceva / termen = indisponibil.
+export function clasificaRezervareCerere(data: unknown, error: { code?: string; message?: string } | null):
+  { tip: 'nou'; id: number } | { tip: 'gata'; r: Record<string, unknown> } | { tip: 'refuz'; status: number; cod: string; extra?: Record<string, unknown> } {
+  if (error) {
+    const c = String(error.code || ''), m = String(error.message || '')
+    if (c === '42501') return { tip: 'refuz', status: 403, cod: 'fara_drept' }
+    if (c === '55000') return { tip: 'refuz', status: 409, cod: 'buletin_nu_e_ciorna' }
+    if (c === '55006') return { tip: 'refuz', status: 409, cod: 'citire_in_curs' }
+    if (c === '54000') return { tip: 'refuz', status: 429, cod: 'prea_multe_citiri' }
+    if (c === '22023' && m.includes('cheie_alta_cerere')) return { tip: 'refuz', status: 409, cod: 'cheie_alta_cerere' }
+    // funcția lipsește (migrarea 20270115b neaplicată / revenită, sau cache-ul de schemă încă vechi): PostgREST PGRST202, Postgres 42883.
+    // E PRIMUL apel cu efect al cererii, deci nimic nu e rezervat și niciun apel AI nu pornește (fail-closed, fără cost).
+    if (c === 'PGRST202' || c === '42883') return { tip: 'refuz', status: 503, cod: 'actualizare_in_curs' }
+    return { tip: 'refuz', status: 503, cod: 'cerere_indisponibila' }
+  }
+  if (!obiect(data)) return { tip: 'refuz', status: 503, cod: 'cerere_indisponibila' }
+  const id = Number(data.id)
+  if (!Number.isSafeInteger(id) || id <= 0) return { tip: 'refuz', status: 503, cod: 'cerere_indisponibila' }
+  switch (data.rezultat) {
+    case 'nou': return { tip: 'nou', id }
+    case 'gata': return obiect(data.citire) ? { tip: 'gata', r: data } : { tip: 'refuz', status: 503, cod: 'cerere_indisponibila' }
+    case 'in_curs': return { tip: 'refuz', status: 409, cod: 'citire_in_curs', extra: { citire_id: id } }
+    case 'necunoscut': return { tip: 'refuz', status: 409, cod: 'citire_necunoscuta', extra: { citire_id: id } }
+    case 'esuat': return { tip: 'refuz', status: 409, cod: 'citire_esuata',
+      extra: { citire_id: id, eroare_initiala: typeof data.eroare_cod === 'string' ? data.eroare_cod.slice(0, 60) : null } }
+    default: return { tip: 'refuz', status: 503, cod: 'cerere_indisponibila' }
+  }
 }
 
 function base64(bytes: Uint8Array): string {
@@ -299,10 +354,29 @@ export async function citesteBuletinNdt(req: Request, caller: SupabaseClient, le
     })()
     return decontare
   }
-  // Ieșirea din faza plătită pe o eroare previzibilă (anti-bug Edge, review r1 P1): decontare EXPLICITĂ, apoi răspunsul — fără throw
-  // și fără decontare în catch. Decontarea picată acoperă codul inițial (503 decontare_indisponibila).
-  const inchide = async (status: number, cod: string, extra: Record<string, unknown> = {}) =>
-    (await deconteaza()) ? eroare(status, cod, extra) : eroare(503, 'decontare_indisponibila')
+  // Cererea de citire din sud_citiri (20270115b): id-ul și cheia rezervate de fn_sud_citire_rezerva; null = nerezervată (nimic de închis).
+  let cerereId: number | null = null, cheieCerere: string | null = null, sumaRezerva = 0
+  let inchidereCerere: Promise<void> | null = null
+  // Fiecare RPC al cererii are termenul lui (T.salvare); depășirea = TimeoutError (rezultat necunoscut, niciodată succes).
+  const rpcCerere = (fn: string, args: Record<string, unknown>) => cuTermenBd(T.salvare, s => caller.rpc(fn, args).abortSignal(s))
+  // Închiderea cererii pe o ieșire cu eroare: esuat + costul (0 cunoscut înaintea rezervării de plafon; costul decontat; rezerva întreagă,
+  // necunoscut, dacă costul sau decontarea nu sunt cunoscute). O singură dată, cu termen, fără excepții. Eșecul ei lasă cererea în lucru:
+  // expiră ca „necunoscut” după 5 minute (L05), iar ecranul primește oricum eroarea inițială.
+  const inchideCerere = (cod: string, decontat: boolean): Promise<void> => {
+    if (cerereId === null || cheieCerere === null) return Promise.resolve()
+    const cunoscut = rezervare === null || (decontat && cost !== null)
+    const suma = rezervare === null ? 0 : cunoscut ? (cost as number) : sumaRezerva
+    const args = { p_cheie: cheieCerere, p_citire: null, p_cost_usd: suma, p_cost_cunoscut: cunoscut, p_eroare: cod }
+    inchidereCerere ??= (async () => { try { await rpcCerere('fn_sud_citire_salveaza', args) } catch { /* rămâne în lucru (L05) */ } })()
+    return inchidereCerere
+  }
+  // Ieșirea pe o eroare previzibilă după rezervarea cererii (anti-bug Edge, review r1 P1): decontare EXPLICITĂ (dacă s-a rezervat plafon),
+  // închiderea cererii, apoi răspunsul — fără throw și fără decontare în catch. Decontarea picată acoperă codul inițial (503).
+  const inchide = async (status: number, cod: string, extra: Record<string, unknown> = {}) => {
+    const ok = await deconteaza()
+    await inchideCerere(ok ? cod : 'decontare_indisponibila', ok)
+    return ok ? eroare(status, cod, extra) : eroare(503, 'decontare_indisponibila')
+  }
   try {
     if (req.method !== 'POST') return eroare(405, 'metoda_invalida')
     const corp = await citesteCorp(req, 4096)
@@ -330,16 +404,36 @@ export async function citesteBuletinNdt(req: Request, caller: SupabaseClient, le
     if (!cale.startsWith(prefix) || cale.length === prefix.length || cale.slice(prefix.length).includes('/')) return eroare(409, 'fisier_invalid')
     if (!cfg.apiKey) return eroare(503, 'ai_neconfigurat')
 
-    // 4. Fișierul, cu clientul utilizatorului (RLS-ul Storage decide). Totul înaintea oricărui cost.
+    // 4. Cererea de citire, ÎNAINTEA oricărui cost (L04 / L22): fn_sud_citire_rezerva ia buletinul FOR UPDATE, verifică dreptul și starea.
+    //    Aceeași cheie = aceeași cerere: citirea salvată se întoarce fără apel AI și fără rezervare de plafon; în lucru / necunoscută /
+    //    eșuată = 409; o cheie nouă cât altă cerere e în lucru = 409 (două taburi nu plătesc de două ori). Eroare / termen = nimic consumat.
+    let rc: ReturnType<typeof clasificaRezervareCerere>
+    try {
+      const { data, error } = await rpcCerere('fn_sud_citire_rezerva', { p_buletin: bul.id, p_tip: b.model_tip, p_model: model, p_cheie: b.cerere })
+      rc = clasificaRezervareCerere(data, error)
+    } catch { rc = { tip: 'refuz', status: 503, cod: 'cerere_indisponibila' } }
+    if (rc.tip === 'refuz') return eroare(rc.status, rc.cod, rc.extra ?? {})
+    if (rc.tip === 'gata') {
+      const c = rc.r.citire as Record<string, unknown>
+      const costSalvat = numarDinBd(rc.r.cost_usd)
+      return raspuns(200, {
+        success: true, idempotent: true, salvata: true, citire_id: Number(rc.r.id), buletin_id: bul.id, versiune: bul.versiune,
+        fisier_sha256: bul.fisier_sha256, model, model_tip: b.model_tip, citire: c, nr_randuri: Array.isArray(c.randuri) ? c.randuri.length : null,
+        cost_usd: Number.isFinite(costSalvat) ? costSalvat : null, cost_cunoscut: rc.r.cost_cunoscut === true, plafon: null,
+      })
+    }
+    cerereId = rc.id; cheieCerere = b.cerere
+
+    // 5. Fișierul, cu clientul utilizatorului (RLS-ul Storage decide). Totul înaintea oricărui cost; refuzurile închid cererea cu cost 0.
     const { data: blob, error: se } = await caller.storage.from(BUCKET).download(cale)
-    if (se || !blob) return eroare(404, 'fisier_inaccesibil')
-    if (blob.size > MAX_PDF_NDT) return eroare(413, 'pdf_prea_mare')
+    if (se || !blob) return await inchide(404, 'fisier_inaccesibil')
+    if (blob.size > MAX_PDF_NDT) return await inchide(413, 'pdf_prea_mare')
     const bytes = new Uint8Array(await blob.arrayBuffer())
-    if (bytes.length > MAX_PDF_NDT) return eroare(413, 'pdf_prea_mare')
-    if (bytes.length < 5 || new TextDecoder().decode(bytes.subarray(0, 4)) !== '%PDF') return eroare(422, 'pdf_invalid')
+    if (bytes.length > MAX_PDF_NDT) return await inchide(413, 'pdf_prea_mare')
+    if (bytes.length < 5 || new TextDecoder().decode(bytes.subarray(0, 4)) !== '%PDF') return await inchide(422, 'pdf_invalid')
     // Citirea se leagă de fișierul înregistrat: amprenta declarată la încărcare trebuie să fie a conținutului citit (L03).
     const sha = await sha256Hex(bytes)
-    if (sha !== bul.fisier_sha256) return eroare(409, 'amprenta_diferita')
+    if (sha !== bul.fisier_sha256) return await inchide(409, 'amprenta_diferita')
 
     // Corpul cererii AI se construiește ÎNAINTEA rezervării (pur local, fără cost): după rezervare rămân doar apelurile.
     const gandire = gandireNdt(model)
@@ -354,26 +448,27 @@ export async function citesteBuletinNdt(req: Request, caller: SupabaseClient, le
     const corpNumarare = JSON.stringify(payload)
     const corpApel = JSON.stringify({ ...payload, max_tokens: MAX_TOKENS_NDT })
 
-    // 5. Plafonul (R10), fail-closed: plafonul implicit al lunii noi = ultimul plafon fixat pe cheie; niciun plafon fixat
+    // 6. Plafonul (R10), fail-closed: plafonul implicit al lunii noi = ultimul plafon fixat pe cheie; niciun plafon fixat
     //    vreodată → 0, deci orice rezervare e refuzată („neconfigurat”). Rezervarea atomică e în fn_ai_plafon_rezerva (FOR UPDATE).
     const { data: ultim, error: ue } = await ledger.from('ai_plafon_lunar').select('luna,plafon_usd')
       .eq('cheie', CHEIE_PLAFON).order('luna', { ascending: false }).limit(1).maybeSingle()
-    if (ue) return eroare(503, 'plafon_indisponibil')
+    if (ue) return await inchide(503, 'plafon_indisponibil')
     const implicitBrut = ultim ? numarDinBd(ultim.plafon_usd) : 0
     const implicit = Number.isFinite(implicitBrut) && implicitBrut >= 0 ? implicitBrut : 0
     const suma = rezervaNdt(model)
+    sumaRezerva = suma
     const { data: id, error: re } = await ledger.rpc('fn_ai_plafon_rezerva', { p_cheie: CHEIE_PLAFON, p_suma: suma, p_plafon_implicit: implicit, p_user: user })
     if (re) {
       if (re.code === 'P0001' && String(re.message || '').includes('plafon_depasit')) {
         let plafon: Record<string, unknown> | null = null
         try { const d = JSON.parse(String(re.details)); plafon = obiect(d) ? d : null } catch { /* detaliu lipsă */ }
         const fixat = plafon ? numarDinBd(plafon.plafon_usd) : NaN
-        return eroare(429, Number.isFinite(fixat) && fixat > 0 ? 'plafon_depasit' : 'plafon_neconfigurat', { plafon, rezerva_usd: suma })
+        return await inchide(429, Number.isFinite(fixat) && fixat > 0 ? 'plafon_depasit' : 'plafon_neconfigurat', { plafon, rezerva_usd: suma })
       }
-      return eroare(503, 'rezervare_indisponibila')
+      return await inchide(503, 'rezervare_indisponibila')
     }
     // Id-ul necunoscut: rezervarea (dacă s-a făcut) nu se poate deconta → rămâne consumată (fail-closed), fără apel AI.
-    if (!Number.isSafeInteger(Number(id)) || Number(id) <= 0) return eroare(503, 'rezervare_indisponibila')
+    if (!Number.isSafeInteger(Number(id)) || Number(id) <= 0) return await inchide(503, 'rezervare_indisponibila')
     rezervare = Number(id)
 
     // ── FAZA PLĂTITĂ (de la rezervare până la răspuns) ─────────────────────────────────────────────────────────────────────
@@ -410,29 +505,44 @@ export async function citesteBuletinNdt(req: Request, caller: SupabaseClient, le
       return await inchide(expirat(e) ? 504 : 502, expirat(e) ? 'termen_depasit' : 'apel_ai_esuat')
     }
     if (usageValid(result?.usage)) cost = costNdt(model, result.usage)
-    // Decontarea explicită, inclusiv la refuz, trunchiere sau JSON invalid: apelul a costat.
-    if (!(await deconteaza())) return eroare(503, 'decontare_indisponibila')
-    if (result?.stop_reason === 'max_tokens') return eroare(422, 'raspuns_ai_incomplet')
+    // Decontarea explicită, inclusiv la refuz, trunchiere sau JSON invalid: apelul a costat. Fiecare refuz închide și cererea (cu costul).
+    if (!(await deconteaza())) return await inchide(503, 'decontare_indisponibila')
+    if (result?.stop_reason === 'max_tokens') return await inchide(422, 'raspuns_ai_incomplet')
     const refuzAi = mesajRefuz(result)
-    if (refuzAi) return eroare(422, 'refuz_ai', { detaliu: refuzAi })
-    if (result?.stop_reason !== 'end_turn') return eroare(422, 'raspuns_ai_incomplet', { detaliu: `stop_reason ${String(result?.stop_reason).slice(0, 40)}` })
+    if (refuzAi) return await inchide(422, 'refuz_ai', { detaliu: refuzAi })
+    if (result?.stop_reason !== 'end_turn') return await inchide(422, 'raspuns_ai_incomplet', { detaliu: `stop_reason ${String(result?.stop_reason).slice(0, 40)}` })
     const v = citireSigura(textRaspuns(result))
-    if (!v.ok) return eroare(422, 'raspuns_ai_invalid', { detaliu: v.detaliu })
+    if (!v.ok) return await inchide(422, 'raspuns_ai_invalid', { detaliu: v.detaliu })
     const citire = v.citire
+
+    // 8. Salvarea citirii validate (gata), cu JWT-ul apelantului și costul decontat. Buletinul nu mai e ciornă = 409 (cererea se închide
+    //    cu costul). Alt refuz de reguli = cererea se închide („salvare_refuzata”), citirea se livrează nesalvată. Rețea / termen =
+    //    necunoscut (L05): cererea rămâne cum e (salvată sau în lucru), citirea se livrează cu salvata: false; reluarea cu aceeași cheie
+    //    arată starea reală.
+    let citireId: number | null = null, avertisment: string | null = null
+    try {
+      const { data: idc, error: ec } = await rpcCerere('fn_sud_citire_salveaza',
+        { p_cheie: cheieCerere, p_citire: citire, p_cost_usd: cost ?? suma, p_cost_cunoscut: cost !== null, p_eroare: null })
+      if (!ec && Number.isSafeInteger(Number(idc)) && Number(idc) > 0) citireId = Number(idc)
+      else if (ec && String(ec.code) === '55000') return await inchide(409, 'buletin_nu_e_ciorna')
+      else if (ec && /^(?:22|23|42)/.test(String(ec.code || ''))) { await inchideCerere('salvare_refuzata', true); avertisment = 'salvare_refuzata' }
+      else avertisment = 'salvare_neconfirmata'
+    } catch { avertisment = 'salvare_neconfirmata' }
 
     // Plafonul după decontare e doar informativ, cu termen propriu (T.informativ, tăiat la termenul global): o eroare sau o
     // citire blocată NU oprește livrarea unei citiri plătite și valide (plafon = null).
     const plafon = await plafonInformativ(ledger, rezervare, Math.min(T.informativ, final - acum()), acum)
     return raspuns(200, {
-      success: true, buletin_id: bul.id, versiune: bul.versiune, fisier_sha256: sha, model, model_tip: b.model_tip,
+      success: true, idempotent: false, salvata: citireId !== null, citire_id: citireId, ...(avertisment ? { avertisment } : {}),
+      buletin_id: bul.id, versiune: bul.versiune, fisier_sha256: sha, model, model_tip: b.model_tip,
       citire, nr_randuri: citire.randuri.length, cost_usd: cost ?? suma, cost_cunoscut: cost !== null, plafon,
     })
     // ── SFÂRȘIT FAZA PLĂTITĂ ───────────────────────────────────────────────────────────────────────────────────────────────
   } catch (e) {
-    // Înaintea rezervării: refuzurile de cerere / identitate (EroareE3) ajung aici, fără cost.
-    // După rezervare nimic previzibil nu aruncă; aici ajunge doar un defect neprevăzut → plasă de siguranță: aceeași decontare
-    // explicită (cu termen, nu aruncă, memorată), apoi 5xx.
-    if (rezervare !== null) return await inchide(502, 'serviciu_indisponibil')
+    // Înaintea rezervării cererii: refuzurile de cerere / identitate (EroareE3) ajung aici, fără cost.
+    // După rezervarea cererii nimic previzibil nu aruncă; aici ajunge doar un defect neprevăzut → plasă de siguranță: aceeași decontare
+    // explicită (cu termen, nu aruncă, memorată) + închiderea cererii, apoi 5xx.
+    if (rezervare !== null || cerereId !== null) return await inchide(502, 'serviciu_indisponibil')
     if (e instanceof EroareE3) return eroare(e.status, e.cod, e instanceof EroareNdt && e.detaliu ? { detaliu: e.detaliu } : {})
     return eroare(502, 'serviciu_indisponibil')
   }
